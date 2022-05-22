@@ -1,6 +1,6 @@
 # coastpy
 
-Python tools for coastal monitoring with remote sensing data, mostly for data-driven coastal change modelling at large spatial scales. 
+Python tools for coastal monitoring with remote sensing data. Mostly targetting data-driven coastal change modelling, at large spatial scale. 
 
 
 ## Installation
