@@ -1,16 +1,26 @@
 [tool.poetry]
 name = "coastpy"
 version = "0.1.0"
-description = "Coastal Monitoring with Remote Sensing "
+description = "Python tools for Coastal Monitoring with Remote Sensing data"
 authors = ["Floris Calkoen"]
 license = "MIT"
 readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.9"
+geopandas = "^0.10.2"
+pygeos = "^0.12.0"
 
 [tool.poetry.dev-dependencies]
+pytest = "^7.1.2"
+pytest-cov = "^3.0.0"
+jupyter = "^1.0.0"
+python-semantic-release = "^7.28.1"
+
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.semantic_release]
+version_variable = "pyproject.toml:version"
