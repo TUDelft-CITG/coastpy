@@ -117,7 +117,17 @@ def tile2box(xtile: int, ytile: int, zoom: int) -> dict:
     return {boxname: sgeom.Polygon([nw, ne, sw, se]).envelope}
 
 
-def make_boxes(zoom_level: int, output_crs: str) -> gpd.GeoDataFrame:
+# TODO: implement dynamic zero padding
+def tile2box_qk(xtile: int, ytile: int, zoom: int) -> dict:
+    nw = num2deg(xtile, ytile, zoom)
+    ne = num2deg(xtile + 1, ytile, zoom)
+    sw = num2deg(xtile, ytile + 1, zoom)
+    se = num2deg(xtile + 1, ytile + 1, zoom)
+    quadkey = str(xtile) + str(ytile)
+    return {quadkey: sgeom.Polygon([nw, ne, sw, se]).envelope}
+
+
+def make_boxes(zoom_level, crs):
     tile_numbers = zoom2num(zoom_level)
 
     # Convert the tile coordinates (xtile, ytile) to boxes by deriving the corners.
@@ -130,12 +140,12 @@ def make_boxes(zoom_level: int, output_crs: str) -> gpd.GeoDataFrame:
 
     # Load into GeoPandas so that the results, for example, can be exported to GeoJSON
     boxes = gpd.GeoDataFrame(
-        boxes.items(), columns=["box_id", "geometry"], crs="EPSG:4326"
-    ).to_crs(output_crs)
+        boxes.items(), columns=["quadkey", "geometry"], crs="EPSG:4326"
+    ).to_crs(crs)
     return boxes
 
 
 if __name__ == "__main__":
-
     # Set zoom level and generate xtiles and ytiles
-    boxes = make_boxes(zoom_level=8, output_crs="epsg:3857")
+    boxes = make_boxes(zoom_level=7, crs="epsg:3857")
+    print("Done")
