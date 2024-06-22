@@ -1,7 +1,6 @@
-# coastpy
+# CoastPy
 
-Python tools for coastal monitoring with remote sensing data. Mostly targetting data-driven coastal change modelling, at large spatial scale. 
-
+Python tools for cloud-native coastal analytics.
 
 ## Installation
 
@@ -11,7 +10,18 @@ $ pip install coastpy
 
 ## Usage
 
-- TODO
+```bash
+git clone https://floriscalkoen/coastpy.git
+cd coastpy
+mamba env create -f environment.yml
+jupyter lab
+```
+
+#### To cite:
+
+```latex
+Calkoen et al., 2024, "Enabling Coastal Analytics at Planetary Scale". In review.
+```
 
 ## Contributing
 
@@ -19,7 +29,9 @@ Interested in contributing? Check out the contributing guidelines. Please note t
 
 ## License
 
-`coastpy` was created by Floris Calkoen. It is licensed under the terms of the MIT license.
+`coastpy` was created by Floris Calkoen. The software is licensed under the terms of the
+MIT license. Licenses for the data that are being used can be found in the respective
+STAC collection.
 
 ## Credits
 

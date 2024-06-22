@@ -1,0 +1,45 @@
+name: 312-package
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.12
+  - pip
+  - affine
+  - dask
+  - dask-geopandas
+  - duckdb
+  - fsspec
+  - geopandas
+  - geopy
+  - matplotlib
+  - mercantile
+  - numpy
+  - pandas
+  - poetry
+  - pyarrow
+  - pyproj
+  - pystac
+  - python-dotenv
+  - rasterio
+  - rioxarray
+  - shapely
+  - stac-geoparquet
+  - xarray
+
+  # Dev dependencies
+  - pytest
+  - black
+  - isort
+  - mypy
+  - flake8
+  - ruff
+  - pre-commit
+  - cattrs
+  - setuptools
+
+  - pip:
+      - antimeridian
+      - duckdb
+      - more-itertools

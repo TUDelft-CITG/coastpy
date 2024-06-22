@@ -1,0 +1,200 @@
+name: coastal-full-testenv
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Basic tools
+  - python=3.12
+  - pip>=20
+  - setuptools
+  - conda-libmamba-solver
+  - ca-certificates
+  - certifi
+  - openssl
+  - boltons
+  - ciso8601
+  - cattrs
+
+  # Development Tools
+  - bandit
+  - black
+  - click
+  - codespell
+  - flake8
+  - isort
+  - mypy
+  - poetry
+  - pre-commit
+  - pydantic
+  - pytest
+  - pytest-cov
+  - ruff
+
+  # Jupyter and extensions
+  - ipython
+  - ipykernel
+  - ipywidgets
+  - jupyter
+  - jupyterlab>=4
+  - jupyter-panel-proxy
+  - jupyter-resource-usage
+  - jupyterlab_code_formatter
+  - jupyterlab_execute_time
+  - jupyterlab_vim
+  - jupyterlab_widgets
+  - jupyterlab-git
+  - jupyterlab-lsp
+  - jupyterlab-spellchecker
+  - nb_conda_kernels
+  - nbgitpuller
+  - nbstripout
+  - nodejs
+  - python-lsp-server
+  - voila
+  - jupyter-book
+  - nbformat
+  - dask-labextension
+  # - gh-scoped-creds # check if useful
+  # - lckr-jupyterlab-variableinspector  # doesn't work on my machine yet
+
+  # Interactive visualization libraries
+  - bokeh
+  - datashader
+  - firefox
+  - folium
+  - geckodriver
+  - geoviews
+  - holoviews
+  - hvplot
+  - ipyleaflet
+  - ipympl
+  - jupyter_bokeh
+  - panel
+  - param
+  - selenium
+
+  # Standard sci-data analytics libs
+  - bottleneck
+  - cchardet
+  - fsspec
+  - intake
+  - jsonschema
+  - netcdf4
+  - numcodecs
+  - numpy
+  - pandas
+  - pint
+  - polars
+  - pyarrow
+  - pyproj
+  - pyyaml
+  - scikit-image
+  - scikit-learn
+  - scipy
+  - toml
+  - xarray
+
+  # Cloud-related libraries
+  - adlfs
+  - awscli
+  - azure-data-tables
+  - azure-identity
+  - boto3
+  - gcsfs
+  - google-cloud-storage
+  - s3fs
+
+  # Plotting libraries
+  - descartes
+  - matplotlib
+  - pillow
+  - seaborn
+
+  # Web-related libraries
+  - beautifulsoup4
+  - lxml
+  - requests
+
+  # Spatial libraries
+  - astropy
+  - cartopy
+  - cfgrib
+  - contextily
+  - dask
+  - dask-geopandas
+  - dask-image
+  - dask-jobqueue
+  - datacube
+  - distributed
+  - earthengine-api
+  - eccodes>=2.24.2
+  - esda
+  - fiona
+  - geodatasets
+  - geojson
+  - geopandas>=0.11.0
+  - h3-py
+  - h3pandas
+  - h5netcdf
+  - h5py
+  - imbalanced-learn
+  - intake-esm
+  - intake-geopandas
+  - intake-stac
+  - intake-xarray
+  - libpysal
+  - lmdb
+  - mapclassify
+  - mercantile
+  - netcdf4
+  - odc-algo
+  - odc-geo
+  - odc-stac
+  - openpyxl
+  - pims
+  - planetary-computer
+  - pooch
+  - pyarrow
+  - pyod
+  - pyogrio
+  - rasterio
+  - rio-cogeo
+  - rio-tiler
+  - rioxarray
+  - spatialpandas
+  - stac-geoparquet
+  - stac-vrt
+  - stackstac
+  - stactools
+  - tabulate
+  - tqdm
+  - xarray
+  - xarray-spatial
+  - xvec
+  - zarr
+  - zstandard
+
+  # Machine learning libraries
+  - wandb
+  - xgboost
+  # The packages below are heavy, so they are commented
+  # - dask-ml
+  # - lightning
+  # - pytorch
+  # - timm>=0.9
+  # - torchgeo
+  # - torchvision
+
+  - pip:
+      # - coastpy  # to install from pypi
+      # -e ../../  # to install in dev mode
+      - antimeridian
+      - duckdb
+      - movingpandas
+      - more-itertools
+      - networkx
+    # - dea-tools
+    # - stactools-geoparquet-items
+    # - odc-ui
+    # - odc-stats

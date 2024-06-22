@@ -1,0 +1,116 @@
+name: coastal
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Basic tools
+  - python=3.12
+  - pip>=20
+  - boltons
+  - ca-certificates
+  - cattrs
+  - certifi
+  - ciso8601
+  - openssl
+  - setuptools
+
+  # Development Tools
+  - pre-commit
+
+  # Jupyter and extensions
+  - dask-labextension
+  - ipykernel
+  - ipython
+  - ipywidgets
+  - jupyter
+  - jupyter-panel-proxy
+  - jupyter-resource-usage
+  - jupyterlab_code_formatter
+  - jupyterlab_execute_time
+  - jupyterlab_widgets
+  - jupyterlab-lsp
+  - jupyterlab>=4
+  - nb_conda_kernels
+  - nodejs
+  - python-lsp-server
+  - voila
+
+  # Interactive visualization libraries
+  - bokeh
+  - datashader
+  - geoviews
+  - holoviews
+  - hvplot
+  - ipyleaflet
+  - ipympl
+  - jupyter_bokeh
+  - panel
+  - param
+
+  # Standard sci-data analytics libs
+  - bottleneck
+  - cchardet
+  - fsspec
+  - intake
+  - netcdf4
+  - numcodecs
+  - numpy
+  - pandas
+  - pyarrow
+  - pyarrow
+  - pyogrio
+  - pyproj
+  - scikit-image
+  - scikit-learn
+  - scipy
+  - xarray
+  - zarr
+
+  # Plotting libraries
+  - descartes
+  - matplotlib
+  - pillow
+  - seaborn
+
+  # Web-related libraries
+  - beautifulsoup4
+
+  # Cloud
+  - adlfs
+  - gcsfs
+
+  # Spatial libraries
+  - cartopy
+  - contextily
+  - dask
+  - dask-geopandas
+  - distributed
+  - esda
+  - geojson
+  - geopandas>=0.11.0
+  - h3-py
+  - h3pandas
+  - libpysal
+  - mercantile
+  - netcdf4
+  - odc-stac
+  - planetary-computer
+  - pooch
+  - rasterio
+  - rioxarray
+  - stac-geoparquet
+  - stackstac
+  - stactools
+  - tqdm
+  - xarray
+
+  - pip:
+      - antimeridian
+      - -e .
+      - duckdb
+      - more-itertools
+    # - dea-tools
+    # - stactools-geoparquet-items
+    # - odc-ui
+    # - odc-stats

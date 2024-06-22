@@ -1,3 +1,7 @@
+# dask
+*/dask-worker-space/*
+dask-worker-space
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -10,7 +14,7 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
+# dist/ maintain manually because they are used for dask workers
 downloads/
 eggs/
 .eggs/
@@ -127,16 +131,42 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-**__pycache__
+notebooks/dask-worker-space
+notebooks/tmp
 
-# PyCharm
-.idea/
+# don't output from running on cluster
+*.o[0-9]*
+# wandb output
+**/wandb/**
+*wandb*
+# not the tutorial notebooks
+notebooks/tutorials/*
+# no virtual documents
+*virtual_documents*
+# don't add tarbals
+dist*
+# don't add ruff cache
+*.ruff_cache*
 
-# RStudio project files
-**.Rproj.user/
-**.Rproj.user*
-**.Rproj
-**.Rhistory
+# don't add lightning logs
+*lightning_logs*
 
-# MacOS
-.DS_Store
+# don't add lightning logs
+*lightning_logs*
+
+# don't add html (dask logs)
+.*.html
+*.html*
+
+# duckdb
+*:memory*
+
+# slurm
+**/slurm*.out
+
+logs/*
+*logs/*
+
+.vscode/*
+*.vscode/*
+.vscode

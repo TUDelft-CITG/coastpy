@@ -1,10 +1,5 @@
-import os
-import sys
+"""Python tools for cloud-native coastal analytics."""
 
-# Hacky solution for vscode debugger in modular mode.
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-# read version from installed package
-from importlib.metadata import version
-
-__version__ = version("coastpy")
+__author__ = """Floris Calkoen"""
+__email__ = ""
+__version__ = "0.1.1"

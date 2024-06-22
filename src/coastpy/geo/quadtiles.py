@@ -1,14 +1,59 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-
 import math
-import pathlib
 from itertools import product, repeat
 
 import geopandas as gpd
+import mercantile
 import numpy as np
 import shapely.geometry as sgeom
+from mercantile import Tile
+from shapely.geometry import Polygon, box
+
+
+def tile_to_quadkey(tile: Tile) -> str:
+    """
+    Convert a Tile to its corresponding quadkey.
+
+    Args:
+        tile (Tile): A mercantile Tile object.
+
+    Returns:
+        str: The quadkey corresponding to the tile.
+    """
+    quadkey = []
+    for i in range(tile.z, 0, -1):
+        digit = 0
+        mask = 1 << (i - 1)
+        if (tile.x & mask) != 0:
+            digit += 1
+        if (tile.y & mask) != 0:
+            digit += 2
+        quadkey.append(str(digit))
+    return "".join(quadkey)
+
+
+def make_mercantiles(zoom_level: int) -> gpd.GeoDataFrame:
+    """
+    Generate a GeoDataFrame of tiles for a given zoom level with their corresponding quadkeys.
+
+    Args:
+        zoom_level (int): The zoom level for which to generate tiles.
+
+    Returns:
+        gpd.GeoDataFrame: A GeoDataFrame containing tile geometries and their quadkeys.
+    """
+    tiles_data: list[dict[str, str]] = []
+    num_tiles = 2**zoom_level
+
+    for x in range(num_tiles):
+        for y in range(num_tiles):
+            tile = mercantile.Tile(x=x, y=y, z=zoom_level)
+            bounds = mercantile.bounds(tile)
+            tile_polygon = box(bounds.west, bounds.south, bounds.east, bounds.north)
+            quadkey = mercantile.quadkey(tile)
+            tiles_data.append({"geometry": tile_polygon, "quadkey": quadkey})
+
+    df = gpd.GeoDataFrame(tiles_data, columns=["geometry", "quadkey"], crs=4326)
+    return df
 
 
 def deg2num(lon_deg: float, lat_deg: float, zoom: int) -> tuple:
@@ -117,35 +162,67 @@ def tile2box(xtile: int, ytile: int, zoom: int) -> dict:
     return {boxname: sgeom.Polygon([nw, ne, sw, se]).envelope}
 
 
-# TODO: implement dynamic zero padding
-def tile2box_qk(xtile: int, ytile: int, zoom: int) -> dict:
+def slippy_map_tiles_to_quadkey(
+    xtile: int, ytile: int, zoom: int
+) -> dict[str, Polygon]:
+    """Convert tile coordinates to a bounding box with an associated quadkey.
+
+    This function computes the bounding box for a given tile, represented by its
+    xtile, ytile, and zoom values. The resulting box is associated with a quadkey
+    following the Bing Maps Tile System.
+
+    Args:
+        xtile (int): The x-coordinate of the tile.
+        ytile (int): The y-coordinate of the tile.
+        zoom (int): The zoom level.
+
+    Returns:
+        dict: A dictionary with the quadkey as the key and the bounding box (as a
+        shapely Polygon) as the value.
+    """
+
+    def _quadkey(x: int, y: int, z: int) -> str:
+        """Convert tile coordinates to a quadkey."""
+        quadkey = ""
+        for i in range(z, 0, -1):
+            digit = 0
+            mask = 1 << (i - 1)
+            if (x & mask) != 0:
+                digit += 1
+            if (y & mask) != 0:
+                digit += 2
+            quadkey += str(digit)
+        return quadkey
+
     nw = num2deg(xtile, ytile, zoom)
     ne = num2deg(xtile + 1, ytile, zoom)
     sw = num2deg(xtile, ytile + 1, zoom)
     se = num2deg(xtile + 1, ytile + 1, zoom)
-    quadkey = str(xtile) + str(ytile)
-    return {quadkey: sgeom.Polygon([nw, ne, sw, se]).envelope}
+
+    quadkey = _quadkey(xtile, ytile, zoom)
+    return {quadkey: Polygon([nw, ne, sw, se]).envelope}
 
 
-def make_boxes(zoom_level, crs):
+def make_slippy_map_tiles(zoom_level: int, crs: str) -> gpd.GeoDataFrame:
+    """Generate boxes for a given zoom level.
+
+    Args:
+        zoom_level (int): Zoom level in accordance with OSM slippy tile conventions.
+        crs (str): Coordinate reference system string.
+
+    Returns:
+        gpd.GeoDataFrame: Geodataframe containing the boxes.
+    """
     tile_numbers = zoom2num(zoom_level)
 
-    # Convert the tile coordinates (xtile, ytile) to boxes by deriving the corners.
-    # Note, tile2box function is wrapped within lambda function to unpack tuples
-    # (xtile, ytile) in map
-    boxes = list(map(lambda xytile: tile2box(*xytile, zoom=zoom_level), tile_numbers))
+    # Convert the tile coordinates to boxes by deriving the corners.
+    boxes = [tile2box(*xytile, zoom=zoom_level) for xytile in tile_numbers]
 
-    # Result from previous function is a list of dictionaries. Here, merge into one dict.
+    # Merge the list of dictionaries into one dict.
     boxes = {k: v for d in boxes for k, v in d.items()}
 
-    # Load into GeoPandas so that the results, for example, can be exported to GeoJSON
+    # Load into GeoPandas and convert to desired CRS
     boxes = gpd.GeoDataFrame(
-        boxes.items(), columns=["quadkey", "geometry"], crs="EPSG:4326"
+        boxes.items(), columns=["tilekey", "geometry"], crs="EPSG:4326"
     ).to_crs(crs)
     return boxes
-
-
-if __name__ == "__main__":
-    # Set zoom level and generate xtiles and ytiles
-    boxes = make_boxes(zoom_level=7, crs="epsg:3857")
-    print("Done")

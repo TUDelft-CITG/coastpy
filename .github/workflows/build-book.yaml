@@ -1,0 +1,53 @@
+name: Deploy JupyterBook to GitHub pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "notebooks/**"
+      - "book/**"
+      - "ci/envs/environment.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash -l {0}
+
+jobs:
+  BuildBook:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Micromamba
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          environment-file: ci/envs/environment.yaml
+
+      # Step to activate the environment and install the kernel with the name "coastal-env"
+      - name: Install Jupyter Kernel for CI
+        run: |
+          python -m ipykernel install --user --name coastal --display-name "conda-env-coastal"
+
+      # NOTEL: I guess I'll manually manage the content of the book directory
+      # # Copy notebooks to book notebooks directory
+      # - name: Prepare notebooks for book
+      #   run: |
+      #     rsync -av --delete notebooks/ book/notebooks/
+
+      # Build the JupyterBook
+      - name: Build JupyterBook
+        run: |
+          jupyter-book build book/
+
+      - name: Deploy html files
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: book/_build/html

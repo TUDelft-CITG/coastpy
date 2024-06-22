@@ -6,9 +6,9 @@
 
 # -- Project information -----------------------------------------------------
 
-project = u"coastpy"
-copyright = u"2022, Floris Calkoen"
-author = u"Floris Calkoen"
+project = "coastpy"
+copyright = "2022, Floris Calkoen"
+author = "Floris Calkoen"
 
 # -- General configuration ---------------------------------------------------
 
