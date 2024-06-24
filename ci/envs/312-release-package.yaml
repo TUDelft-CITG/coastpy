@@ -29,15 +29,28 @@ dependencies:
   - xarray
 
   # Dev dependencies
-  - pytest
+  - bandit
   - black
+  - cattrs
+  - click
+  - codespell
+  - flake8
   - isort
   - mypy
-  - flake8
-  - ruff
+  - nbsphinx 
+  - poetry
   - pre-commit
-  - cattrs
+  - pydantic
+  - pytest
+  - pytest-cov
+  - recommonmark 
+  - ruff
   - setuptools
+  - sphinx 
+  - sphinx-autodoc-typehints
+  - sphinx-rtd-theme 
+  - sphinx_rtd_theme
+  
 
   - pip:
       - antimeridian

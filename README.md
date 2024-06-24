@@ -19,10 +19,6 @@ jupyter lab
 
 #### To cite:
 
-```latex
-Calkoen et al., (2024), .... In review.
-```
-
 ## Contributing
 
 Interested in contributing? Check out the contributing guidelines. Please note that this project is released with a Code of Conduct. By contributing to this project, you agree to abide by its terms.
@@ -30,8 +26,7 @@ Interested in contributing? Check out the contributing guidelines. Please note t
 ## License
 
 `coastpy` was created by Floris Calkoen. The software is licensed under the terms of the
-MIT license. Licenses for the data that are being used can be found in the respective
-STAC collection.
+MIT license. Data licenses can be found in the respective STAC collection. 
 
 ## Credits
 

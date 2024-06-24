@@ -40,7 +40,6 @@ pre-commit = "^2.15.0"
 cattrs = "^1.10.0"
 setuptools = "^70.1.0"
 
-
 [tool.black]
 line-length = 88
 
