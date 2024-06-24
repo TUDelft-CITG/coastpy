@@ -20,7 +20,7 @@ jupyter lab
 #### To cite:
 
 ```latex
-Calkoen et al., 2024, "Enabling Coastal Analytics at Planetary Scale". In review.
+Calkoen et al., (2024), .... In review.
 ```
 
 ## Contributing
