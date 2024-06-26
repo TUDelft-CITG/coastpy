@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "coastpy"
-version = "0.1.1"
+version = "0.1.2"
 description = "Python tools for cloud-native coastal analytics."
 authors = ["Floris Calkoen"]
 license = "MIT"
