@@ -107,7 +107,7 @@ dependencies:
 
   - pip:
       - antimeridian
-      - -e .
+      - coastpy
       - duckdb
       - more-itertools
     # - dea-tools

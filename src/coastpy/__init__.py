@@ -2,7 +2,7 @@
 
 __author__ = """Floris Calkoen"""
 __email__ = ""
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 from . import io
 from . import geo
