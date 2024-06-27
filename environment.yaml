@@ -60,6 +60,7 @@ dependencies:
   - pyarrow
   - pyarrow
   - pyogrio
+  - pyod
   - pyproj
   - scikit-image
   - scikit-learn
@@ -85,6 +86,7 @@ dependencies:
   - contextily
   - dask
   - dask-geopandas
+  - dask-jobqueue
   - distributed
   - esda
   - geojson
