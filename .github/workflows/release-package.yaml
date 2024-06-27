@@ -27,9 +27,9 @@ jobs:
         with:
           environment-file: ci/envs/312-release-package.yaml
 
+      # NOTE: 'poetry install' because we assume all packages are available in the release env
       - name: Build package
         run: |
-          poetry install
           poetry build
 
       - name: Publish package distributions to TestPyPI
