@@ -170,3 +170,5 @@ logs/*
 .vscode/*
 *.vscode/*
 .vscode
+
+src/coastpy/_version.py

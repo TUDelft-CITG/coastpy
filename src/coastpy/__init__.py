@@ -1,14 +1,4 @@
-"""Python tools for cloud-native coastal analytics."""
+from . import geo, io, libs, stac, stats, utils
+from ._version import __version__
 
-__author__ = """Floris Calkoen"""
-__email__ = ""
-__version__ = "0.1.3"
-
-from . import io
-from . import geo
-from . import libs
-from . import stac
-from . import stats
-from . import utils
-
-__all__ = ["io", "geo", "libs", "stac", "stats", "utils"]
+__all__ = ["__version__", "io", "geo", "libs", "stac", "stats", "utils"]
