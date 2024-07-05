@@ -1,5 +1,3 @@
-from dask_jobqueue import SLURMCluster
-
 from coastpy.utils.config import ComputeInstance
 
 
@@ -22,6 +20,8 @@ def create_dask_client(instance_type: ComputeInstance):
             local_directory="/tmp",
         )
     elif instance_type.name == "SLURM":
+        from dask_jobqueue import SLURMCluster
+
         cluster = SLURMCluster(memory="16GB")
         cluster.adapt(minimum_jobs=1, maximum_jobs=30)
         return cluster.get_client()
