@@ -6,7 +6,6 @@
 Generate STAC Collections for tabular datasets.
 """
 
-__version__ = "1.0.0"
 import copy
 import enum
 from typing import TypeVar
