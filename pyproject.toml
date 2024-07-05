@@ -80,7 +80,7 @@ Homepage = "https://github.com/florisCalkoen/coastpy"
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/coastpy/_version.py"
+version-file = "src/coastpy/__init__.py"
 
 [tool.ruff]
 line-length = 88
