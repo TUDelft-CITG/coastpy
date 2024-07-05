@@ -149,9 +149,9 @@ class QuadKeyEqualSizePartitioner(EqualSizePartitioner):
         grouped = self.df.groupby(self.quadkey_grouper)
 
         for _, group in grouped:
-            group = group.drop(columns=[self.quadkey_grouper], errors="ignore")
+            group2 = group.drop(columns=[self.quadkey_grouper], errors="ignore")
             partitioner = EqualSizePartitioner(
-                group,
+                group2,
                 self.out_dir,
                 self.max_size_bytes,
                 self.sort_by,

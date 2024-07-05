@@ -1,7 +1,7 @@
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.abspath("../../src"))
+sys.path.insert(0, str(Path("../../src").absolute()))
 
 project = "coastpy"
 copyright = "2022, Floris Calkoen"

@@ -343,7 +343,7 @@ def evaluate(
             results[metric_name] = METRICS[metric_name](actual, predicted)
         except Exception as err:
             results[metric_name] = np.nan
-            print(f"Unable to compute metric {metric_name}: {err}")  # noqa: T201
+            print(f"Unable to compute metric {metric_name}: {err}")
     return results
 
 

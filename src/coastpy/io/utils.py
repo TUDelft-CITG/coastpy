@@ -28,10 +28,7 @@ def is_local_file_path(path: str | pathlib.Path) -> bool:
     """
     parsed = urlsplit(str(path))
 
-    # Check if the path has a recognized scheme
-    if parsed.scheme in ["", "file"]:
-        return True
-    return False
+    return parsed.scheme in ["", "file"]
 
 
 def name_block(
@@ -197,9 +194,8 @@ def name_data(
         ValueError: If both include_bounds and include_random_hex are False, or if the data type is unsupported.
     """
     if not include_bounds and not include_random_hex:
-        raise ValueError(
-            "At least one of include_bounds, include_random_hex or quadkey_prefix must be set."
-        )
+        msg = "At least one of include_bounds, include_random_hex or quadkey_prefix must be set."
+        raise ValueError(msg)
 
     suffix = ".parquet"  # Default suffix for non-spatial data
     parts = []
@@ -207,7 +203,7 @@ def name_data(
     # Generate bounds part
     bounds_part = ""
     if include_bounds and isinstance(
-        data, (gpd.GeoDataFrame, xarray.Dataset, xarray.DataArray)
+        data, gpd.GeoDataFrame | xarray.Dataset | xarray.DataArray
     ):
         if isinstance(data, gpd.GeoDataFrame):
             bounds = data.total_bounds
@@ -239,7 +235,8 @@ def name_data(
         parts.append(f"part-{random_hex}")
 
     if not parts:
-        raise ValueError("No valid parts were generated for the filename.")
+        msg = "No valid parts were generated for the filename."
+        raise ValueError(msg)
 
     name_part = "_".join(parts) + suffix
 
@@ -253,11 +250,18 @@ def name_data(
     return filename
 
 
-def read_items_extent(collection, columns=["geometry", "assets"], storage_options={}):
+def read_items_extent(collection, columns=None, storage_options=None):
+    if storage_options is None:
+        storage_options = {}
+
+    if columns is None:
+        columns = ["geometry", "assets"]
+
     required_cols = ["geometry", "assets"]
+
     for col in required_cols:
         if col not in columns:
-            columns = columns + [col]
+            columns = [*columns, col]
 
     href = collection.assets["geoparquet-stac-items"].href
     with fsspec.open(href, mode="rb", **storage_options) as f:
@@ -346,8 +350,8 @@ def read_log_entries(
     # Read JSON files into a list of dictionaries
     logs: list[dict] = []
     for f in json_files:
-        with fs.open(f, "r", **storage_options) as f:
-            log_entry = json.load(f)
+        with fs.open(f, "r", **storage_options) as f2:
+            log_entry = json.load(f2)
             logs.append(log_entry)
 
     # If no log entries are found, return an empty DataFrame

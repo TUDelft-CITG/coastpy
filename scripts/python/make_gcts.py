@@ -190,7 +190,7 @@ def sort_line_segments(segments, original_line):
             # Continue sorting based on the proximity to the last segment's end point
             last_end_point = Point(sorted_indices[-1].geometry.coords[-1])
             segments["dist_to_last_end"] = segments.apply(
-                lambda row: last_end_point.distance(Point(row.geometry.coords[0])),
+                lambda row: last_end_point.distance(Point(row.geometry.coords[0])),  # noqa: B023
                 axis=1,
             )
             closest_idx = segments["dist_to_last_end"].idxmin()
@@ -465,12 +465,12 @@ if __name__ == "__main__":
         lambda r: mercantile.quadkey(mercantile.tile(r.lon, r.lat, 5)), axis=1
     )
 
-    def add_admin_bounds(df, admin_df, max_distance=15000):
+    def add_admin_bounds(df, admin_df, max_distance=20000):
         points = gpd.GeoDataFrame(
             df[["tr_name"]], geometry=gpd.GeoSeries.from_xy(df.lon, df.lat, crs=4326)
         ).to_crs(3857)
         joined = gpd.sjoin_nearest(
-            points, admin_df.to_crs(3857), max_distance=20000
+            points, admin_df.to_crs(3857), max_distance=max_distance
         ).drop(columns=["index_right", "geometry"])
 
         df = pd.merge(df, joined, on="tr_name", how="left")

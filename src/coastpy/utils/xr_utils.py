@@ -239,10 +239,7 @@ def trim_outer_nans(
     )
     transform = ref_data_array.rio.transform()
 
-    if nodata is not None:
-        mask = ref_data_array != nodata
-    else:
-        mask = ~np.isnan(ref_data_array)
+    mask = ref_data_array != nodata if nodata is not None else ~np.isnan(ref_data_array)
     y_valid, x_valid = np.where(mask)
 
     # If no valid data exists, return the input as-is
