@@ -85,6 +85,11 @@ version-file = "src/coastpy/_version.py"
 
 [tool.ruff]
 line-length = 88
+src = ["src"]
+target-version = "py312"
+
+
+[tool.ruff.lint]
 select = [
   "E", "F", "W", # flake8
   "B",           # flake8-bugbear
@@ -93,7 +98,6 @@ select = [
   "C4",          # flake8-comprehensions
   "EM",          # flake8-errmsg
   "ICN",         # flake8-import-conventions
-  "ISC",         # flake8-implicit-str-concat
   "PGH",         # pygrep-hooks
   "PIE",         # flake8-pie
   "PL",          # pylint
@@ -109,14 +113,13 @@ select = [
 extend-ignore = [
   "PLR",    # Design related pylint codes
   "E501",   # Line too long
+  "E402",   # Module level import not at top of file
   "PT004",  # Incorrect check, usefixtures is the correct way to do this
   "RUF012", # Would require a lot of ClassVar's
 ]
-src = ["src"]
-unfixable = ["T20", "F841"]
-exclude = []
-target-version = "py312"
-flake8-unused-arguments.ignore-variadic-names = true
 
-[tool.ruff.pydocstyle]
+exclude = []
+unfixable = ["T20", "F841"]
+
+[tool.ruff.lint.pydocstyle]
 convention = "google"

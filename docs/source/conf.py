@@ -1,33 +1,33 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath('../../src'))
+sys.path.insert(0, os.path.abspath("../../src"))
 
-project = 'coastpy'
-copyright = '2022, Floris Calkoen'
-author = 'Floris Calkoen'
+project = "coastpy"
+copyright = "2022, Floris Calkoen"
+author = "Floris Calkoen"
 
 extensions = [
-    'myst_parser',           # For Markdown and Jupyter Notebook support
-    'autoapi.extension',     # For API documentation
-    'sphinx.ext.napoleon',   # For Google style docstrings
-    'sphinx.ext.viewcode',   # To include the source code in the docs
-    'nbsphinx',              # To include Jupyter Notebooks
-    'sphinx_markdown_tables' # To handle Markdown tables
+    "myst_parser",  # For Markdown and Jupyter Notebook support
+    "autoapi.extension",  # For API documentation
+    "sphinx.ext.napoleon",  # For Google style docstrings
+    "sphinx.ext.viewcode",  # To include the source code in the docs
+    "nbsphinx",  # To include Jupyter Notebooks
+    "sphinx_markdown_tables",  # To handle Markdown tables
 ]
 
-autoapi_dirs = ['../../src']
+autoapi_dirs = ["../../src"]
 source_suffix = {
-    '.rst': 'restructuredtext',
-    '.md': 'markdown',
-    '.ipynb': 'nbsphinx',
+    ".rst": "restructuredtext",
+    ".md": "markdown",
+    ".ipynb": "nbsphinx",
 }
 
-templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+templates_path = ["_templates"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
-html_theme = 'sphinx_rtd_theme'
-html_static_path = ['_static']
+html_theme = "sphinx_rtd_theme"
+html_static_path = ["_static"]
 
 nbsphinx_allow_errors = True  # Continue through Jupyter errors
 

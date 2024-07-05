@@ -262,9 +262,9 @@ def create_collection(
 
     ScientificExtension.add_to(collection)
     # TODO: revise citation upon publication
-    collection.extra_fields[
-        "sci:citation"
-    ] = """Calkoen, Floris. 2024. "Enabling Coastal Analytics at Planetary Scale." In review."""
+    collection.extra_fields["sci:citation"] = (
+        """Calkoen, Floris. 2024. "Enabling Coastal Analytics at Planetary Scale." In review."""
+    )
     # collection.extra_fields["sci:doi"] = ""
     # collection.extra_fields["sci:publications"] = [
     #     {
