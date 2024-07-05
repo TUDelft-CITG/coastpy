@@ -37,20 +37,20 @@ dependencies:
   - flake8
   - isort
   - mypy
-  - nbsphinx 
+  - nbsphinx
   - poetry
   - pre-commit
   - pydantic
   - pytest
   - pytest-cov
-  - recommonmark 
+  - recommonmark
   - ruff
   - setuptools
-  - sphinx 
+  - sphinx
   - sphinx-autodoc-typehints
-  - sphinx-rtd-theme 
+  - sphinx-rtd-theme
   - sphinx_rtd_theme
-  
+
 
   - pip:
       - antimeridian

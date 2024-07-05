@@ -26,7 +26,7 @@ Interested in contributing? Check out the contributing guidelines. Please note t
 ## License
 
 `coastpy` was created by Floris Calkoen. The software is licensed under the terms of the
-MIT license. Data licenses can be found in the respective STAC collection. 
+MIT license. Data licenses can be found in the respective STAC collection.
 
 ## Credits
 

@@ -16,7 +16,7 @@ dependencies:
   - ciso8601
   - cattrs
 
-# Development Tools  
+# Development Tools
   - bandit
   - black
   - click
@@ -24,20 +24,20 @@ dependencies:
   - flake8
   - isort
   - mypy
-  - nbsphinx 
+  - nbsphinx
   - poetry
   - pre-commit
   - pydantic
   - pytest
   - pytest-cov
-  - recommonmark 
+  - recommonmark
   - ruff
-  - sphinx 
+  - sphinx
   - sphinx-autodoc-typehints
-  - sphinx-rtd-theme 
+  - sphinx-rtd-theme
   - sphinx_rtd_theme
-  
-  
+
+
 
   # Jupyter and extensions
   - ipython
