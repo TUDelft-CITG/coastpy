@@ -1,4 +1,4 @@
-name: 312-package
+name: 312-release
 channels:
   - conda-forge
   - defaults
