@@ -99,12 +99,18 @@ class STACQueryEngine(BaseQueryEngine):
         self,
         stac_collection: pystac.Collection,
         storage_backend: Literal["azure", "aws"] = "azure",
+        columns: list[str] | None = None,
     ) -> None:
         super().__init__(storage_backend=storage_backend)
         self.extents = read_items_extent(
             stac_collection, columns=["geometry", "assets", "proj:epsg"]
         )
         self.proj_epsg = self.extents["proj:epsg"].unique().item()
+
+        if columns is None or not columns:
+            self.columns = ["*"]
+        else:
+            self.columns = columns
 
     def get_data_within_bbox(self, minx, miny, maxx, maxy):
         bbox = shapely.box(minx, miny, maxx, maxy)
@@ -116,8 +122,9 @@ class STACQueryEngine(BaseQueryEngine):
         href = str(overlapping_hrefs).replace("'", '"')
 
         # Construct and execute the query
+        columns_str = ", ".join(self.columns)
         query = f"""
-        SELECT *
+        SELECT {columns_str}
         FROM read_parquet({href})
         WHERE
             bbox.xmin <= {maxx} AND
