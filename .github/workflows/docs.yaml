@@ -1,0 +1,50 @@
+name: Documentation
+on: [push, pull_request]
+    branches: [main]
+
+workflow_dispatch:
+    
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash -l {0}
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Setup Conda Environment
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          miniconda-version: "latest"
+          environment-file: ci/envs/312-release.yaml
+          activate-environment: 312-release
+          auto-activate-base: false
+
+      - name: Install Dask-ML
+        shell: bash -l {0}
+        run: python -m pip install -e .
+
+      - name: Build docs
+        shell: bash -l {0}
+        run: |
+          cd docs
+          make html
+
+      - name: Deploy docs
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request'}}
+        uses: JamesIves/github-pages-deploy-action@3.7.1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: gh-pages
+          FOLDER: docs/build/html
+          CLEAN: true
