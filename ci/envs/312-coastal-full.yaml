@@ -37,8 +37,6 @@ dependencies:
   - sphinx-rtd-theme
   - sphinx_rtd_theme
 
-
-
   # Jupyter and extensions
   - ipython
   - ipykernel
