@@ -10,8 +10,6 @@ from shapely.wkb import loads as wkb_loads
 
 from coastpy.io.utils import read_items_extent
 
-dotenv.load_dotenv(override=True)
-
 
 class BaseQueryEngine:
     """
@@ -23,6 +21,9 @@ class BaseQueryEngine:
     """
 
     def __init__(self, storage_backend: Literal["azure", "aws"] = "azure") -> None:
+        # Load environment variables
+        dotenv.load_dotenv(override=True)
+
         self.storage_backend = storage_backend
         self.con = duckdb.connect(database=":memory:", read_only=False)
         self._initialize_spatial_extension()
@@ -39,23 +40,23 @@ class BaseQueryEngine:
             self.con.execute("INSTALL azure;")
             self.con.execute("LOAD azure;")
 
-            if duckdb.__version__ > "0.10.0":
-                try:
-                    self.con.execute(
-                        f"""
-                                CREATE SECRET secret1 (
-                                TYPE AZURE,
-                                CONNECTION_STRING '{os.getenv('CLIENT_AZURE_STORAGE_CONNECTION_STRING')}');
-                    """
-                    )
-                except Exception as e:
-                    print(f"{e}")
+            # # NOTE: currently this is commented because the connection strings can only be made at storage account level
+            # if duckdb.__version__ > "0.10.0":
+            #     try:
+            #         self.con.execute(
+            #             f"""
+            #                     CREATE SECRET secret1 (
+            #                     TYPE AZURE,
+            #                     CONNECTION_STRING '{os.getenv('APPSETTING_DUCKDB_AZURE_STORAGE_CONNECTION_STRING')}');
+            #         """
+            #         )
+            #     except Exception as e:
+            #         print(f"{e}")
 
-            else:
-                self.con.execute(
-                    f"SET AZURE_STORAGE_CONNECTION_STRING = '{os.getenv('CLIENT_AZURE_STORAGE_CONNECTION_STRING')}';"
-                )
-
+            # else:
+            #     self.con.execute(
+            #         f"SET AZURE_STORAGE_CONNECTION_STRING = '{os.getenv('APPSETTING_DUCKDB_AZURE_STORAGE_CONNECTION_STRING')}';"
+            #     )
         elif self.storage_backend == "aws":
             self.con.execute("INSTALL httpfs;")
             self.con.execute("LOAD httpfs;")
@@ -66,6 +67,18 @@ class BaseQueryEngine:
             self.con.execute(
                 f"SET s3_secret_access_key = '{os.getenv('AWS_SECRET_ACCESS_KEY')}';"
             )
+
+    def _get_token(self) -> str:
+        """
+        Retrieve the storage SAS token based on the storage backend.
+
+        Returns:
+            str: The SAS token if the storage backend is Azure and the token is available, otherwise an empty string.
+        """
+        if self.storage_backend == "azure":
+            sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+            return sas_token if sas_token else ""
+        return ""
 
     def execute_query(self, query: str) -> gpd.GeoDataFrame:
         """
@@ -112,20 +125,45 @@ class STACQueryEngine(BaseQueryEngine):
         else:
             self.columns = columns
 
-    def get_data_within_bbox(self, minx, miny, maxx, maxy):
+    def get_data_within_bbox(self, minx: float, miny: float, maxx: float, maxy: float):
+        """
+        Retrieve data within the specified bounding box.
+
+        Args:
+            minx (float): Minimum X coordinate of the bounding box.
+            miny (float): Minimum Y coordinate of the bounding box.
+            maxx (float): Maximum X coordinate of the bounding box.
+            maxy (float): Maximum Y coordinate of the bounding box.
+
+        Returns:
+            pd.DataFrame: The queried data.
+        """
         bbox = shapely.box(minx, miny, maxx, maxy)
-        bbox = gpd.GeoDataFrame(geometry=[bbox], crs="EPSG:4326")
+        bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs="EPSG:4326")
 
         # Perform spatial join to get all overlapping HREFs
-        overlapping_hrefs = gpd.sjoin(self.extents, bbox).href.tolist()
+        overlapping_hrefs = gpd.sjoin(self.extents, bbox_gdf).href.tolist()
 
-        href = str(overlapping_hrefs).replace("'", '"')
+        # Sign each HREF with the SAS token if the storage backend is Azure
+        if self.storage_backend == "azure":
+            signed_hrefs = []
+            for href in overlapping_hrefs:
+                signed_href = href.replace(
+                    "az://", "https://coclico.blob.core.windows.net/"
+                )
+                signed_href = signed_href + "?" + self._get_token()
+                signed_hrefs.append(signed_href)
+        else:
+            signed_hrefs = overlapping_hrefs
+
+        # Join the hrefs into a single string
+        hrefs_str = ", ".join(f'"{href}"' for href in signed_hrefs)
 
         # Construct and execute the query
         columns_str = ", ".join(self.columns)
         query = f"""
         SELECT {columns_str}
-        FROM read_parquet({href})
+        FROM read_parquet([{hrefs_str}])
         WHERE
             bbox.xmin <= {maxx} AND
             bbox.ymin <= {maxy} AND
