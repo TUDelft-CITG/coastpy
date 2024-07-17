@@ -11,7 +11,7 @@ $ pip install coastpy
 ## Usage
 
 ```bash
-git clone https://floriscalkoen/coastpy.git
+git clone https://TUDelft-CITG/coastpy.git
 cd coastpy
 mamba env create -f environment.yml
 jupyter lab
@@ -30,4 +30,4 @@ MIT license. Data licenses can be found in the respective STAC collection.
 
 ## Credits
 
-`coastpy` was created with [`cookiecutter`](https://cookiecutter.readthedocs.io/en/latest/) and the `py-pkgs-cookiecutter` [template](https://github.com/py-pkgs/py-pkgs-cookiecutter).
+Initial template of `coastpy` was created with [`cookiecutter`](https://cookiecutter.readthedocs.io/en/latest/) and the `py-pkgs-cookiecutter` [template](https://github.com/py-pkgs/py-pkgs-cookiecutter). 
