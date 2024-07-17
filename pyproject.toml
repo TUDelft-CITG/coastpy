@@ -74,7 +74,7 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/florisCalkoen/coastpy"
+Homepage = "https://github.com/TUDelft-CITG/coastpy"
 
 [tool.hatch.version]
 source = "vcs"

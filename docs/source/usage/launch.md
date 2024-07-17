@@ -7,7 +7,7 @@ explained in the [installation instructions](installation.md).
 
 Follow these steps to start exploring the course content through interactive Jupyter notebooks:
 
-1. **Access the code**: Ensure you've cloned the [GitHub repository](https://github.com/floriscalkoen/coastpy) to your local machine.
+1. **Access the code**: Ensure you've cloned the [GitHub repository](https://github.com/TUDelft-CITG/coastpy) to your local machine.
 
 2. **Navigate to the repository**:
 

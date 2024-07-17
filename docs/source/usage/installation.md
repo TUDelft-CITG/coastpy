@@ -40,13 +40,13 @@ introduction](https://earth-env-data-science.github.io/lectures/environment/intr
    <details>
    <summary><strong>By GitHub Desktop</strong></summary>
 
-   1. Open GitHub Desktop > go to File > Clone Repository and paste this url: https://github.com/floriscalkoen/coastpy.git
+   1. Open GitHub Desktop > go to File > Clone Repository and paste this url: https://github.com/TUDelft-CITG/coastpy.git
    2. Choose where to clone the repository on your computer and click "Clone".
    </details>
 
    <details>
    <summary><strong>By command line</strong></summary>
-   git clone https://github.com/floriscalkoen/coastpy
+   git clone https://github.com/TUDelft-CITG/coastpy.git
    </details>
 
 Following these steps, the repository's files from GitHub are fetched to your machine.
