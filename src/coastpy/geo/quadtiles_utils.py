@@ -1,3 +1,5 @@
+from typing import Literal
+
 import geopandas as gpd
 import mercantile
 from shapely import Point
@@ -73,7 +75,9 @@ def quadkey_to_geojson(quadkey: str) -> dict:
 
 
 def add_geo_columns(
-    df: gpd.GeoDataFrame, geo_columns, quadkey_zoom_level: int | None = None
+    df: gpd.GeoDataFrame,
+    geo_columns: list[Literal["bbox", "bounding_quadkey", "quadkey"]],
+    quadkey_zoom_level: int = 12,
 ) -> gpd.GeoDataFrame:
     """
     Augments a GeoDataFrame with bounding box, optional bounding quadkey, and optional quadkey columns.
@@ -81,10 +85,10 @@ def add_geo_columns(
     Args:
         df: A GeoDataFrame with geometries.
         geo_columns: A list of strings specifying which columns to add. Possible values are 'bbox', 'bounding_quadkey', and 'quadkey'.
-        quadkey_zoom_level: Optional; Zoom level for quadkey calculation. If None, quadkey column is not added.
+        quadkey_zoom_level: Zoom level for quadkey calculation, default is 12.
 
     Returns:
-        A GeoDataFrame possibly with added 'bbox', 'bounding_quadkey', and 'quadkey' columns if quadkey_zoom_level is provided.
+        A GeoDataFrame possibly with added 'bbox', 'bounding_quadkey', and 'quadkey' columns.
     """
     df = df.copy()
     src_crs = df.crs.to_epsg()
@@ -94,7 +98,6 @@ def add_geo_columns(
     def calculate_bbox(geom):
         """Calculates the bounding box of a geometry."""
         minx, miny, maxx, maxy = geom.bounds
-        # NOTE: here we follow Overture conventions that swap x and y
         return {"xmin": minx, "ymin": miny, "xmax": maxx, "ymax": maxy}
 
     def calculate_bounding_quadkey(bbox):
@@ -105,14 +108,6 @@ def add_geo_columns(
             )
         )
 
-    if "bbox" in geo_columns:
-        df["bbox"] = df.geometry.astype(object).apply(calculate_bbox)
-
-    if "bounding_quadkey" in geo_columns:
-        if "bbox" not in df.columns:
-            df["bbox"] = df.geometry.astype(object).apply(calculate_bbox)
-        df["bounding_quadkey"] = df["bbox"].apply(calculate_bounding_quadkey)
-
     def get_point_from_geometry(geom):
         """Get a representative point from different geometry types."""
         if geom.geom_type == "Point":
@@ -121,34 +116,46 @@ def add_geo_columns(
             return geom.centroid
         elif geom.geom_type in ["LineString"]:
             return geom.interpolate(0.5, normalized=True)
+        # NOTE: The following code is commented out because it is not used in the current implementation.
+        # elif geom.geom_type == "MultiPoint":
+        #     return geom[0]
+        # elif geom.geom_type in ["MultiLineString", "GeometryCollection"]:
+        #     return geom[0].interpolate(0.5, normalized=True)
         else:
             msg = f"Unsupported geometry type: {geom.geom_type}"
             raise ValueError(msg)
 
-    if "quadkey" in geo_columns and quadkey_zoom_level is not None:
+    # Add bounding box column
+    if "bbox" in geo_columns:
+        df["bbox"] = df.geometry.apply(calculate_bbox)
+
+    # Add bounding quadkey column
+    if "bounding_quadkey" in geo_columns:
+        if "bbox" not in df.columns:
+            df["bbox"] = df.geometry.apply(calculate_bbox)
+        df["bounding_quadkey"] = df["bbox"].apply(calculate_bounding_quadkey)
+
+    # Add quadkey column
+    if "quadkey" in geo_columns:
+        if quadkey_zoom_level is None:
+            raise ValueError(
+                "quadkey_zoom_level must be provided when 'quadkey' is in geo_columns."
+            )
         if "lon" in df.columns and "lat" in df.columns:
             points = gpd.GeoSeries(
                 [Point(xy) for xy in zip(df.lon, df.lat, strict=False)], crs="EPSG:4326"
             )
         else:
-            geoms = (
-                df.geometry.to_crs(3857) if df.crs.to_epsg() != 3857 else df.geometry
+            points = df.geometry.apply(get_point_from_geometry).to_crs("EPSG:4326")
+
+        quadkeys = points.apply(
+            lambda point: mercantile.quadkey(
+                mercantile.tile(point.x, point.y, quadkey_zoom_level)
             )
-            points = gpd.GeoSeries(
-                geoms.astype(object).apply(get_point_from_geometry), crs=3857
-            ).to_crs(4326)
-            # Apply function without the deprecated convert_dtype warning
-        quadkeys = (
-            points.astype(object)
-            .apply(
-                lambda point: mercantile.quadkey(
-                    mercantile.tile(point.x, point.y, quadkey_zoom_level)
-                )
-            )
-            .to_list()
         )
         df["quadkey"] = quadkeys
 
+    # Revert CRS if necessary
     if src_crs != 4326:
         df = df.to_crs(epsg=src_crs)
 
