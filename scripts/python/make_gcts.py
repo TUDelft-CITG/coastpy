@@ -3,6 +3,7 @@ import dask
 # NOTE: explicitly set query-planning to False to avoid issues with dask-geopandas
 dask.config.set({"dataframe.query-planning": False})
 
+import datetime
 import logging
 import os
 import time
@@ -36,10 +37,9 @@ utm_grid_url = "az://grid/utm.parquet"
 osm_url = "az://coastlines-osm/release/2023-02-09/coast_3857_gen9.parquet"
 countries_url = "az://public/countries.parquet"  # From overture maps 2024-04-16
 
-import datetime
 
 today = datetime.datetime.now().strftime("%Y-%m-%d")
-OUT_BASE_URI = f"az://gcts/release/{today}.parquet"
+OUT_BASE_URI = f"az://gcts/release/{today}/gcts.parquet"
 TMP_BASE_URI = OUT_BASE_URI.replace("az://", "az://tmp/")
 
 # DATA_DIR = pathlib.Path.home() / "data"
@@ -237,7 +237,7 @@ if __name__ == "__main__":
     with fsspec.open(utm_grid_url, **storage_options) as f:
         utm_grid = gpd.read_parquet(f)
 
-    withr fsspec.open(countries_url, **storage_options) as f:
+    with fsspec.open(countries_url, **storage_options) as f:
         countries = gpd.read_parquet(f)
 
     utm_grid = utm_grid.dissolve("epsg").to_crs(prc_epsg).reset_index()
