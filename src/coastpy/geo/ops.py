@@ -126,8 +126,16 @@ def extract_coordinates(pt: Point | tuple[float, float]) -> tuple[float, float]:
         Tuple[float, float]: The x and y coordinates of the point.
     """
     if isinstance(pt, Point):
-        return pt[0], pt[1]
-    return pt
+        return pt.x, pt.y
+    elif (
+        isinstance(pt, tuple)
+        and len(pt) == 2
+        and all(isinstance(coord, (float, int)) for coord in pt)
+    ):
+        return float(pt[0]), float(pt[1])
+    else:
+        msg = f"Invalid point provided. Expected a Point object or a tuple of two floats. Received: {pt}"
+        raise ValueError(msg)
 
 
 def extract_endpoints(line: LineString) -> tuple[Point, Point]:
