@@ -473,9 +473,7 @@ if __name__ == "__main__":
     )
 
     transects["tr_name"] = zero_pad_tr_name(transects["tr_name"])
-    transects.to_parquet("/Users/calkoen/transects-test.gpkg")
 
-    print("writing")
     with fsspec.open(TMP_BASE_URI, "wb", **storage_options) as f:
         transects.to_parquet(f, index=False)
 
