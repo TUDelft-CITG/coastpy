@@ -56,9 +56,21 @@ class DaskClientManager:
         Returns:
             Client: The Dask local client.
         """
+        # Set default values
         from distributed import Client
 
-        return Client(*args, **kwargs)
+        configs = {
+            "threads_per_worker": 1,
+            "processes": True,
+            "n_workers": 5,
+            "local_directory": "/tmp",
+        }
+
+        # Update defaults with any overrides provided in kwargs
+        configs.update(kwargs)
+
+        # Create and return the Dask Client using the updated parameters
+        return Client(*args, **configs)
 
     def _create_slurm_client(self, *args: Any, **kwargs: Any):
         """Create a SLURM Dask client with potential overrides.
@@ -72,16 +84,54 @@ class DaskClientManager:
         """
         from dask_jobqueue import SLURMCluster
 
-        min_jobs = kwargs.pop(
-            "minimum_jobs", dask.config.get("jobqueue.adaptive.minimum", 1)
-        )
-        max_jobs = kwargs.pop(
-            "maximum_jobs", dask.config.get("jobqueue.adaptive.maximum", 30)
-        )
+        # Define default values specific to SLURM
+        slurm_configs = {
+            "cores": 1,  # Cores per worker
+            "memory": "12GB",  # Memory per worker
+            "processes": 1,  # Processes per worker
+            "local_directory": "/scratch/frcalkoen/tmp",
+            "walltime": "4:00:00",
+        }
+        # Update default values with any overrides provided in kwargs
+        slurm_configs.update(kwargs)
 
-        cluster = SLURMCluster(*args, **kwargs)
-        cluster.adapt(minimum_jobs=min_jobs, maximum_jobs=max_jobs)
+        # Create the SLURM cluster
+        cluster = SLURMCluster(*args, **slurm_configs)
+
+        cluster.scale(jobs=5)
+
+        # min_jobs = kwargs.pop(
+        #     "minimum_jobs", dask.config.get("jobqueue.adaptive.minimum", 1)
+        # )
+        # max_jobs = kwargs.pop(
+        #     "maximum_jobs", dask.config.get("jobqueue.adaptive.maximum", 30)
+        # )
+
+        # cluster.adapt(minimum_jobs=min_jobs, maximum_jobs=max_jobs)
         return cluster.get_client()
+
+    # def _create_slurm_client(self, *args: Any, **kwargs: Any):
+    #     """Create a SLURM Dask client with potential overrides.
+
+    #     Args:
+    #         *args: Additional positional arguments for client creation.
+    #         **kwargs: Additional keyword arguments for client creation.
+
+    #     Returns:
+    #         Client: The Dask SLURM client.
+    #     """
+    #     from dask_jobqueue import SLURMCluster
+
+    #     min_jobs = kwargs.pop(
+    #         "minimum_jobs", dask.config.get("jobqueue.adaptive.minimum", 1)
+    #     )
+    #     max_jobs = kwargs.pop(
+    #         "maximum_jobs", dask.config.get("jobqueue.adaptive.maximum", 30)
+    #     )
+
+    #     cluster = SLURMCluster(*args, **kwargs)
+    #     cluster.adapt(minimum_jobs=min_jobs, maximum_jobs=max_jobs)
+    #     return cluster.get_client()
 
 
 def silence_shapely_warnings() -> None:

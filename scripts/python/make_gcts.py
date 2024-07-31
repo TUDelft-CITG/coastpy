@@ -211,10 +211,6 @@ if __name__ == "__main__":
     instance_type = configure_instance()
     client = DaskClientManager().create_client(
         instance_type,
-        threads_per_worker=1,
-        processes=True,
-        n_workers=5,
-        local_directory="/tmp",
     )
     client.run(silence_shapely_warnings)
     logging.info(f"Client dashboard link: {client.dashboard_link}")
