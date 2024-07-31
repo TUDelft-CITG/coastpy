@@ -87,8 +87,9 @@ class DaskClientManager:
         # Define default values specific to SLURM
         slurm_configs = {
             "cores": 1,  # Cores per worker
-            "memory": "12GB",  # Memory per worker
             "processes": 1,  # Processes per worker
+            "n_workers": 5,
+            "memory": "12GB",  # Memory per worker
             "local_directory": "/scratch/frcalkoen/tmp",
             "walltime": "4:00:00",
         }
@@ -98,7 +99,7 @@ class DaskClientManager:
         # Create the SLURM cluster
         cluster = SLURMCluster(*args, **slurm_configs)
 
-        cluster.scale(jobs=5)
+        # cluster.scale(jobs=5)
 
         # min_jobs = kwargs.pop(
         #     "minimum_jobs", dask.config.get("jobqueue.adaptive.minimum", 1)
