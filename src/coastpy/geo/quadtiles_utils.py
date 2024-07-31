@@ -138,9 +138,10 @@ def add_geo_columns(
     # Add quadkey column
     if "quadkey" in geo_columns:
         if quadkey_zoom_level is None:
-            raise ValueError(
+            msg = (
                 "quadkey_zoom_level must be provided when 'quadkey' is in geo_columns."
             )
+            raise ValueError(msg)
         if "lon" in df.columns and "lat" in df.columns:
             points = gpd.GeoSeries(
                 [Point(xy) for xy in zip(df.lon, df.lat, strict=False)], crs="EPSG:4326"

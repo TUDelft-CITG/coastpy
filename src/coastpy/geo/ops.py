@@ -130,7 +130,7 @@ def extract_coordinates(pt: Point | tuple[float, float]) -> tuple[float, float]:
     elif (
         isinstance(pt, tuple)
         and len(pt) == 2
-        and all(isinstance(coord, (float, int)) for coord in pt)
+        and all(isinstance(coord, (float | int)) for coord in pt)
     ):
         return float(pt[0]), float(pt[1])
     else:
@@ -502,41 +502,6 @@ def determine_rotation_angle(
 
     msg = "Invalid bearing computed. Expected bearing within range [0, 360]."
     raise ValueError(msg)
-
-
-def crosses_antimeridian(df: gpd.GeoDataFrame) -> gpd.GeoSeries:
-    """
-    Determines whether linestrings in a GeoDataFrame cross the International Date Line.
-
-    Args:
-        df (gpd.GeoDataFrame): Input GeoDataFrame with LineString geometries.
-
-    Returns:
-        gpd.GeoSeries: Series indicating whether each LineString crosses the antimeridian.
-
-    Example:
-        >>> df = gpd.read_file('path_to_file.geojson')
-        >>> df['crosses'] = crosses_antimeridian(df)
-        >>> print(df['crosses'])
-
-    Note:
-        Assumes the input GeoDataFrame uses a coordinate system in meters.
-        If using a degree-based system like EPSG:4326, the results may not be accurate.
-    """
-    TEMPLATE = pd.Series([], dtype="bool")
-
-    if df.crs.to_epsg() != 3857:
-        df = df.to_crs(3857)
-
-    if df.empty:
-        return TEMPLATE
-
-    coords = df.geometry.astype(object).apply(lambda x: (x.coords[0], x.coords[-1]))
-    return coords.apply(lambda x: x[0][0] * x[1][0] < 0)
-
-
-import geopandas as gpd
-from shapely.geometry import LineString
 
 
 def crosses_antimeridian(df: gpd.GeoDataFrame) -> pd.Series:
