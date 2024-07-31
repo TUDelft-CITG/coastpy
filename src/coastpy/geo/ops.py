@@ -19,7 +19,7 @@ from shapely.geometry import (
 )
 from shapely.ops import snap, split
 
-from coastpy.utils.dask_utils import silence_shapely_warnings
+from coastpy.utils.dask import silence_shapely_warnings
 
 
 def shift_point(
@@ -579,7 +579,7 @@ def buffer_in_utm(
     geom: Polygon,
     src_crs: str | int,
     buffer_distance: float | int,
-    utm_crs: str | int | None = None,
+    utm_epsg: str | int | None = None,
 ) -> Polygon:
     """
     Apply a buffer to a geometry in its appropriate UTM projection.
@@ -588,7 +588,7 @@ def buffer_in_utm(
         geom (shapely.geometry.Polygon): Input geometry.
         src_crs (str): The coordinate reference system of the input geometry in PROJ string format or EPSG code.
         buffer_distance (float | int): Buffer distance in metres.
-        utm_crs (str): The UTM zone of the input geometry in PROJ String or EPSG code.
+        utm_epsg (str): The UTM zone of the input geometry in PROJ String or EPSG code.
 
 
     Returns:
@@ -598,12 +598,12 @@ def buffer_in_utm(
         from shapely.geometry import Point
         buffered_geom = buffer_in_utm(Point(12.4924, 41.8902), src_crs="EPSG:4326", buffer_distance=-100)
     """
-    if not utm_crs:
-        utm_crs = gpd.GeoSeries(geom, crs=src_crs).estimate_utm_crs()
+    if not utm_epsg:
+        utm_epsg = gpd.GeoSeries(geom, crs=src_crs).estimate_utm_crs()
 
     # Set up the transformers for forward and reverse transformations
-    transformer_to_utm = Transformer.from_crs(src_crs, utm_crs, always_xy=True)
-    transformer_from_utm = Transformer.from_crs(utm_crs, src_crs, always_xy=True)
+    transformer_to_utm = Transformer.from_crs(src_crs, utm_epsg, always_xy=True)
+    transformer_from_utm = Transformer.from_crs(utm_epsg, src_crs, always_xy=True)
 
     # Perform the transformations
     geom_utm = transform(transformer_to_utm.transform, geom)  # type: ignore

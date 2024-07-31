@@ -2,7 +2,7 @@ from typing import Any
 
 import dask
 
-from coastpy.utils.config import ComputeInstance, configure_instance
+from coastpy.utils.config import ComputeInstance
 
 
 class DaskClientManager:
@@ -21,12 +21,9 @@ class DaskClientManager:
         Args:
             config_path (Optional[str]): Path to the configuration file.
         """
-        self.instance_type = configure_instance()
         dask.config.refresh()
 
-    def create_client(
-        self, instance_type: ComputeInstance | None, *args: Any, **kwargs: Any
-    ):
+    def create_client(self, instance_type: ComputeInstance, *args: Any, **kwargs: Any):
         """Create a Dask client based on the instance type.
 
         Args:
@@ -40,8 +37,6 @@ class DaskClientManager:
         Raises:
             ValueError: If the instance type is not recognized.
         """
-        if instance_type is None:
-            instance_type = self.instance_type
 
         if instance_type.name == "LOCAL":
             return self._create_local_client(*args, **kwargs)

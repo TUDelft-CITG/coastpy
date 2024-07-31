@@ -60,7 +60,7 @@ GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 
 COLUMN_DESCRIPTIONS = [
     {
-        "name": "tr_name",
+        "name": "transect_id",
         "type": "string",
         "description": "A unique identifier for each transect, constructed from three key components: the 'coastline_id', 'segment_id', and 'interpolated_distance'. The 'coastline_id' corresponds to the FID in OpenStreetMap (OSM) and is prefixed with 'cl'. The 'segment_id' indicates the segment of the OSM coastline split by a UTM grid, prefixed with 's'. The 'interpolated_distance' represents the distance from the starting point of the coastline to the transect, interpolated along the segment, and is prefixed with 'tr'. The complete structure is 'cl[coastline_id]s[segment_id]tr[interpolated_distance]', exemplified by 'cl32946s04tr08168547'. This composition ensures each transect name is a distinct and informative representation of its geographical and spatial attributes.",
     },
@@ -85,17 +85,17 @@ COLUMN_DESCRIPTIONS = [
         "description": "Well-Known Binary (WKB) representation of the transect as a linestring geometry.",
     },
     {
-        "name": "coastline_is_closed",
+        "name": "osm_coastline_is_closed",
         "type": "bool",
         "description": "Indicates whether the source OpenStreetMap (OSM) coastline, from which the transects were derived, forms a closed loop. A value of 'true' suggests that the coastline represents an enclosed area, such as an island.",
     },
     {
-        "name": "coastline_length",
+        "name": "osm_coastline_length",
         "type": "int32",
         "description": "Represents the total length of the source OpenStreetMap (OSM) coastline, that is summed across various UTM regions. It reflects the aggregate length of the original coastline from which the transects are derived.",
     },
     {
-        "name": "utm_crs",
+        "name": "utm_epsg",
         "type": "int32",
         "description": "EPSG code representing the UTM Coordinate Reference System for the transect.",
     },

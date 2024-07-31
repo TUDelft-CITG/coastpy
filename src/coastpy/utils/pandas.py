@@ -21,7 +21,7 @@ def add_attributes_from_gdf(
     """
     # Ensure the transect GeoDataFrame has a point geometry to avoid double intersection.
     transect_origins = gpd.GeoDataFrame(
-        df[["tr_name"]],
+        df[["transect_id"]],
         geometry=gpd.points_from_xy(df.lon, df.lat, crs=4326),
     )
 
@@ -42,7 +42,9 @@ def add_attributes_from_gdf(
     ).drop(columns=["index_right", "geometry"])
 
     # Merge the attributes into the original target GeoDataFrame
-    result = pd.merge(df, joined, on="tr_name", how="left").drop_duplicates("tr_name")
+    result = pd.merge(df, joined, on="transect_id", how="left").drop_duplicates(
+        "transect_id"
+    )
     return result
 
 

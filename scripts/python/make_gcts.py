@@ -1,8 +1,3 @@
-import dask
-
-# NOTE: explicitly set query-planning to False to avoid issues with dask-geopandas
-dask.config.set({"dataframe.query-planning": False})
-
 import datetime
 import logging
 import os
@@ -10,13 +5,12 @@ import time
 import warnings
 from functools import partial
 
+import dask
 import dask_geopandas
 import fsspec
 import geopandas as gpd
 import pandas as pd
-import pyproj
 import shapely
-from distributed import Client
 from dotenv import load_dotenv
 from geopandas.array import GeometryDtype
 from shapely.geometry import LineString, Point
@@ -24,89 +18,70 @@ from shapely.geometry import LineString, Point
 from coastpy.geo.ops import crosses_antimeridian
 from coastpy.geo.quadtiles_utils import add_geo_columns
 from coastpy.geo.transect import generate_transects_from_coastline
-from coastpy.utils.dask_utils import (
+from coastpy.io.partitioner import QuadKeyEqualSizePartitioner
+from coastpy.utils.config import configure_instance
+from coastpy.utils.dask import (
+    DaskClientManager,
     silence_shapely_warnings,
 )
+from coastpy.utils.pandas import add_attributes_from_gdfs
 
 load_dotenv(override=True)
 
 sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
 storage_options = {"account_name": "coclico", "credential": sas_token}
 
-utm_grid_url = "az://grid/utm.parquet"
-osm_url = "az://coastlines-osm/release/2023-02-09/coast_3857_gen9.parquet"
-countries_url = "az://public/countries.parquet"  # From overture maps 2024-04-16
-
+# NOTE: The generalized coastline used here cannot be made publicly available contact
+# authors for access.
+osm_coastline_uri = "az://coastlines-osm/release/2023-02-09/coast_3857_gen9.parquet"
+utm_grid_uri = "az://grid/utm.parquet"
+countries_uri = "az://public/countries.parquet"  # From overture maps 2024-07-22
+regions_uri = "az://public/regions.parquet"  # From overture maps 2024-07-22
 
 today = datetime.datetime.now().strftime("%Y-%m-%d")
-OUT_BASE_URI = f"az://gcts/release/{today}/gcts.parquet"
+OUT_BASE_URI = f"az://gcts/release/{today}"
 TMP_BASE_URI = OUT_BASE_URI.replace("az://", "az://tmp/")
-
-# DATA_DIR = pathlib.Path.home() / "data"
-# TMP_DIR = DATA_DIR / "tmp"
-# SRC_DIR = DATA_DIR / "src"
-# PRC_DIR = DATA_DIR / "prc"
-# RES_DIR = DATA_DIR / "res"
-# LIVE_DIR = DATA_DIR / "live"
-
 
 # TODO: make cli using argsparse
 # transect configuration settings
 MIN_COASTLINE_LENGTH = 5000
 SMOOTH_DISTANCE = 1.0e-3
-START_DISTANCE = 50
-COASTLINE_SEGMENT_LENGTH = 1e4
 TRANSECT_LENGTH = 2000
+SPACING = 100
 
 FILENAMER = "part.{numb2er}.parquet"
 COASTLINE_ID_COLUMN = "FID"  # FID (OSM) or OBJECTID (Sayre)
 COLUMNS = [COASTLINE_ID_COLUMN, "geometry"]
 COASTLINE_ID_RENAME = "FID"
 
-PRC_CRS = "EPSG:3857"
-DST_CRS = "EPSG:4326"
+PRC_EPSG = 3857
+DST_EPSG = 4326
 
-prc_epsg = pyproj.CRS.from_user_input(PRC_CRS).to_epsg()
-dst_epsg = pyproj.CRS.from_user_input(DST_CRS).to_epsg()
-
-# # dataset specific settings
-# COASTLINES_DIR = SRC_DIR / "coastlines_osm_generalized_v2023" / "coast_3857_gen9.shp"
-
-# UTM_GRID_FP = LIVE_DIR / "tiles" / "utm.parquet"
-# ADMIN1_FP = LIVE_DIR / "overture" / "2024-02-15" / "admin_bounds_level_1.parquet"
-# ADMIN2_FP = LIVE_DIR / "overture" / "2024-02-15" / "admin_bounds_level_2.parquet"
-
-# OUT_DIR = PRC_DIR / COASTLINES_DIR.stem.replace(
-#     "coast", f"transects_{TRANSECT_LENGTH}_test"
-# )
-# OUT_DIR = PRC_DIR / "gcts" / "release" / "2024-07-25"
-
-# To drop transects at meridonal boundary
-SPACING = 100
 MAX_PARTITION_SIZE = (
     "500MB"  # compressed parquet is usually order two smaller, so multiply this
 )
+
 MIN_ZOOM_QUADKEY = 2
 
 DTYPES = {
-    "tr_name": str,
+    "transect_id": str,
     "lon": "float32",
     "lat": "float32",
     "bearing": "float32",
     "geometry": GeometryDtype(),
     # NOTE: leave here because before we used to store the coastline name
-    # "coastline_name": str,
-    "coastline_is_closed": bool,
-    "coastline_length": "int32",
-    "utm_crs": "int32",
+    # "osm_coastline_id": str,
+    "osm_coastline_is_closed": bool,
+    "osm_coastline_length": "int32",
+    "utm_epsg": "int32",
     "bbox": object,
     "quadkey": str,
     # NOTE: leave here because before we used to store the bounding quadkey
     # "bounding_quadkey": str,
-    "isoCountryCodeAlpha2": str,
-    "admin_level_1_name": str,
-    "isoSubCountryCode": str,
-    "admin_level_2_name": str,
+    "continent": str,
+    "country": str,
+    "common_country_name": str,
+    "common_region_name": str,
 }
 
 
@@ -131,9 +106,16 @@ def silence_warnings():
             r" version. Check `isinstance\(dtype, pd.DatetimeTZDtype\)` instead."
         ),
     )
+    warnings.filterwarnings(
+        "ignore",
+        r"DataFrameGroupBy.apply operated on the grouping columns. This behavior is deprecated,"
+        r"and in a future version of pandas the grouping columns will be excluded from the operation."
+        r"Either pass `include_groups=False` to exclude the groupings or explicitly select the grouping"
+        r"action= columns after groupby to silence this warning.",
+    )
 
 
-def zero_pad_tr_name(tr_names: pd.Series) -> pd.Series:
+def zero_pad_transect_id(transect_ids: pd.Series) -> pd.Series:
     """
     Zero-pads the numerical parts of transect names to ensure logical sorting.
 
@@ -143,13 +125,13 @@ def zero_pad_tr_name(tr_names: pd.Series) -> pd.Series:
     reconstructs the transect names with zero-padded ids.
 
     Args:
-        tr_names (pd.Series): A Series of transect names in the format "cl{coastline_id}tr{transect_id}".
+        transect_ids (pd.Series): A Series of transect names in the format "cl{coastline_id}tr{transect_id}".
 
     Returns:
         pd.Series: A Series of zero-padded transect names for logical sorting.
     """
     # Extract and rename IDs
-    ids = tr_names.str.extract(r"cl(\d+)s(\d+)tr(\d+)").rename(
+    ids = transect_ids.str.extract(r"cl(\d+)s(\d+)tr(\d+)").rename(
         columns={0: "coastline_id", 1: "segment_id", 2: "transect_id"}
     )
     ids = ids.astype({"coastline_id": str, "segment_id": str, "transect_id": str})
@@ -169,7 +151,7 @@ def zero_pad_tr_name(tr_names: pd.Series) -> pd.Series:
         "cl" + ids["coastline_id"] + "s" + ids["segment_id"] + "tr" + ids["transect_id"]
     )
 
-    return pd.Series(zero_padded_names, index=tr_names.index)
+    return pd.Series(zero_padded_names, index=transect_ids.index)
 
 
 def sort_line_segments(segments, original_line):
@@ -221,37 +203,37 @@ if __name__ == "__main__":
     silence_warnings()
 
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger("azure").setLevel(logging.WARNING)
     logging.info(f"Transects will be written to {OUT_BASE_URI}")
-
-    # if not OUT_DIR.exists():
-    #     OUT_DIR.mkdir(exist_ok=True, parents=True)
 
     start_time = time.time()
 
-    client = Client(
-        threads_per_worker=1, processes=True, local_directory="/tmp", n_workers=8
+    instance_type = configure_instance()
+    client = DaskClientManager().create_client(
+        instance_type,
+        threads_per_worker=1,
+        processes=True,
+        n_workers=5,
+        local_directory="/tmp",
     )
     client.run(silence_shapely_warnings)
     logging.info(f"Client dashboard link: {client.dashboard_link}")
 
-    with fsspec.open(utm_grid_url, **storage_options) as f:
+    with fsspec.open(utm_grid_uri, **storage_options) as f:
         utm_grid = gpd.read_parquet(f)
 
-    with fsspec.open(countries_url, **storage_options) as f:
-        countries = gpd.read_parquet(f)
-
-    utm_grid = utm_grid.dissolve("epsg").to_crs(prc_epsg).reset_index()
+    utm_grid = utm_grid.dissolve("epsg").to_crs(PRC_EPSG).reset_index()
 
     [utm_grid_scattered] = client.scatter(
         [utm_grid.loc[:, ["geometry", "epsg", "utm_code"]]], broadcast=True
     )
 
     coastlines = (
-        dask_geopandas.read_parquet(osm_url, storage_options=storage_options)
+        dask_geopandas.read_parquet(osm_coastline_uri, storage_options=storage_options)
         .repartition(npartitions=10)
         .persist()
-        # .sample(frac=0.02)
-        .to_crs(prc_epsg)
+        .sample(frac=0.02)
+        .to_crs(PRC_EPSG)
     )
 
     def is_closed(geometry):
@@ -259,14 +241,14 @@ if __name__ == "__main__":
         return geometry.is_closed
 
     def wrap_is_closed(df):
-        df["coastline_is_closed"] = df.geometry.astype(object).apply(is_closed)
+        df["osm_coastline_is_closed"] = df.geometry.astype(object).apply(is_closed)
         return df
 
     META = gpd.GeoDataFrame(
         {
             "FID": pd.Series([], dtype="i8"),
             "geometry": gpd.GeoSeries([], dtype=GeometryDtype),
-            "coastline_is_closed": pd.Series([], dtype="bool"),
+            "osm_coastline_is_closed": pd.Series([], dtype="bool"),
         }
     )
 
@@ -284,7 +266,7 @@ if __name__ == "__main__":
             )
         ],
         crs="EPSG:4326",
-    ).to_crs(prc_epsg)
+    ).to_crs(PRC_EPSG)
 
     [utm_extent_scattered] = client.scatter([utm_extent], broadcast=True)
 
@@ -298,7 +280,7 @@ if __name__ == "__main__":
     META = gpd.GeoDataFrame(
         {
             "FID": pd.Series([], dtype="i8"),
-            "coastline_is_closed": pd.Series([], dtype="bool"),
+            "osm_coastline_is_closed": pd.Series([], dtype="bool"),
             "epsg": pd.Series([], dtype="i8"),
             "utm_code": pd.Series([], dtype=object),
             "geometry": gpd.GeoSeries([], dtype=GeometryDtype),
@@ -320,11 +302,11 @@ if __name__ == "__main__":
     )  # type: ignore
 
     # TODO: use coastpy.geo.utils add_geometry_lengths
-    def add_lengths(df, utm_crs):
+    def add_lengths(df, utm_epsg):
         silence_shapely_warnings()
         # compute geometry length in local utm crs
         df = (
-            df.to_crs(utm_crs)
+            df.to_crs(utm_epsg)
             .assign(geometry_length=lambda df: df.geometry.length)
             .to_crs(df.crs)
         )
@@ -332,7 +314,7 @@ if __name__ == "__main__":
         coastline_lengths = (
             df.groupby("FID_osm")["geometry_length"]
             .sum()
-            .rename("coastline_length")
+            .rename("osm_coastline_length")
             .reset_index()
         )
         # add to dataframe
@@ -343,14 +325,15 @@ if __name__ == "__main__":
     META = gpd.GeoDataFrame(
         {
             "FID_osm": pd.Series([], dtype="i4"),
-            "coastline_is_closed": pd.Series([], dtype="bool"),
+            "osm_coastline_is_closed": pd.Series([], dtype="bool"),
             "epsg": pd.Series([], dtype="i4"),
             "utm_code": pd.Series([], dtype="string"),
             "geometry": gpd.GeoSeries([], dtype=GeometryDtype),
-            "coastline_length": pd.Series([], dtype="f8"),
+            "osm_coastline_length": pd.Series([], dtype="f8"),
         }
     )
 
+    # NOTE: check how to handle the group keys with Pandas > 2.2.2
     coastlines = coastlines.map_partitions(
         lambda partition: partition.groupby("epsg", group_keys=False).apply(
             lambda gr: add_lengths(gr, gr.name)
@@ -364,18 +347,18 @@ if __name__ == "__main__":
         names = [
             f"cl{fid}s{seg}" for fid, seg in zip(df.FID_osm, segment_ids, strict=False)
         ]
-        df["coastline_name"] = names
+        df["osm_coastline_id"] = names
         return df
 
     META = gpd.GeoDataFrame(
         {
             "FID_osm": pd.Series([], dtype="i4"),
-            "coastline_is_closed": pd.Series([], dtype="bool"),
+            "osm_coastline_is_closed": pd.Series([], dtype="bool"),
             "epsg": pd.Series([], dtype="i4"),
             "utm_code": pd.Series([], dtype="string"),
             "geometry": gpd.GeoSeries([], dtype=GeometryDtype),
-            "coastline_length": pd.Series([], dtype="f8"),
-            "coastline_name": pd.Series([], dtype="string"),
+            "osm_coastline_length": pd.Series([], dtype="f8"),
+            "osm_coastline_id": pd.Series([], dtype="string"),
         }
     )
     coastlines = coastlines.map_partitions(add_coastline_names, meta=META).set_crs(
@@ -383,27 +366,27 @@ if __name__ == "__main__":
     )
 
     # coastlines = (
-    #     coastlines.assign(coastline_name=1)
-    #     .assign(coastline_name=lambda df: df.coastline_name.cumsum())
+    #     coastlines.assign(osm_coastline_id=1)
+    #     .assign(osm_coastline_id=lambda df: df.osm_coastline_id.cumsum())
     #     .persist()
     # ).set_crs(coastlines.crs)
 
-    # coastline_names = coastlines.coastline_name.value_counts().compute()
+    # coastline_names = coastlines.osm_coastline_id.value_counts().compute()
 
     # drop coastlines that are too short
     coastlines = coastlines.loc[
-        coastlines.coastline_length > MIN_COASTLINE_LENGTH
+        coastlines.osm_coastline_length > MIN_COASTLINE_LENGTH
     ].persist()
 
     def generate_filtered_transects(
         coastline: LineString,
         transect_length: float,
         spacing: float | int,
-        coastline_name: str,
-        coastline_is_closed: bool,
-        coastline_length: int,
+        osm_coastline_id: str,
+        osm_coastline_is_closed: bool,
+        osm_coastline_length: int,
         src_crs: int,
-        utm_crs: int,
+        utm_epsg: int,
         dst_crs: int,
         smooth_distance: float = 1e-3,
     ) -> gpd.GeoDataFrame:
@@ -411,11 +394,11 @@ if __name__ == "__main__":
             coastline,
             transect_length,
             spacing,
-            coastline_name,
-            coastline_is_closed,
-            coastline_length,
+            osm_coastline_id,
+            osm_coastline_is_closed,
+            osm_coastline_length,
             src_crs,
-            utm_crs,
+            utm_epsg,
             dst_crs,
             smooth_distance,
         )
@@ -431,9 +414,9 @@ if __name__ == "__main__":
         # tr_corrected = generate_transects_from_coastline_with_antimeridian_correction(
         #     coastline,
         #     transect_length,
-        #     coastline_name,
+        #     osm_coastline_id,
         #     src_crs,
-        #     utm_crs,
+        #     utm_epsg,
         #     dst_crs,
         #     crosses=crosses,
         #     utm_grid=utm_grid_scattered.result().set_index("epsg"),
@@ -443,14 +426,14 @@ if __name__ == "__main__":
         return transects
 
     # Order of columns in the coastlines dataframe
-    # ['FID_osm', 'epsg', 'utm_code', 'geometry', 'coastline_length','coastline_name']
+    # ['FID_osm', 'epsg', 'utm_code', 'geometry', 'osm_coastline_length','osm_coastline_id']
     # create a partial function with arguments that do not change
     partial_generate_filtered_transects = partial(
         generate_filtered_transects,
         transect_length=TRANSECT_LENGTH,
         spacing=SPACING,
         src_crs=coastlines.crs.to_epsg(),
-        dst_crs=dst_epsg,
+        dst_crs=DST_EPSG,
         smooth_distance=SMOOTH_DISTANCE,
     )
 
@@ -460,10 +443,10 @@ if __name__ == "__main__":
     transects = bag.map(
         lambda b: partial_generate_filtered_transects(
             coastline=b[4],
-            coastline_name=b[6],
-            coastline_is_closed=b[1],
-            coastline_length=int(b[5]),
-            utm_crs=b[2],
+            osm_coastline_id=b[6],
+            osm_coastline_is_closed=b[1],
+            osm_coastline_length=int(b[5]),
+            utm_epsg=b[2],
         )
     )
 
@@ -472,73 +455,67 @@ if __name__ == "__main__":
         transects, geo_columns=["bbox", "quadkey"], quadkey_zoom_level=12
     )
 
-    transects["tr_name"] = zero_pad_tr_name(transects["tr_name"])
+    transects["transect_id"] = zero_pad_transect_id(transects["transect_id"])
 
     with fsspec.open(TMP_BASE_URI, "wb", **storage_options) as f:
         transects.to_parquet(f, index=False)
 
-    # transects.to_parquet(
-    #     TMP_BASE_URI,
-    #     index=False,
-    #     storage_options=storage_options,
-    # )
+    logging.info(f"Transects written to {TMP_BASE_URI}")
 
-    # # NOTE: in next gcts release move this out of processing and add from countries (divisions) seperately
-    # admin1 = (
-    #     gpd.read_parquet(ADMIN1_FP)
-    #     .to_crs(transects.crs)
-    #     .drop(columns=["id"])
-    #     .rename(columns={"primary_name": "admin_level_1_name"})
-    # )
-    # admin2 = (
-    #     gpd.read_parquet(ADMIN2_FP)
-    #     .to_crs(transects.crs)
-    #     .drop(columns=["id", "isoCountryCodeAlpha2"])
-    #     .rename(columns={"primary_name": "admin_level_2_name"})
-    # )
+    logging.info("Restarting client...")
+    client.restart()
+    logging.info(f"Client dashboard link: {client.dashboard_link}")
 
-    # # NOTE: zoom level 5 is hard-coded here because I believe spatial join will be faster
-    # quadkey_grouper = "quadkey_z5"
-    # transects[quadkey_grouper] = transects.apply(
-    #     lambda r: mercantile.quadkey(mercantile.tile(r.lon, r.lat, 5)), axis=1
-    # )
+    transects = dask_geopandas.read_parquet(
+        TMP_BASE_URI, storage_options=storage_options
+    ).compute()
+    zoom = 5
+    quadkey_grouper = f"quadkey_{zoom}"
+    transects[quadkey_grouper] = transects.quadkey.str[:zoom]
 
-    # def add_admin_bounds(df, admin_df, max_distance=20000):
-    #     points = gpd.GeoDataFrame(
-    #         df[["tr_name"]], geometry=gpd.GeoSeries.from_xy(df.lon, df.lat, crs=4326)
-    #     ).to_crs(3857)
-    #     joined = gpd.sjoin_nearest(
-    #         points, admin_df.to_crs(3857), max_distance=max_distance
-    #     ).drop(columns=["index_right", "geometry"])
+    logging.info(
+        "Part 2: Adding Overture divisions (countries and regions) to transects..."
+    )
 
-    #     df = pd.merge(df, joined, on="tr_name", how="left")
-    #     return df
+    with fsspec.open(countries_uri, **storage_options) as f:
+        countries = gpd.read_parquet(
+            f, columns=["country", "common_country_name", "continent", "geometry"]
+        )
+    with fsspec.open(regions_uri, **storage_options) as f:
+        regions = gpd.read_parquet(f, columns=["common_region_name", "geometry"])
 
-    # transects = transects.groupby(quadkey_grouper, group_keys=False).apply(
-    #     lambda gr: add_admin_bounds(gr, admin1),
-    # )
-    # transects = transects.groupby(quadkey_grouper, group_keys=False).apply(
-    #     lambda gr: add_admin_bounds(gr, admin2),
-    # )
+    logging.info("Scattering countries on client...")
+    scattered_countries = client.scatter(countries, broadcast=True)
+    logging.info("Scattering regions on client...")
+    scattered_regions = client.scatter(regions, broadcast=True)
 
-    # transects = transects.drop(columns=[quadkey_grouper])
+    tasks = []
+    for _, tr in transects.groupby(quadkey_grouper):
+        t = dask.delayed(add_attributes_from_gdfs)(
+            tr, (scattered_countries, scattered_regions), max_distance=20000
+        )
+        tasks.append(t)
 
-    # transects.to_parquet(OUT_DIR, index=False)
+    logging.info("Adding attributes to transects...")
+    transects = pd.concat(dask.compute(*tasks))
+    transects = transects.drop(columns=[quadkey_grouper])
 
-    # partitioner = QuadKeyEqualSizePartitioner(
-    #     transects,
-    #     out_dir=OUT_DIR,
-    #     max_size=MAX_PARTITION_SIZE,
-    #     min_quadkey_zoom=MIN_ZOOM_QUADKEY,
-    #     sort_by="quadkey",
-    #     geo_columns=["bbox", "quadkey"],
-    #     column_order=list(DTYPES.keys()),
-    #     dtypes=DTYPES,
-    # )
-    # partitioner.process()
+    partitioner = QuadKeyEqualSizePartitioner(
+        transects,
+        out_dir=OUT_BASE_URI,
+        max_size=MAX_PARTITION_SIZE,
+        min_quadkey_zoom=MIN_ZOOM_QUADKEY,
+        sort_by="quadkey",
+        geo_columns=["bbox", "quadkey"],
+        column_order=list(DTYPES.keys()),
+        dtypes=DTYPES,
+        storage_options=storage_options,
+        naming_function_kwargs={"include_random_hex": True},
+    )
+    partitioner.process()
 
-    # logging.info("Done!")
-    # elapsed_time = time.time() - start_time
-    # logging.info(
-    #     f"Time (H:M:S): {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}"
-    # )
+    logging.info("Done!")
+    elapsed_time = time.time() - start_time
+    logging.info(
+        f"Time (H:M:S): {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}"
+    )

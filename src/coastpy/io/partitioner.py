@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 import dask_geopandas
 import fsspec
@@ -7,7 +8,7 @@ import mercantile
 from coastpy.geo.quadtiles_utils import add_geo_columns
 from coastpy.geo.size import estimate_memory_usage_per_row
 from coastpy.io.utils import name_data
-from coastpy.utils.size_utils import size_to_bytes
+from coastpy.utils.size import size_to_bytes
 
 
 class EqualSizePartitioner:
@@ -18,24 +19,31 @@ class EqualSizePartitioner:
         max_size,
         sort_by="quadkey",
         quadkey_zoom_level=12,
-        geo_columns=None,
+        geo_columns: list[Literal["bbox", "bounding_quadkey", "quadkey"]] | None = None,
         column_order=None,
         dtypes=None,
+        storage_options=None,
+        naming_function_kwargs=None,
     ):
         if geo_columns is None:
-            geo_columns = ["bbox", "quadkey", "bounding_quadkey"]
+            geo_columns = ["bbox", "quadkey"]
+
+        if storage_options is None:
+            storage_options = {}
+
+        if naming_function_kwargs is None:
+            naming_function_kwargs = {}
 
         self.df = df
-        self.out_dir = Path(out_dir)
+        self.out_dir = out_dir
         self.max_size_bytes = size_to_bytes(max_size)
         self.sort_by = sort_by
         self.quadkey_zoom_level = quadkey_zoom_level
         self.geo_columns = geo_columns
+        self.storage_options = storage_options
         self.column_order = column_order
         self.dtypes = dtypes
-
-        # Ensure output directory exists
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.naming_function_kwargs = naming_function_kwargs
 
         # Set the naming function for the output files
         self.naming_function = name_data
@@ -85,11 +93,20 @@ class EqualSizePartitioner:
         if not partition_df.empty:
             partition_df = partition_df[column_order] if column_order else partition_df
             # Generate the output path using the naming function
-            outpath = self.naming_function(partition_df, prefix=str(self.out_dir))
+            outpath = self.naming_function(
+                partition_df, prefix=str(self.out_dir), **self.naming_function_kwargs
+            )
 
-            # Ensure the output directory exists
-            fs = fsspec.open(outpath, "wb").fs
-            fs.makedirs(fs._parent(outpath), exist_ok=True)
+            # Initialize the filesystem object with storage options
+
+            fs, _, [path] = fsspec.get_fs_token_paths(
+                outpath, storage_options=self.storage_options
+            )
+
+            # Ensure the output directory exists (local filesystem specific)
+            if fs.protocol == ("file", "local"):
+                # For local filesystem, ensure the parent directory exists
+                fs.makedirs(fs._parent(path), exist_ok=True)
 
             if self.dtypes:
                 partition_df = partition_df.astype(self.dtypes)
@@ -98,7 +115,7 @@ class EqualSizePartitioner:
                 partition_df = partition_df[self.column_order]
 
             # Use fsspec to write the DataFrame to parquet
-            with fs.open(outpath, "wb") as f:
+            with fs.open(path, "wb") as f:
                 partition_df.to_parquet(f, index=False)
 
 
@@ -114,6 +131,8 @@ class QuadKeyEqualSizePartitioner(EqualSizePartitioner):
         geo_columns=None,
         column_order=None,
         dtypes=None,
+        storage_options=None,
+        naming_function_kwargs=None,
     ):
         super().__init__(
             df,
@@ -124,6 +143,8 @@ class QuadKeyEqualSizePartitioner(EqualSizePartitioner):
             geo_columns,
             column_order,
             dtypes,
+            storage_options,
+            naming_function_kwargs,
         )
         self.min_quadkey_zoom = min_quadkey_zoom
         self.quadkey_grouper = f"quadkey_z{min_quadkey_zoom}"
