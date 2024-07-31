@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 import dask
@@ -87,10 +88,10 @@ class DaskClientManager:
 
         # Define default values specific to SLURM
         slurm_configs = {
-            # "cores": 5,  # Cores per worker
+            "cores": 1,  # Cores per worker
             "processes": True,  # Processes per worker
-            "n_workers": 5,
-            "memory": "75GB",  # Memory per worker
+            # "n_workers": 5,
+            "memory": "12GB",  # Memory per worker
             "local_directory": "/scratch/frcalkoen/tmp",
             "walltime": "1:00:00",
         }
@@ -99,6 +100,9 @@ class DaskClientManager:
 
         # Create the SLURM cluster
         cluster = SLURMCluster(*args, **slurm_configs)
+        cluster.scale(jobs=5)
+
+        logging.info(f"{cluster.job_script()}")
 
         # cluster.scale(jobs=5)
 
