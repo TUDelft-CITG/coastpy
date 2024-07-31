@@ -535,6 +535,46 @@ def crosses_antimeridian(df: gpd.GeoDataFrame) -> gpd.GeoSeries:
     return coords.apply(lambda x: x[0][0] * x[1][0] < 0)
 
 
+import geopandas as gpd
+from shapely.geometry import LineString
+
+
+def crosses_antimeridian(df: gpd.GeoDataFrame) -> pd.Series:
+    """
+    Determines whether LineStrings in a GeoDataFrame cross the International Date Line.
+
+    Args:
+        df (gpd.GeoDataFrame): Input GeoDataFrame with LineString geometries.
+
+    Returns:
+        pd.Series: Series indicating whether each LineString crosses the antimeridian.
+
+    Example:
+        >>> df = gpd.read_file('path_to_file.geojson')
+        >>> df['crosses_antimeridian'] = crosses_antimeridian(df)
+        >>> print(df['crosses_antimeridian'])
+    """
+    # Ensure the CRS is in degrees (longitude, latitude)
+    if df.crs.to_epsg() != 4326:
+        df = df.to_crs(4326)
+
+    # Extract coordinates from the geometry
+    coords = df.geometry.apply(lambda geom: np.array(geom.coords.xy).T)
+
+    # Vectorized check for antimeridian crossing
+    def crosses(coords: np.ndarray) -> bool:
+        # Calculate differences between consecutive longitudes
+        longitudes = coords[:, 0]
+        lon_diff = np.diff(longitudes)
+
+        # Check if the difference is greater than 180 degrees (indicating a crossing)
+        crosses = np.abs(lon_diff) > 180
+        return np.any(crosses)
+
+    # Apply the vectorized check across all geometries
+    return coords.apply(crosses)
+
+
 def buffer_in_utm(
     geom: Polygon,
     src_crs: str | int,
