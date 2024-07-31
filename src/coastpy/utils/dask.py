@@ -1,6 +1,7 @@
 from typing import Any
 
 import dask
+from distributed import Client
 
 from coastpy.utils.config import ComputeInstance
 
@@ -46,7 +47,7 @@ class DaskClientManager:
             msg = "Unknown compute instance type."
             raise ValueError(msg)
 
-    def _create_local_client(self, *args: Any, **kwargs: Any):
+    def _create_local_client(self, *args: Any, **kwargs: Any) -> Client:
         """Create a local Dask client with potential overrides.
 
         Args:
@@ -72,7 +73,7 @@ class DaskClientManager:
         # Create and return the Dask Client using the updated parameters
         return Client(*args, **configs)
 
-    def _create_slurm_client(self, *args: Any, **kwargs: Any):
+    def _create_slurm_client(self, *args: Any, **kwargs: Any) -> Client:
         """Create a SLURM Dask client with potential overrides.
 
         Args:
@@ -86,12 +87,12 @@ class DaskClientManager:
 
         # Define default values specific to SLURM
         slurm_configs = {
-            "cores": 1,  # Cores per worker
-            "processes": 1,  # Processes per worker
+            # "cores": 5,  # Cores per worker
+            "processes": True,  # Processes per worker
             "n_workers": 5,
-            "memory": "12GB",  # Memory per worker
+            "memory": "75GB",  # Memory per worker
             "local_directory": "/scratch/frcalkoen/tmp",
-            "walltime": "4:00:00",
+            "walltime": "1:00:00",
         }
         # Update default values with any overrides provided in kwargs
         slurm_configs.update(kwargs)
@@ -109,7 +110,7 @@ class DaskClientManager:
         # )
 
         # cluster.adapt(minimum_jobs=min_jobs, maximum_jobs=max_jobs)
-        return cluster.get_client()
+        return Client(cluster)
 
     # def _create_slurm_client(self, *args: Any, **kwargs: Any):
     #     """Create a SLURM Dask client with potential overrides.
