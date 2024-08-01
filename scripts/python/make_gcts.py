@@ -458,9 +458,9 @@ if __name__ == "__main__":
 
     logging.info(f"Transects written to {TMP_BASE_URI}")
 
-    logging.info("Restarting client...")
-    client.restart()
-    logging.info(f"Client dashboard link: {client.dashboard_link}")
+    # logging.info("Restarting client...")
+    # client.restart()
+    # logging.info(f"Client dashboard link: {client.dashboard_link}")
 
     transects = dask_geopandas.read_parquet(
         TMP_BASE_URI, storage_options=storage_options
