@@ -86,7 +86,6 @@ class DaskClientManager:
         """
         from dask_jobqueue import SLURMCluster
 
-
         slurm_configs = {
             "cores": 5,  # Cores per worker
             "processes": 5,  # Processes per worker
