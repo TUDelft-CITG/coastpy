@@ -476,7 +476,7 @@ if __name__ == "__main__":
     # quadkey_grouper = f"quadkey_{zoom}"
     # transects[quadkey_grouper] = transects.quadkey.str[:zoom]
 
-    def process(transects_group):
+    def process(transects_group, countries_uri, regions_uri, max_distance=20000):
         with fsspec.open(countries_uri, **storage_options) as f:
             countries = gpd.read_parquet(
                 f, columns=["country", "common_country_name", "continent", "geometry"]
@@ -485,7 +485,7 @@ if __name__ == "__main__":
             regions = gpd.read_parquet(f, columns=["common_region_name", "geometry"])
 
         r = add_attributes_from_gdfs(
-            transects_group, [countries, regions], max_distance=20000
+            transects_group, [countries, regions], max_distance=max_distance
         )
         return r
 
