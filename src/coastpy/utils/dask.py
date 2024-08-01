@@ -88,12 +88,12 @@ class DaskClientManager:
 
         # Define default values specific to SLURM
         slurm_configs = {
-            "cores": 1,  # Cores per worker
-            "processes": True,  # Processes per worker
+            # "cores": 1,  # Cores per worker
+            # "processes": True,  # Processes per worker
             # "n_workers": 5,
-            "memory": "12GB",  # Memory per worker
-            "local_directory": "/scratch/frcalkoen/tmp",
-            "walltime": "1:00:00",
+            # "memory": "12GB",  # Memory per worker
+            # "local_directory": "/scratch/frcalkoen/tmp",
+            # "walltime": "1:00:00",
         }
         # Update default values with any overrides provided in kwargs
         slurm_configs.update(kwargs)
