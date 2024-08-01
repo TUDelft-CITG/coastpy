@@ -87,20 +87,20 @@ class DaskClientManager:
         from dask_jobqueue import SLURMCluster
 
         slurm_configs = {
-            "cores": 5,  # Cores per worker
-            "processes": 5,  # Processes per worker
-            # "n_workers": 5,
-            "memory": "60GB",  # Memory per worker
-            # job_script_prologue=["module load devel/cuda/12.1"],
+            "cores": 10,  # Cores per worker
+            "processes": 10,  # Processes per worker
+            # "n_workers": 10,
+            "memory": "120GB",  # Memory per worker
             # "local_directory": "/scratch/frcalkoen/tmp",
-            # "walltime": "1:00:00",
+            "walltime": "3:00:00",
+            "log_directory": "/scratch/frcalkoen/tmp",
         }
         # Update default values with any overrides provided in kwargs
         slurm_configs.update(kwargs)
 
         # Create the SLURM cluster
         cluster = SLURMCluster(*args, **slurm_configs)
-        cluster.scale(jobs=1)
+        cluster.scale(jobs=2)
 
         logging.info(f"{cluster.job_script()}")
 
