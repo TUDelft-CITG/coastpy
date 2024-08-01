@@ -453,17 +453,28 @@ if __name__ == "__main__":
 
     transects["transect_id"] = zero_pad_transect_id(transects["transect_id"])
 
-    with fsspec.open(TMP_BASE_URI, "wb", **storage_options) as f:
-        transects.to_parquet(f, index=False)
+    partitioner = QuadKeyEqualSizePartitioner(
+        transects,
+        out_dir=TMP_BASE_URI,
+        max_size="1GB",
+        min_quadkey_zoom=4,
+        sort_by="quadkey",
+        geo_columns=["bbox", "quadkey"],
+        storage_options=storage_options,
+    )
+    partitioner.process()
+
+    # with fsspec.open(TMP_BASE_URI, "wb", **storage_options) as f:
+    #     transects.to_parquet(f, index=False)
 
     logging.info(f"Transects written to {TMP_BASE_URI}")
 
     transects = dask_geopandas.read_parquet(
         TMP_BASE_URI, storage_options=storage_options
     )
-    zoom = 5
-    quadkey_grouper = f"quadkey_{zoom}"
-    transects[quadkey_grouper] = transects.quadkey.str[:zoom]
+    # zoom = 5
+    # quadkey_grouper = f"quadkey_{zoom}"
+    # transects[quadkey_grouper] = transects.quadkey.str[:zoom]
 
     def process(transects_group):
         with fsspec.open(countries_uri, **storage_options) as f:
@@ -473,48 +484,22 @@ if __name__ == "__main__":
         with fsspec.open(regions_uri, **storage_options) as f:
             regions = gpd.read_parquet(f, columns=["common_region_name", "geometry"])
 
-        result = add_attributes_from_gdfs(
+        r = add_attributes_from_gdfs(
             transects_group, [countries, regions], max_distance=20000
         )
-        return result
+        return r
 
     logging.info("Part 2: adding attributes to transects...")
-    logging.info(f"Grouping the transects by quadkey zoom level {zoom}")
-
-    # def wrapper(transects, countries_uri, regions_uri, max_distance):
-    #     with fsspec.open(countries_uri, **storage_options) as f:
-    #         countries = gpd.read_parquet(
-    #             f, columns=["country", "common_country_name", "continent", "geometry"]
-    #         )
-    #     with fsspec.open(regions_uri, **storage_options) as f:
-    #         regions = gpd.read_parquet(f, columns=["common_region_name", "geometry"])
-
-    #     r = add_attributes_from_gdfs(
-    #         transects, [countries, regions], max_distance=max_distance
-    #     )
-
-    #     return r
-
-    # with fsspec.open(countries_uri, **storage_options) as f:
-    #     countries = gpd.read_parquet(
-    #         f, columns=["country", "common_country_name", "continent", "geometry"]
-    #     )
-    # with fsspec.open(regions_uri, **storage_options) as f:
-    #     regions = gpd.read_parquet(f, columns=["common_region_name", "geometry"])
-
-    # logging.info("Scattering countries on client...")
-    # scattered_countries = client.scatter(countries, broadcast=True)
-    # logging.info("Scattering regions on client...")
-    # scattered_regions = client.scatter(regions, broadcast=True)
+    # logging.info(f"Grouping the transects by quadkey zoom level {zoom}")
 
     tasks = []
-    for _, group in transects.groupby(quadkey_grouper):
+    for group in transects.to_delayed():
         t = dask.delayed(process)(group, countries_uri, regions_uri, max_distance=20000)
         tasks.append(t)
 
     logging.info("Computing the submitted tasks..")
     transects = pd.concat(dask.compute(*tasks))
-    transects = transects.drop(columns=[quadkey_grouper])
+    # transects = transects.drop(columns=[quadkey_grouper])
 
     logging.info(
         f"Partitioning into equal partitions by quadkey at zoom level {MIN_ZOOM_QUADKEY}"

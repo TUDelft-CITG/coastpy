@@ -1,4 +1,5 @@
 import json
+import logging
 import pathlib
 import uuid
 import warnings
@@ -372,3 +373,63 @@ def read_log_entries(
     df = df.sort_values(by="time", ascending=True)
 
     return df
+
+
+def rm_from_storage(
+    pattern: str,
+    storage_options: dict[str, str] | None = None,
+    confirm: bool = True,
+    verbose: bool = True,
+) -> None:
+    """
+    Deletes all blobs/files in the specified storage location that match the given prefix.
+
+    Args:
+        pattern (str): The pattern or path pattern (including wildcards) for the blobs/files to delete.
+        storage_options (Dict[str, str], optional): A dictionary containing storage connection details.
+        confirm (bool): Whether to prompt for confirmation before deletion.
+        verbose (bool): Whether to display detailed log messages.
+
+    Returns:
+        None
+    """
+    if storage_options is None:
+        storage_options = {}
+
+    # Get filesystem, token, and resolved paths
+    fs, _, paths = fsspec.get_fs_token_paths(pattern, storage_options=storage_options)
+
+    if paths:
+        if verbose:
+            logging.info(
+                f"\nWarning: You are about to delete the following blobs/files matching '{pattern}':"
+            )
+            for path in paths:
+                logging.info(path)
+
+        if confirm:
+            confirmation = input(
+                f"\nType 'yes' to confirm deletion of blobs/files matching '{pattern}': "
+            )
+        else:
+            confirmation = "yes"
+
+        if confirmation.lower() == "yes":
+            for path in paths:
+                try:
+                    if verbose:
+                        logging.info(f"Deleting blob/file: {path}")
+                    fs.rm(path)
+                    if verbose:
+                        logging.info(f"Blob/file {path} deleted successfully.")
+                except Exception as e:
+                    if verbose:
+                        logging.error(f"Failed to delete blob/file: {e}")
+            if verbose:
+                logging.info("All specified blobs/files have been deleted.")
+        else:
+            if verbose:
+                logging.info("Blob/file deletion cancelled.")
+    else:
+        if verbose:
+            logging.info(f"No blobs/files found matching '{pattern}'.")

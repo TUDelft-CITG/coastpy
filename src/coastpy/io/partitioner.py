@@ -11,6 +11,9 @@ from coastpy.io.utils import name_data
 from coastpy.utils.size import size_to_bytes
 
 
+# NOTE: What about separating the partitioner and the equal size partitioner? - that
+# way we can have a more generic partitioner tha does not have to compute the sizes of
+# each row.
 class EqualSizePartitioner:
     def __init__(
         self,
@@ -128,7 +131,7 @@ class QuadKeyEqualSizePartitioner(EqualSizePartitioner):
         min_quadkey_zoom,
         sort_by,
         quadkey_zoom_level=12,
-        geo_columns=None,
+        geo_columns: list[Literal["bbox", "bounding_quadkey", "quadkey"]] | None = None,
         column_order=None,
         dtypes=None,
         storage_options=None,
