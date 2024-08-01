@@ -19,6 +19,7 @@ from coastpy.geo.ops import crosses_antimeridian
 from coastpy.geo.quadtiles_utils import add_geo_columns
 from coastpy.geo.transect import generate_transects_from_coastline
 from coastpy.io.partitioner import QuadKeyEqualSizePartitioner
+from coastpy.io.utils import rm_from_storage
 from coastpy.utils.config import configure_instance
 from coastpy.utils.dask import (
     DaskClientManager,
@@ -453,6 +454,13 @@ if __name__ == "__main__":
 
     transects["transect_id"] = zero_pad_transect_id(transects["transect_id"])
 
+    logging.info(f"Removing files/bytes from {TMP_BASE_URI} if present.")
+    rm_from_storage(
+        pattern=(TMP_BASE_URI + "/*.parquet"),
+        storage_options=storage_options,
+        confirm=False,
+        verbose=False,
+    )
     partitioner = QuadKeyEqualSizePartitioner(
         transects,
         out_dir=TMP_BASE_URI,
@@ -503,6 +511,13 @@ if __name__ == "__main__":
 
     logging.info(
         f"Partitioning into equal partitions by quadkey at zoom level {MIN_ZOOM_QUADKEY}"
+    )
+    logging.info(f"Removing files/bytes from {OUT_BASE_URI} if present.")
+    rm_from_storage(
+        pattern=(OUT_BASE_URI + "/*.parquet"),
+        storage_options=storage_options,
+        confirm=False,
+        verbose=False,
     )
     partitioner = QuadKeyEqualSizePartitioner(
         transects,

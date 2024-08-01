@@ -396,20 +396,33 @@ def rm_from_storage(
     if storage_options is None:
         storage_options = {}
 
+    # Create a local logger
+    logger = logging.getLogger(__name__)
+    if verbose:
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+
+    if storage_options is None:
+        storage_options = {}
+
     # Get filesystem, token, and resolved paths
     fs, _, paths = fsspec.get_fs_token_paths(pattern, storage_options=storage_options)
 
     if paths:
         if verbose:
-            logging.info(
-                f"\nWarning: You are about to delete the following blobs/files matching '{pattern}':"
+            logger.info(
+                f"Warning: You are about to delete the following {len(paths)} blobs/files matching '{pattern}'."
             )
             for path in paths:
-                logging.info(path)
+                logger.info(path)
 
         if confirm:
             confirmation = input(
-                f"\nType 'yes' to confirm deletion of blobs/files matching '{pattern}': "
+                f"Type 'yes' to confirm deletion of {len(paths)} blobs/files matching '{pattern}': "
             )
         else:
             confirmation = "yes"
@@ -418,18 +431,23 @@ def rm_from_storage(
             for path in paths:
                 try:
                     if verbose:
-                        logging.info(f"Deleting blob/file: {path}")
+                        logger.info(f"Deleting blob/file: {path}")
                     fs.rm(path)
                     if verbose:
-                        logging.info(f"Blob/file {path} deleted successfully.")
+                        logger.info(f"Blob/file {path} deleted successfully.")
                 except Exception as e:
                     if verbose:
-                        logging.error(f"Failed to delete blob/file: {e}")
+                        logger.error(f"Failed to delete blob/file: {e}")
             if verbose:
-                logging.info("All specified blobs/files have been deleted.")
+                logger.info("All specified blobs/files have been deleted.")
         else:
             if verbose:
-                logging.info("Blob/file deletion cancelled.")
+                logger.info("Blob/file deletion cancelled.")
     else:
         if verbose:
-            logging.info(f"No blobs/files found matching '{pattern}'.")
+            logger.info(f"No blobs/files found matching '{pattern}'.")
+
+    # Remove the handler after use
+    if verbose:
+        logger.removeHandler(handler)
+        handler.close()
