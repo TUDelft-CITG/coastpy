@@ -79,10 +79,12 @@ DTYPES = {
     "quadkey": str,
     # NOTE: leave here because before we used to store the bounding quadkey
     # "bounding_quadkey": str,
-    "continent": str,
-    "country": str,
-    "common_country_name": str,
-    "common_region_name": str,
+    # NOTE: the object dtype are necessary because some rows do not contain contient, country or region data.
+    # However, it is terriibly inefficient, but for now leave it like this. Otherwise they would become "nan"?
+    "continent": object,
+    "country": object,
+    "common_country_name": object,
+    "common_region_name": object,
 }
 
 
