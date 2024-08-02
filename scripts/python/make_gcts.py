@@ -231,7 +231,7 @@ if __name__ == "__main__":
         dask_geopandas.read_parquet(osm_coastline_uri, storage_options=storage_options)
         .repartition(npartitions=10)
         .persist()
-        .sample(frac=0.02)
+        # .sample(frac=0.02)
         .to_crs(PRC_EPSG)
     )
 
