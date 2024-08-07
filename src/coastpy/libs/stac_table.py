@@ -297,6 +297,10 @@ def get_columns(schema: pa.Schema, prefix: str = "") -> list:
             # For nested fields, recurse into the structure
             nested_columns = get_columns(field.type, prefix=field.name + ".")
             columns.extend(nested_columns)
+        elif field.name == "geometry":
+            column = {"name": "geometry", "type": "WKB"}
+            columns.append(column)
+
         else:
             # Handle non-nested fields
             column = {"name": prefix + field.name, "type": str(field.type).lower()}
