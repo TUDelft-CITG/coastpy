@@ -26,9 +26,13 @@ sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
 storage_account_name = "coclico"
 storage_options = {"account_name": storage_account_name, "credential": sas_token}
 
+# NOTE:
+TEST_RELEASE = True
+
 # Container and URI configuration
 CONTAINER_NAME = "gcts"
-PREFIX = "release/2024-03-18"
+RELEASE_DATE = "2024-08-02"
+PREFIX = f"release/{RELEASE_DATE}"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
 PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 LICENSE = "CC-BY-4.0"
@@ -36,7 +40,6 @@ LICENSE = "CC-BY-4.0"
 # Collection information
 COLLECTION_ID = "gcts"
 COLLECTION_TITLE = "Global Coastal Transect System (GCTS)"
-DATE_TRANSECTS_CREATED = "2024-03-18"
 
 # Transect and zoom configuration
 TRANSECT_LENGTH = 2000
@@ -56,7 +59,10 @@ ASSET_TITLE = "GCTS"
 ASSET_DESCRIPTION = f"Parquet dataset with coastal transects ({TRANSECT_LENGTH} m) at 100 m alongshore resolution for this region."
 
 # GeoParquet STAC items
-GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
+if TEST_RELEASE:
+    GEOPARQUET_STAC_ITEMS_HREF = f"az://items-test/{COLLECTION_ID}.parquet"
+else:
+    GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 
 COLUMN_DESCRIPTIONS = [
     {
@@ -110,24 +116,24 @@ COLUMN_DESCRIPTIONS = [
         "description": "QuadKey corresponding to the transect origin location at zoom 12, following the Bing Maps Tile System for spatial indexing.",
     },
     {
-        "name": "isoCountryCodeAlpha2",
+        "name": "continent",
         "type": "string",
-        "description": "ISO 3166-1 alpha-2 country code for the country in which the transect is located.",
+        "description": "Name of the continent in which the transect is located.",
     },
     {
-        "name": "admin_level_1_name",
+        "name": "country",
         "type": "string",
-        "description": "Name of the first-level administrative division (e.g., country) in which the transect is located.",
+        "description": "ISO alpha-2 country code for the country in which the transect is located. The country data are extracted from Overture Maps (divisions).",
     },
     {
-        "name": "isoSubCountryCode",
+        "name": "common_country_name",
         "type": "string",
-        "description": "ISO code for the sub-country or second-level administrative division in which the transect is located.",
+        "description": "Common country name (EN) in which the transect is located. The country data are extracted from Overture Maps (divisions).",
     },
     {
-        "name": "admin_level_2_name",
+        "name": "common_region_name",
         "type": "string",
-        "description": "Name of the second-level administrative division (e.g., state or province) in which the transect is located.",
+        "description": "Common region name (EN) in which the transect is located. The regions are extracted from Overture Maps (divisions).",
     },
 ]
 
@@ -192,7 +198,7 @@ def create_collection(
         ),
     ]
 
-    start_datetime = datetime.datetime.strptime(DATE_TRANSECTS_CREATED, "%Y-%m-%d")
+    start_datetime = datetime.datetime.strptime(RELEASE_DATE, "%Y-%m-%d")
 
     extent = pystac.Extent(
         pystac.SpatialExtent([[-180.0, 90.0, 180.0, -90.0]]),
@@ -276,7 +282,7 @@ def create_collection(
     collection.stac_extensions.append(stac_table.SCHEMA_URI)
 
     VersionExtension.add_to(collection)
-    collection.extra_fields["version"] = "1.0.0"
+    collection.extra_fields["version"] = RELEASE_DATE
 
     return collection
 
@@ -304,7 +310,7 @@ def create_item(
         "description": ASSET_DESCRIPTION,
     }
 
-    dt = datetime.datetime.strptime(DATE_TRANSECTS_CREATED, "%Y-%m-%d")
+    dt = datetime.datetime.strptime(RELEASE_DATE, "%Y-%m-%d")
     # shape = shapely.box(*bbox)
     # geometry = shapely.geometry.mapping(shape)
     template = pystac.Item(
