@@ -4,7 +4,43 @@ import antimeridian
 import geopandas as gpd
 import pandas as pd
 import shapely
+from geopandas import GeoDataFrame
 from shapely.geometry import LineString, box
+
+
+def create_buffer_zone(
+    gdf: GeoDataFrame,
+    planar_crs: int | None = 3857,
+    buffer_factor: float = 1.5,
+    max_distance: float = 20000,
+    use_utm: bool = False,
+) -> GeoDataFrame:
+    """
+    Create a buffer zone around geometries in a GeoDataFrame.
+
+    Args:
+        gdf (GeoDataFrame): Input GeoDataFrame with geometries.
+        planar_crs (Optional[int]): EPSG code for the planar projection system. Defaults to 3857.
+        buffer_factor (float): Factor to multiply the max distance by for the buffer. Defaults to 1.5.
+        max_distance (float): Maximum distance for the buffer in meters. Defaults to 20000.
+        use_utm (bool): Whether to compute the buffer in the UTM zone of the geometries. Defaults to False.
+
+    Returns:
+        GeoDataFrame: GeoDataFrame with the buffer zone geometries.
+    """
+    src_crs = gdf.crs
+
+    if use_utm:
+        planar_crs = gdf.estimate_utm_crs()
+
+    gdf = gdf.to_crs(planar_crs)
+    gdf["geometry"] = gdf.buffer(max_distance * buffer_factor)
+    gdf = gdf.to_crs(src_crs)
+
+    # TODO:
+    # - Add antimeridian handling
+
+    return gdf
 
 
 def create_antimeridian_buffer(
@@ -25,10 +61,13 @@ def create_antimeridian_buffer(
     antimeridian_line = gpd.GeoDataFrame(
         geometry=[LineString([[-180, -85], [-180, 85]])], crs=4326
     )
-
-    # Apply buffer in a projected CRS (e.g., Web Mercator) and convert back to lat/lon
-    buffer_zone = antimeridian_line.to_crs(3857).buffer(max_distance * buffer_factor)
-    buffer_zone = gpd.GeoDataFrame(geometry=buffer_zone, crs=3857).to_crs(4326)
+    buffer_zone = create_buffer_zone(
+        antimeridian_line,
+        planar_crs=3857,
+        buffer_factor=buffer_factor,
+        max_distance=max_distance,
+        use_utm=False,
+    )
 
     # Suppress FixWindingWarning from the antimeridian package
     with warnings.catch_warnings():

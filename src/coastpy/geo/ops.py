@@ -15,7 +15,7 @@ from shapely.geometry import (
     MultiLineString,
     MultiPoint,
     Point,
-    Polygon,
+    base,
 )
 from shapely.ops import snap, split
 
@@ -540,42 +540,67 @@ def crosses_antimeridian(df: gpd.GeoDataFrame) -> pd.Series:
     return coords.apply(crosses)
 
 
-def buffer_in_utm(
-    geom: Polygon,
-    src_crs: str | int,
-    buffer_distance: float | int,
-    utm_epsg: str | int | None = None,
-) -> Polygon:
+def _buffer_geometry(
+    geom: base.BaseGeometry, src_crs: str | int, buffer_dist: float
+) -> base.BaseGeometry:
     """
-    Apply a buffer to a geometry in its appropriate UTM projection.
+    Buffers a single geometry in its appropriate UTM projection and reprojects it back to the original CRS.
 
     Args:
-        geom (shapely.geometry.Polygon): Input geometry.
-        src_crs (str): The coordinate reference system of the input geometry in PROJ string format or EPSG code.
-        buffer_distance (float | int): Buffer distance in metres.
-        utm_epsg (str): The UTM zone of the input geometry in PROJ String or EPSG code.
-
+        geom (shapely.geometry.base.BaseGeometry): The geometry to buffer.
+        src_crs (Union[str, int]): The original CRS of the geometry.
+        buffer_dist (float): The buffer distance in meters.
 
     Returns:
-        shapely.geometry.Polygon: Buffered geometry.
-
-    Example:
-        from shapely.geometry import Point
-        buffered_geom = buffer_in_utm(Point(12.4924, 41.8902), src_crs="EPSG:4326", buffer_distance=-100)
+        base.BaseGeometry: The buffered geometry in the original CRS.
     """
-    if not utm_epsg:
-        utm_epsg = gpd.GeoSeries(geom, crs=src_crs).estimate_utm_crs()
+    # Estimate the UTM CRS based on the geometry's location
+    utm_crs = gpd.GeoSeries([geom], crs=src_crs).estimate_utm_crs()
 
-    # Set up the transformers for forward and reverse transformations
-    transformer_to_utm = Transformer.from_crs(src_crs, utm_epsg, always_xy=True)
-    transformer_from_utm = Transformer.from_crs(utm_epsg, src_crs, always_xy=True)
+    # Reproject the geometry to UTM, apply the buffer, and reproject back to the original CRS
+    geom_utm = gpd.GeoSeries([geom], crs=src_crs).to_crs(utm_crs).iloc[0]
+    buffered_utm = geom_utm.buffer(buffer_dist)
+    buffered_geom = gpd.GeoSeries([buffered_utm], crs=utm_crs).to_crs(src_crs).iloc[0]
 
-    # Perform the transformations
-    geom_utm = transform(transformer_to_utm.transform, geom)  # type: ignore
-    geom_buffered_utm = geom_utm.buffer(buffer_distance)
-    geom_buffered = transform(transformer_from_utm.transform, geom_buffered_utm)  # type: ignore
+    return buffered_geom
 
-    return geom_buffered
+
+def buffer_geometries_in_utm(
+    geo_data: gpd.GeoSeries | gpd.GeoDataFrame, buffer_dist: float
+) -> gpd.GeoSeries | gpd.GeoDataFrame:
+    """
+    Buffer all geometries in a GeoSeries or GeoDataFrame in their appropriate UTM projections and return
+    the buffered geometries in the original CRS.
+
+    Args:
+        geo_data (Union[gpd.GeoSeries, gpd.GeoDataFrame]): Input GeoSeries or GeoDataFrame containing geometries.
+        buffer_dist (float): Buffer distance in meters.
+
+    Returns:
+        Union[gpd.GeoSeries, gpd.GeoDataFrame]: Buffered geometries in the original CRS.
+    """
+    # Determine if the input is a GeoDataFrame or a GeoSeries
+    is_geodataframe = isinstance(geo_data, gpd.GeoDataFrame)
+
+    # Extract the geometry series from the GeoDataFrame, if necessary
+    geom_series = geo_data.geometry if is_geodataframe else geo_data
+
+    # Ensure the input data has a defined CRS
+    if geom_series.crs is None:
+        msg = "Input GeoSeries or GeoDataFrame must have a defined CRS."
+        raise ValueError(msg)
+
+    # Buffer each geometry using the UTM projection and return to original CRS
+    buffered_geoms = geom_series.apply(
+        lambda geom: _buffer_geometry(geom, geom_series.crs, buffer_dist)
+    )
+
+    # Return the modified GeoDataFrame or GeoSeries with the buffered geometries
+    if is_geodataframe:
+        geo_data = geo_data.assign(geometry=buffered_geoms)
+        return geo_data
+    else:
+        return buffered_geoms
 
 
 def add_line_length(
