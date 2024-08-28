@@ -1,0 +1,58 @@
+name: 312-release
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.12
+  - pip
+  - affine
+  - dask
+  - dask-geopandas
+  - duckdb
+  - fsspec
+  - geopandas
+  - geopy
+  - matplotlib
+  - mercantile
+  - numpy
+  - pandas
+  - poetry
+  - pyarrow
+  - pyproj
+  - pystac
+  - python-dotenv
+  - rasterio
+  - rioxarray
+  - shapely
+  - stac-geoparquet
+  - xarray
+
+  # Dev dependencies
+  - bandit
+  - black
+  - cattrs
+  - click
+  - codespell
+  - flake8
+  - isort
+  - mypy
+  - nbsphinx
+  - poetry
+  - pre-commit
+  - pydantic
+  - pytest
+  - pytest-cov
+  - recommonmark
+  - ruff
+  - setuptools
+  - sphinx
+  - sphinx-autodoc-typehints
+  - sphinx-rtd-theme
+  - sphinx_rtd_theme
+
+
+  - pip:
+      - antimeridian
+      - duckdb
+      - more-itertools

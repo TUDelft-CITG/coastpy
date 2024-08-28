@@ -237,7 +237,7 @@ if __name__ == "__main__":
     with fsspec.open(utm_grid_url, **storage_options) as f:
         utm_grid = gpd.read_parquet(f)
 
-    withr fsspec.open(countries_url, **storage_options) as f:
+    with fsspec.open(countries_url, **storage_options) as f:
         countries = gpd.read_parquet(f)
 
     utm_grid = utm_grid.dissolve("epsg").to_crs(prc_epsg).reset_index()
@@ -539,8 +539,8 @@ if __name__ == "__main__":
     # )
     # partitioner.process()
 
-    # logging.info("Done!")
-    # elapsed_time = time.time() - start_time
-    # logging.info(
-    #     f"Time (H:M:S): {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}"
-    # )
+    logging.info("Done!")
+    elapsed_time = time.time() - start_time
+    logging.info(
+        f"Time (H:M:S): {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}"
+    )
