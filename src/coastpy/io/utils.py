@@ -201,7 +201,6 @@ def name_data(
         msg = "At least one of include_bounds, include_random_hex or quadkey_prefix must be set."
         raise ValueError(msg)
 
-    suffix = ".parquet"  # Default suffix for non-spatial data
     parts = []
 
     # Generate bounds part
@@ -209,12 +208,21 @@ def name_data(
     if include_bounds and isinstance(
         data, gpd.GeoDataFrame | xarray.Dataset | xarray.DataArray
     ):
-        if isinstance(data, gpd.GeoDataFrame):
+        if isinstance(data, pd.DataFrame):
+            suffix = ".parquet"
+
+        elif isinstance(data, gpd.GeoDataFrame):
+            suffix = ".parquet"
             bounds = data.total_bounds
             crs = data.crs.to_string()
-        else:  # xarray
+
+        elif isinstance(data, xr.DataArray | xr.Dataset):  # xarray
+            suffix = ".tif"
             bounds = data.rio.bounds()
             crs = data.rio.crs.to_string()
+        else:
+            message = f"Unsupported data type: {type(data)}"
+            raise ValueError(message)
 
         def name_bounds(bounds, crs):
             bounds_geometry = box(*bounds)
