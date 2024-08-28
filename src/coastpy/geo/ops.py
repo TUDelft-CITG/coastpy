@@ -130,7 +130,7 @@ def extract_coordinates(pt: Point | tuple[float, float]) -> tuple[float, float]:
     elif (
         isinstance(pt, tuple)
         and len(pt) == 2
-        and all(isinstance(coord, (float, int)) for coord in pt)
+        and all(isinstance(coord, (float | int)) for coord in pt)
     ):
         return float(pt[0]), float(pt[1])
     else:
