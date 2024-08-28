@@ -201,24 +201,20 @@ def name_data(
 
     # Generate bounds part
     bounds_part = ""
+    if isinstance(data, pd.DataFrame | gpd.GeoDataFrame):
+        suffix = ".parquet"
+
     if include_bounds and isinstance(
         data, gpd.GeoDataFrame | xarray.Dataset | xarray.DataArray
     ):
-        if isinstance(data, pd.DataFrame):
-            suffix = ".parquet"
-
-        elif isinstance(data, gpd.GeoDataFrame):
-            suffix = ".parquet"
+        if isinstance(data, gpd.GeoDataFrame):
             bounds = data.total_bounds
             crs = data.crs.to_string()
 
-        elif isinstance(data, xr.DataArray | xr.Dataset):  # xarray
+        else:
             suffix = ".tif"
             bounds = data.rio.bounds()
             crs = data.rio.crs.to_string()
-        else:
-            message = f"Unsupported data type: {type(data)}"
-            raise ValueError(message)
 
         def name_bounds(bounds, crs):
             bounds_geometry = box(*bounds)
