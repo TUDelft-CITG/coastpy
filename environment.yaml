@@ -66,6 +66,7 @@ dependencies:
   - scikit-learn
   - scipy
   - xarray
+  - xvec
   - zarr
 
   # Plotting libraries
