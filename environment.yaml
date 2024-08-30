@@ -66,7 +66,6 @@ dependencies:
   - scikit-learn
   - scipy
   - xarray
-  - xvec
   - zarr
 
   # Plotting libraries
@@ -113,6 +112,7 @@ dependencies:
       - coastpy
       - duckdb
       - more-itertools
+      - xvec
     # - dea-tools
     # - stactools-geoparquet-items
     # - odc-ui
