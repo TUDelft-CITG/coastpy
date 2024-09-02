@@ -127,7 +127,7 @@ dependencies:
   - cartopy
   - cfgrib
   - contextily
-  - dask
+  - dask[complete]
   - dask-geopandas
   - dask-image
   - dask-jobqueue

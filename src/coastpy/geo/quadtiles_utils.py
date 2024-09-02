@@ -74,6 +74,8 @@ def quadkey_to_geojson(quadkey: str) -> dict:
     }
 
 
+# NOTE: consider if it would be better to optionally run this function when the attributes
+# are already present int he columns.
 def add_geo_columns(
     df: gpd.GeoDataFrame,
     geo_columns: list[Literal["bbox", "bounding_quadkey", "quadkey"]],
@@ -138,11 +140,10 @@ def add_geo_columns(
     # Add quadkey column
     if "quadkey" in geo_columns:
         if quadkey_zoom_level is None:
-            message = (
+            msg = (
                 "quadkey_zoom_level must be provided when 'quadkey' is in geo_columns."
             )
-            raise ValueError(message)
-
+            raise ValueError(msg)
         if "lon" in df.columns and "lat" in df.columns:
             points = gpd.GeoSeries(
                 [Point(xy) for xy in zip(df.lon, df.lat, strict=False)], crs="EPSG:4326"

@@ -1,4 +1,6 @@
+import copy
 import json
+import logging
 import pathlib
 import uuid
 import warnings
@@ -14,6 +16,8 @@ import xarray as xr
 from pyproj import Transformer
 from shapely.geometry import box
 from shapely.ops import transform
+
+logger = logging.getLogger(__name__)
 
 
 def is_local_file_path(path: str | pathlib.Path) -> bool:
@@ -255,22 +259,46 @@ def name_data(
 
 
 def read_items_extent(collection, columns=None, storage_options=None):
+    """
+    Reads the extent of items from a STAC collection and returns a GeoDataFrame with specified columns.
+
+    Args:
+        collection: A STAC collection object that contains assets.
+        columns: List of columns to return. Default is ["geometry", "assets", "href"].
+        storage_options: Storage options to pass to fsspec. Default is None.
+
+    Returns:
+        GeoDataFrame containing the specified columns.
+    """
     if storage_options is None:
         storage_options = {}
 
+    # Set default columns
     if columns is None:
-        columns = ["geometry", "assets"]
+        columns = ["geometry", "assets", "href"]
 
-    required_cols = ["geometry", "assets"]
+    columns_ = copy.deepcopy(columns)
 
-    for col in required_cols:
-        if col not in columns:
-            columns = [*columns, col]
+    # Ensure 'assets' is always in the columns
+    if "assets" not in columns:
+        columns.append("assets")
+        logger.debug("'assets' column added to the list of columns")
 
+    # Open the parquet file and read the specified columns
     href = collection.assets["geoparquet-stac-items"].href
     with fsspec.open(href, mode="rb", **storage_options) as f:
-        extents = gpd.read_parquet(f, columns=columns)
-        extents["href"] = extents.assets.map(lambda x: x["data"]["href"])
+        extents = gpd.read_parquet(f, columns=[c for c in columns if c != "href"])
+
+    # If 'href' is requested, extract it from the 'assets' column
+    if "href" in columns:
+        extents["href"] = extents["assets"].apply(lambda x: x["data"]["href"])
+        logger.debug("'href' column extracted from 'assets'")
+
+    # Drop 'assets' if it was not originally requested
+    if "assets" not in columns_:
+        extents = extents.drop(columns=["assets"])
+        logger.debug("'assets' column dropped from the GeoDataFrame")
+
     return extents
 
 
@@ -376,3 +404,81 @@ def read_log_entries(
     df = df.sort_values(by="time", ascending=True)
 
     return df
+
+
+def rm_from_storage(
+    pattern: str,
+    storage_options: dict[str, str] | None = None,
+    confirm: bool = True,
+    verbose: bool = True,
+) -> None:
+    """
+    Deletes all blobs/files in the specified storage location that match the given prefix.
+
+    Args:
+        pattern (str): The pattern or path pattern (including wildcards) for the blobs/files to delete.
+        storage_options (Dict[str, str], optional): A dictionary containing storage connection details.
+        confirm (bool): Whether to prompt for confirmation before deletion.
+        verbose (bool): Whether to display detailed log messages.
+
+    Returns:
+        None
+    """
+    if storage_options is None:
+        storage_options = {}
+
+    # Create a local logger
+    logger = logging.getLogger(__name__)
+    if verbose:
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+
+    if storage_options is None:
+        storage_options = {}
+
+    # Get filesystem, token, and resolved paths
+    fs, _, paths = fsspec.get_fs_token_paths(pattern, storage_options=storage_options)
+
+    if paths:
+        if verbose:
+            logger.info(
+                f"Warning: You are about to delete the following {len(paths)} blobs/files matching '{pattern}'."
+            )
+            for path in paths:
+                logger.info(path)
+
+        if confirm:
+            confirmation = input(
+                f"Type 'yes' to confirm deletion of {len(paths)} blobs/files matching '{pattern}': "
+            )
+        else:
+            confirmation = "yes"
+
+        if confirmation.lower() == "yes":
+            for path in paths:
+                try:
+                    if verbose:
+                        logger.info(f"Deleting blob/file: {path}")
+                    fs.rm(path)
+                    if verbose:
+                        logger.info(f"Blob/file {path} deleted successfully.")
+                except Exception as e:
+                    if verbose:
+                        logger.error(f"Failed to delete blob/file: {e}")
+            if verbose:
+                logger.info("All specified blobs/files have been deleted.")
+        else:
+            if verbose:
+                logger.info("Blob/file deletion cancelled.")
+    else:
+        if verbose:
+            logger.info(f"No blobs/files found matching '{pattern}'.")
+
+    # Remove the handler after use
+    if verbose:
+        logger.removeHandler(handler)
+        handler.close()

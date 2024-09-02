@@ -26,9 +26,13 @@ sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
 storage_account_name = "coclico"
 storage_options = {"account_name": storage_account_name, "credential": sas_token}
 
+# NOTE:
+TEST_RELEASE = True
+
 # Container and URI configuration
 CONTAINER_NAME = "gcts"
-PREFIX = "release/2024-03-18"
+RELEASE_DATE = "2024-08-02"
+PREFIX = f"release/{RELEASE_DATE}"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
 PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 LICENSE = "CC-BY-4.0"
@@ -36,7 +40,6 @@ LICENSE = "CC-BY-4.0"
 # Collection information
 COLLECTION_ID = "gcts"
 COLLECTION_TITLE = "Global Coastal Transect System (GCTS)"
-DATE_TRANSECTS_CREATED = "2024-03-18"
 
 # Transect and zoom configuration
 TRANSECT_LENGTH = 2000
@@ -56,11 +59,14 @@ ASSET_TITLE = "GCTS"
 ASSET_DESCRIPTION = f"Parquet dataset with coastal transects ({TRANSECT_LENGTH} m) at 100 m alongshore resolution for this region."
 
 # GeoParquet STAC items
-GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
+if TEST_RELEASE:
+    GEOPARQUET_STAC_ITEMS_HREF = f"az://items-test/{COLLECTION_ID}.parquet"
+else:
+    GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 
 COLUMN_DESCRIPTIONS = [
     {
-        "name": "tr_name",
+        "name": "transect_id",
         "type": "string",
         "description": "A unique identifier for each transect, constructed from three key components: the 'coastline_id', 'segment_id', and 'interpolated_distance'. The 'coastline_id' corresponds to the FID in OpenStreetMap (OSM) and is prefixed with 'cl'. The 'segment_id' indicates the segment of the OSM coastline split by a UTM grid, prefixed with 's'. The 'interpolated_distance' represents the distance from the starting point of the coastline to the transect, interpolated along the segment, and is prefixed with 'tr'. The complete structure is 'cl[coastline_id]s[segment_id]tr[interpolated_distance]', exemplified by 'cl32946s04tr08168547'. This composition ensures each transect name is a distinct and informative representation of its geographical and spatial attributes.",
     },
@@ -85,17 +91,17 @@ COLUMN_DESCRIPTIONS = [
         "description": "Well-Known Binary (WKB) representation of the transect as a linestring geometry.",
     },
     {
-        "name": "coastline_is_closed",
+        "name": "osm_coastline_is_closed",
         "type": "bool",
         "description": "Indicates whether the source OpenStreetMap (OSM) coastline, from which the transects were derived, forms a closed loop. A value of 'true' suggests that the coastline represents an enclosed area, such as an island.",
     },
     {
-        "name": "coastline_length",
+        "name": "osm_coastline_length",
         "type": "int32",
         "description": "Represents the total length of the source OpenStreetMap (OSM) coastline, that is summed across various UTM regions. It reflects the aggregate length of the original coastline from which the transects are derived.",
     },
     {
-        "name": "utm_crs",
+        "name": "utm_epsg",
         "type": "int32",
         "description": "EPSG code representing the UTM Coordinate Reference System for the transect.",
     },
@@ -110,24 +116,24 @@ COLUMN_DESCRIPTIONS = [
         "description": "QuadKey corresponding to the transect origin location at zoom 12, following the Bing Maps Tile System for spatial indexing.",
     },
     {
-        "name": "isoCountryCodeAlpha2",
+        "name": "continent",
         "type": "string",
-        "description": "ISO 3166-1 alpha-2 country code for the country in which the transect is located.",
+        "description": "Name of the continent in which the transect is located.",
     },
     {
-        "name": "admin_level_1_name",
+        "name": "country",
         "type": "string",
-        "description": "Name of the first-level administrative division (e.g., country) in which the transect is located.",
+        "description": "ISO alpha-2 country code for the country in which the transect is located. The country data are extracted from Overture Maps (divisions).",
     },
     {
-        "name": "isoSubCountryCode",
+        "name": "common_country_name",
         "type": "string",
-        "description": "ISO code for the sub-country or second-level administrative division in which the transect is located.",
+        "description": "Common country name (EN) in which the transect is located. The country data are extracted from Overture Maps (divisions).",
     },
     {
-        "name": "admin_level_2_name",
+        "name": "common_region_name",
         "type": "string",
-        "description": "Name of the second-level administrative division (e.g., state or province) in which the transect is located.",
+        "description": "Common region name (EN) in which the transect is located. The regions are extracted from Overture Maps (divisions).",
     },
 ]
 
@@ -192,7 +198,7 @@ def create_collection(
         ),
     ]
 
-    start_datetime = datetime.datetime.strptime(DATE_TRANSECTS_CREATED, "%Y-%m-%d")
+    start_datetime = datetime.datetime.strptime(RELEASE_DATE, "%Y-%m-%d")
 
     extent = pystac.Extent(
         pystac.SpatialExtent([[-180.0, 90.0, 180.0, -90.0]]),
@@ -276,7 +282,7 @@ def create_collection(
     collection.stac_extensions.append(stac_table.SCHEMA_URI)
 
     VersionExtension.add_to(collection)
-    collection.extra_fields["version"] = "1.0.0"
+    collection.extra_fields["version"] = RELEASE_DATE
 
     return collection
 
@@ -304,7 +310,7 @@ def create_item(
         "description": ASSET_DESCRIPTION,
     }
 
-    dt = datetime.datetime.strptime(DATE_TRANSECTS_CREATED, "%Y-%m-%d")
+    dt = datetime.datetime.strptime(RELEASE_DATE, "%Y-%m-%d")
     # shape = shapely.box(*bbox)
     # geometry = shapely.geometry.mapping(shape)
     template = pystac.Item(

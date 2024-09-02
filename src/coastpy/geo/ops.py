@@ -15,11 +15,11 @@ from shapely.geometry import (
     MultiLineString,
     MultiPoint,
     Point,
-    Polygon,
+    base,
 )
 from shapely.ops import snap, split
 
-from coastpy.utils.dask_utils import silence_shapely_warnings
+from coastpy.utils.dask import silence_shapely_warnings
 
 
 def shift_point(
@@ -428,26 +428,24 @@ def generate_offset_line(line: LineString, offset: float) -> LineString:
 def determine_rotation_angle(
     pt1: Point | tuple[float, float],
     pt2: Point | tuple[float, float],
-    target_axis: Literal["closest", "vertical", "horizontal"] = "closest",
-) -> float:
+    target_axis: Literal[
+        "closest", "vertical", "horizontal", "horizontal-right-aligned"
+    ] = "closest",
+) -> float | None:
     """
-    Determines the correct rotation angle to align the orientation of a cross-shore transect
-    either vertically, horizontally or to the closest.
+    Determines the correct rotation angle to align a transect with a specified axis.
 
     Args:
-        pt1: The starting point of the transect. Can be either a Point object or a tuple of floats.
-        pt2: The ending point of the transect. Can be either a Point object or a tuple of floats.
-        target_axis: The target axis to align the transect to. Can be either "closest", "vertical" or "horizontal".
+        pt1 (Union[Point, Tuple[float, float]]): The starting point of the transect.
+        pt2 (Union[Point, Tuple[float, float]]): The ending point of the transect.
+        target_axis (Literal["closest", "vertical", "horizontal", "horizontal-right-aligned"], optional):
+            The target axis to align the transect. Defaults to "closest".
 
     Returns:
         float: The rotation angle in degrees. Positive values represent counterclockwise rotation.
 
-    Example:
-    >>> determine_rotation_angle((0,0), (1,1), target_axis="horizontal")
-    -45.0
-
     Raises:
-    - ValueError: If the computed angle is not within the expected range [-180, 180].
+        ValueError: If an invalid target axis is provided or if the bearing is out of the expected range.
     """
 
     x1, y1 = extract_coordinates(pt1)
@@ -458,7 +456,7 @@ def determine_rotation_angle(
     logging.info(f"Angle between points: {angle} degrees.")
     logging.info(f"Bearing between points: {bearing} degrees.")
 
-    if x1 == x2 or y1 == y2:  # combines the two conditions as the result is the same
+    if x1 == x2 or y1 == y2:
         return 0
 
     if target_axis == "closest":
@@ -475,9 +473,17 @@ def determine_rotation_angle(
 
     elif target_axis == "horizontal":
         angle_rotations = {
+            (0, 90): lambda b: -(90 - b),
+            (90, 180): lambda b: b - 90,
+            (180, 270): lambda b: -(270 - b),
+            (270, 360): lambda b: b - 270,
+        }
+
+    elif target_axis == "horizontal-right-aligned":
+        angle_rotations = {
             (0, 90): lambda b: 90 + b,
             (90, 180): lambda b: -(270 - b),
-            (180, 270): lambda b: b - 270,
+            (180, 270): lambda b: -(270 - b),
             (270, 360): lambda b: b - 270,
         }
 
@@ -490,10 +496,7 @@ def determine_rotation_angle(
         }
 
     else:
-        msg = (
-            f"Invalid target_axis: {target_axis}. Must be one of 'closest', 'vertical'"
-            " or 'horizontal'."
-        )
+        msg = f"Invalid target_axis: {target_axis}. Must be one of 'closest', 'vertical', 'horizontal', or 'horizontal-right-aligned'."
         raise ValueError(msg)
 
     for (lower_bound, upper_bound), rotation_func in angle_rotations.items():
@@ -504,73 +507,103 @@ def determine_rotation_angle(
     raise ValueError(msg)
 
 
-def crosses_antimeridian(df: gpd.GeoDataFrame) -> gpd.GeoSeries:
+def crosses_antimeridian(df: gpd.GeoDataFrame) -> pd.Series:
     """
-    Determines whether linestrings in a GeoDataFrame cross the International Date Line.
+    Determines whether LineStrings in a GeoDataFrame cross the International Date Line.
 
     Args:
         df (gpd.GeoDataFrame): Input GeoDataFrame with LineString geometries.
 
     Returns:
-        gpd.GeoSeries: Series indicating whether each LineString crosses the antimeridian.
+        pd.Series: Series indicating whether each LineString crosses the antimeridian.
 
     Example:
         >>> df = gpd.read_file('path_to_file.geojson')
-        >>> df['crosses'] = crosses_antimeridian(df)
-        >>> print(df['crosses'])
-
-    Note:
-        Assumes the input GeoDataFrame uses a coordinate system in meters.
-        If using a degree-based system like EPSG:4326, the results may not be accurate.
+        >>> df['crosses_antimeridian'] = crosses_antimeridian(df)
+        >>> print(df['crosses_antimeridian'])
     """
-    TEMPLATE = pd.Series([], dtype="bool")
+    # Ensure the CRS is in degrees (longitude, latitude)
+    if df.crs.to_epsg() != 4326:
+        df = df.to_crs(4326)
 
-    if df.crs.to_epsg() != 3857:
-        df = df.to_crs(3857)
+    # Extract coordinates from the geometry
+    coords = df.geometry.apply(lambda geom: np.array(geom.coords.xy).T)
 
-    if df.empty:
-        return TEMPLATE
+    # Vectorized check for antimeridian crossing
+    def crosses(coords: np.ndarray) -> bool:
+        # Calculate differences between consecutive longitudes
+        longitudes = coords[:, 0]
+        lon_diff = np.diff(longitudes)
 
-    coords = df.geometry.astype(object).apply(lambda x: (x.coords[0], x.coords[-1]))
-    return coords.apply(lambda x: x[0][0] * x[1][0] < 0)
+        # Check if the difference is greater than 180 degrees (indicating a crossing)
+        crosses = np.abs(lon_diff) > 180
+        return np.any(crosses)
+
+    # Apply the vectorized check across all geometries
+    return coords.apply(crosses)
 
 
-def buffer_in_utm(
-    geom: Polygon,
-    src_crs: str | int,
-    buffer_distance: float | int,
-    utm_crs: str | int | None = None,
-) -> Polygon:
+def _buffer_geometry(
+    geom: base.BaseGeometry, src_crs: str | int, buffer_dist: float
+) -> base.BaseGeometry:
     """
-    Apply a buffer to a geometry in its appropriate UTM projection.
+    Buffers a single geometry in its appropriate UTM projection and reprojects it back to the original CRS.
 
     Args:
-        geom (shapely.geometry.Polygon): Input geometry.
-        src_crs (str): The coordinate reference system of the input geometry in PROJ string format or EPSG code.
-        buffer_distance (float | int): Buffer distance in metres.
-        utm_crs (str): The UTM zone of the input geometry in PROJ String or EPSG code.
-
+        geom (shapely.geometry.base.BaseGeometry): The geometry to buffer.
+        src_crs (Union[str, int]): The original CRS of the geometry.
+        buffer_dist (float): The buffer distance in meters.
 
     Returns:
-        shapely.geometry.Polygon: Buffered geometry.
-
-    Example:
-        from shapely.geometry import Point
-        buffered_geom = buffer_in_utm(Point(12.4924, 41.8902), src_crs="EPSG:4326", buffer_distance=-100)
+        base.BaseGeometry: The buffered geometry in the original CRS.
     """
-    if not utm_crs:
-        utm_crs = gpd.GeoSeries(geom, crs=src_crs).estimate_utm_crs()
+    # Estimate the UTM CRS based on the geometry's location
+    utm_crs = gpd.GeoSeries([geom], crs=src_crs).estimate_utm_crs()
 
-    # Set up the transformers for forward and reverse transformations
-    transformer_to_utm = Transformer.from_crs(src_crs, utm_crs, always_xy=True)
-    transformer_from_utm = Transformer.from_crs(utm_crs, src_crs, always_xy=True)
+    # Reproject the geometry to UTM, apply the buffer, and reproject back to the original CRS
+    geom_utm = gpd.GeoSeries([geom], crs=src_crs).to_crs(utm_crs).iloc[0]
+    buffered_utm = geom_utm.buffer(buffer_dist)
+    buffered_geom = gpd.GeoSeries([buffered_utm], crs=utm_crs).to_crs(src_crs).iloc[0]
 
-    # Perform the transformations
-    geom_utm = transform(transformer_to_utm.transform, geom)  # type: ignore
-    geom_buffered_utm = geom_utm.buffer(buffer_distance)
-    geom_buffered = transform(transformer_from_utm.transform, geom_buffered_utm)  # type: ignore
+    return buffered_geom
 
-    return geom_buffered
+
+def buffer_geometries_in_utm(
+    geo_data: gpd.GeoSeries | gpd.GeoDataFrame, buffer_dist: float
+) -> gpd.GeoSeries | gpd.GeoDataFrame:
+    """
+    Buffer all geometries in a GeoSeries or GeoDataFrame in their appropriate UTM projections and return
+    the buffered geometries in the original CRS.
+
+    Args:
+        geo_data (Union[gpd.GeoSeries, gpd.GeoDataFrame]): Input GeoSeries or GeoDataFrame containing geometries.
+        buffer_dist (float): Buffer distance in meters.
+
+    Returns:
+        Union[gpd.GeoSeries, gpd.GeoDataFrame]: Buffered geometries in the original CRS.
+    """
+    # Determine if the input is a GeoDataFrame or a GeoSeries
+    is_geodataframe = isinstance(geo_data, gpd.GeoDataFrame)
+
+    # Extract the geometry series from the GeoDataFrame, if necessary
+    geom_series = geo_data.geometry if is_geodataframe else geo_data
+
+    # Ensure the input data has a defined CRS
+    if geom_series.crs is None:
+        msg = "Input GeoSeries or GeoDataFrame must have a defined CRS."
+        raise ValueError(msg)
+
+    # Buffer each geometry using the UTM projection and return to original CRS
+    buffered_geoms = geom_series.apply(
+        lambda geom: _buffer_geometry(geom, geom_series.crs, buffer_dist)
+    )
+
+    # Return the modified GeoDataFrame or GeoSeries with the buffered geometries
+    if is_geodataframe:
+        geo_data = geo_data.assign(geometry=buffered_geoms)
+        return geo_data
+    else:
+        return buffered_geoms
 
 
 def add_line_length(

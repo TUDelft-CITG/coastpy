@@ -22,11 +22,11 @@ from coastpy.geo.ops import (
 class Transect:
     """Dataclass for transects"""
 
-    tr_name: str
+    transect_id: str
     tr_origin: Point
     tr_length: int
     tr_angle: float
-    utm_crs: int | str
+    utm_epsg: int | str
     dst_crs: int | str
 
     _geometry: LineString = field(init=False, repr=False)
@@ -37,7 +37,7 @@ class Transect:
     @property
     # @lru_cache(maxsize=1)  # does not work when using dask distributed
     def geometry(self):
-        utm_crs_epsg = pyproj.CRS.from_user_input(self.utm_crs).to_epsg()
+        utm_crs_epsg = pyproj.CRS.from_user_input(self.utm_epsg).to_epsg()
         dst_crs_epsg = pyproj.CRS.from_user_input(self.dst_crs).to_epsg()
 
         pt1 = calculate_point(self.tr_origin, self.tr_angle + 90, 0.5 * self.tr_length)
@@ -61,23 +61,23 @@ class Transect:
 
     def to_dict(self):
         return {
-            "tr_name": self.tr_name,
+            "transect_id": self.transect_id,
             "geometry": self.geometry,
             "lon": self._lon,
             "lat": self._lat,
             "tr_origin": wkt.dumps(self._tr_origin),
             "bearing": self._bearing,
-            "utm_crs": self.utm_crs,
+            "utm_epsg": self.utm_epsg,
             "src_crs": self.dst_crs,
         }
 
     def __hash__(self):
         return hash(
             (
-                self.tr_name,
+                self.transect_id,
                 self.tr_origin,
                 self.tr_length,
-                self.utm_crs,
+                self.utm_epsg,
                 self.dst_crs,
             )
         )
@@ -174,9 +174,9 @@ def make_transect_origins(
 
 def make_transects(
     coastline: gpd.GeoSeries,
-    coastline_name: str,
+    osm_coastline_id: str,
     src_crs: str,
-    utm_crs: str,
+    utm_epsg: str,
     dst_crs: str,
     spacing: float,
     transect_length: int = 2000,
@@ -187,9 +187,9 @@ def make_transects(
 
     Args:
         coastline: GeoSeries representing the coastline.
-        coastline_name: Name of the coastline.
+        osm_coastline_id: Name of the coastline.
         src_crs: Source CRS of the coastline.
-        utm_crs: UTM CRS for local coordinate transformation.
+        utm_epsg: UTM CRS for local coordinate transformation.
         dst_crs: Destination CRS for the transects.
         spacing: Distance between transects.
         idx: Index of the function call.
@@ -200,7 +200,7 @@ def make_transects(
         GeoDataFrame containing transects with their attributes and geometry.
     """
     # Convert coastline to local UTM CRS
-    tf = Transformer.from_crs(src_crs, utm_crs, always_xy=True)
+    tf = Transformer.from_crs(src_crs, utm_epsg, always_xy=True)
     coastline = transform(tf.transform, coastline)
 
     origins = make_transect_origins(coastline, spacing)
@@ -213,14 +213,14 @@ def make_transects(
         pt2 = coastline.interpolate(origin + smooth_distance)
 
         angle = get_angle(pt1, pt2)
-        tr_id = f"cl{int(coastline_name)}tr{int(origin)}"
+        tr_id = f"cl{int(osm_coastline_id)}tr{int(origin)}"
 
         tr = Transect(
-            tr_name=tr_id,
+            transect_id=tr_id,
             tr_angle=angle,
             tr_origin=tr_origin,
             tr_length=transect_length,
-            utm_crs=utm_crs,
+            utm_epsg=utm_epsg,
             dst_crs=dst_crs,
         )
 
@@ -231,25 +231,25 @@ def make_transects(
 
     # when pyarrow is more stable, use pyarrow dtypes instead
     # column_datatypes = {
-    #     "tr_name": "string[pyarrow]",
+    #     "transect_id": "string[pyarrow]",
     #     "lon": "float64[pyarrow]",
     #     "lat": "float64[pyarrow]",
     #     "tr_origin": "string[pyarrow]",
     #     "bearing": "float64[pyarrow]",
-    #     "utm_crs": "int32[pyarrow]",
+    #     "utm_epsg": "int32[pyarrow]",
     #     "src_crs": "int32[pyarrow]",
-    #     "coastline_name": "int32[pyarrow]",
+    #     "osm_coastline_id": "int32[pyarrow]",
     # }
 
     column_datatypes = {
-        "tr_name": "string",
+        "transect_id": "string",
         "lon": "float64",
         "lat": "float64",
         "tr_origin": "string",
         "bearing": "float64",
-        "utm_crs": "int32",
+        "utm_epsg": "int32",
         "src_crs": "int32",
-        "coastline_name": "int32",
+        "osm_coastline_id": "int32",
     }
 
     # TODO: instead of dropping transects that cross date line, create MultiLinestrings?
@@ -257,7 +257,7 @@ def make_transects(
         gpd.GeoDataFrame(transects, geometry="geometry", crs=dst_crs)
         .reset_index(drop=True)
         # .pipe(drop_transects_crossing_antimeridian)
-        .assign(coastline_name=coastline_name)
+        .assign(osm_coastline_id=osm_coastline_id)
         .astype(column_datatypes)
     )
 
@@ -266,11 +266,11 @@ def generate_transects_from_coastline(
     coastline: LineString,
     transect_length: float,
     spacing: float | int,
-    coastline_name: int,
-    coastline_is_closed: bool,
-    coastline_length: int,
+    osm_coastline_id: int,
+    osm_coastline_is_closed: bool,
+    osm_coastline_length: int,
     src_crs: str | int,
-    utm_crs: str | int,
+    utm_epsg: str | int,
     dst_crs: str | int,
     smooth_distance: float = 1e-3,
 ) -> gpd.GeoDataFrame:
@@ -280,11 +280,11 @@ def generate_transects_from_coastline(
     Args:
         coastline (LineString): The coastline geometry.
         transect_length (float): Length of the transects.
-        coastline_name (int): ID for the coastline.
-        coastline_is_closed (bool): If the source OSM coastline is closed.
-        coastline_length (int): length of the coastline.
+        osm_coastline_id (int): ID for the coastline.
+        osm_coastline_is_closed (bool): If the source OSM coastline is closed.
+        osm_coastline_length (int): length of the coastline.
         src_crs (str): Source CRS of the coastline geometry.
-        utm_crs (str): UTM CRS for local coordinate transformation.
+        utm_epsg (str): UTM CRS for local coordinate transformation.
         dst_crs (str): Target CRS for the transects.
         smooth_distance (float, optional): Smoothing distance. Defaults to 1e-3.
 
@@ -294,15 +294,15 @@ def generate_transects_from_coastline(
     # Define a template empty geodataframe with specified datatypes
     META = gpd.GeoDataFrame(
         {
-            "tr_name": pd.Series([], dtype="string"),
+            "transect_id": pd.Series([], dtype="string"),
             "lon": pd.Series([], dtype="float32"),
             "lat": pd.Series([], dtype="float32"),
             "bearing": pd.Series([], dtype="float32"),
-            "utm_crs": pd.Series([], dtype="int32"),
+            "utm_epsg": pd.Series([], dtype="int32"),
             # NOTE: leave here because before we used to store the coastline name
-            # "coastline_name": pd.Series([], dtype="string"),
-            "coastline_is_closed": pd.Series([], dtype="bool"),
-            "coastline_length": pd.Series([], dtype="int32"),
+            # "osm_coastline_id": pd.Series([], dtype="string"),
+            "osm_coastline_is_closed": pd.Series([], dtype="bool"),
+            "osm_coastline_length": pd.Series([], dtype="int32"),
             "geometry": gpd.GeoSeries([], dtype="geometry"),
         },
         crs=dst_crs,
@@ -314,7 +314,7 @@ def generate_transects_from_coastline(
     dtypes = META.dtypes.to_dict()
     column_order = META.columns.to_list()
 
-    tf = Transformer.from_crs(src_crs, utm_crs, always_xy=True)
+    tf = Transformer.from_crs(src_crs, utm_epsg, always_xy=True)
     coastline = transform(tf.transform, coastline)
 
     origins = make_transect_origins(coastline, spacing)
@@ -337,32 +337,32 @@ def generate_transects_from_coastline(
         get_planar_bearing(pt1, pt2) for pt1, pt2 in zip(pt1s, pt2s, strict=True)
     ]
 
-    tf_4326 = Transformer.from_crs(utm_crs, 4326, always_xy=True)
+    tf_4326 = Transformer.from_crs(utm_epsg, 4326, always_xy=True)
     tr_origins_4326 = [
         transform(tf_4326.transform, tr_origin) for tr_origin in tr_origins
     ]
 
     lons, lats = zip(*[extract_coordinates(p) for p in tr_origins_4326], strict=True)
 
-    tr_names = [f"{coastline_name}tr{int(o)}" for o in origins]
+    transect_ids = [f"{osm_coastline_id}tr{int(o)}" for o in origins]
 
     return (
         gpd.GeoDataFrame(
             {
-                "tr_name": tr_names,
+                "transect_id": transect_ids,
                 "lon": lons,
                 "lat": lats,
                 "bearing": bearings,
                 "geometry": transects,
             },
-            crs=utm_crs,
+            crs=utm_epsg,
         )
         .to_crs(dst_crs)
         # NOTE: leave here because before we used to store the coastline name
-        # .assign(coastline_name=coastline_name)
-        .assign(utm_crs=utm_crs)
-        .assign(coastline_is_closed=coastline_is_closed)
-        .assign(coastline_length=coastline_length)
+        # .assign(osm_coastline_id=osm_coastline_id)
+        .assign(utm_epsg=utm_epsg)
+        .assign(osm_coastline_is_closed=osm_coastline_is_closed)
+        .assign(osm_coastline_length=osm_coastline_length)
         .loc[:, column_order]
         .astype(dtypes)
     )
