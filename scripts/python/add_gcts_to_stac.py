@@ -398,9 +398,13 @@ if __name__ == "__main__":
         ),
     )
 
-    if catalog.get_child(collection.id):
-        catalog.remove_child(collection.id)
-        print(f"Removed child: {collection.id}.")
+    # TODO: there should be a cleaner method to remove the previous stac catalog and its items
+    try:
+        if catalog.get_child(collection.id):
+            catalog.remove_child(collection.id)
+            print(f"Removed child: {collection.id}.")
+    except Exception:
+        pass
 
     catalog.add_child(collection)
 
