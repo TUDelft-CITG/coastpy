@@ -428,26 +428,24 @@ def generate_offset_line(line: LineString, offset: float) -> LineString:
 def determine_rotation_angle(
     pt1: Point | tuple[float, float],
     pt2: Point | tuple[float, float],
-    target_axis: Literal["closest", "vertical", "horizontal"] = "closest",
-) -> float:
+    target_axis: Literal[
+        "closest", "vertical", "horizontal", "horizontal-right-aligned"
+    ] = "closest",
+) -> float | None:
     """
-    Determines the correct rotation angle to align the orientation of a cross-shore transect
-    either vertically, horizontally or to the closest.
+    Determines the correct rotation angle to align a transect with a specified axis.
 
     Args:
-        pt1: The starting point of the transect. Can be either a Point object or a tuple of floats.
-        pt2: The ending point of the transect. Can be either a Point object or a tuple of floats.
-        target_axis: The target axis to align the transect to. Can be either "closest", "vertical" or "horizontal".
+        pt1 (Union[Point, Tuple[float, float]]): The starting point of the transect.
+        pt2 (Union[Point, Tuple[float, float]]): The ending point of the transect.
+        target_axis (Literal["closest", "vertical", "horizontal", "horizontal-right-aligned"], optional):
+            The target axis to align the transect. Defaults to "closest".
 
     Returns:
         float: The rotation angle in degrees. Positive values represent counterclockwise rotation.
 
-    Example:
-    >>> determine_rotation_angle((0,0), (1,1), target_axis="horizontal")
-    -45.0
-
     Raises:
-    - ValueError: If the computed angle is not within the expected range [-180, 180].
+        ValueError: If an invalid target axis is provided or if the bearing is out of the expected range.
     """
 
     x1, y1 = extract_coordinates(pt1)
@@ -458,7 +456,7 @@ def determine_rotation_angle(
     logging.info(f"Angle between points: {angle} degrees.")
     logging.info(f"Bearing between points: {bearing} degrees.")
 
-    if x1 == x2 or y1 == y2:  # combines the two conditions as the result is the same
+    if x1 == x2 or y1 == y2:
         return 0
 
     if target_axis == "closest":
@@ -475,9 +473,17 @@ def determine_rotation_angle(
 
     elif target_axis == "horizontal":
         angle_rotations = {
+            (0, 90): lambda b: -(90 - b),
+            (90, 180): lambda b: b - 90,
+            (180, 270): lambda b: -(270 - b),
+            (270, 360): lambda b: b - 270,
+        }
+
+    elif target_axis == "horizontal-right-aligned":
+        angle_rotations = {
             (0, 90): lambda b: 90 + b,
             (90, 180): lambda b: -(270 - b),
-            (180, 270): lambda b: b - 270,
+            (180, 270): lambda b: -(270 - b),
             (270, 360): lambda b: b - 270,
         }
 
@@ -490,10 +496,7 @@ def determine_rotation_angle(
         }
 
     else:
-        msg = (
-            f"Invalid target_axis: {target_axis}. Must be one of 'closest', 'vertical'"
-            " or 'horizontal'."
-        )
+        msg = f"Invalid target_axis: {target_axis}. Must be one of 'closest', 'vertical', 'horizontal', or 'horizontal-right-aligned'."
         raise ValueError(msg)
 
     for (lower_bound, upper_bound), rotation_func in angle_rotations.items():

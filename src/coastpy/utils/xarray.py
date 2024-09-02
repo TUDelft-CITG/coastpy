@@ -1,8 +1,10 @@
-from typing import Literal
+import warnings
 
 import numpy as np
+import rasterio
 import xarray as xr
 from affine import Affine
+from rasterio.enums import Resampling
 from shapely import Polygon
 
 
@@ -115,35 +117,52 @@ def raster_center(ds: xr.Dataset) -> tuple[float, float]:
 
 
 def rotate_raster(
-    ds: xr.Dataset, rotation_angle: float, pivot: tuple[float, float] | None = None
+    ds: xr.Dataset,
+    rotation_angle: float,
+    resampling: Resampling,
+    pivot: tuple[float, float] | None = None,
 ) -> xr.Dataset:
     """
     Rotate a raster dataset around a pivot point or its center.
 
     Args:
-        ds (xr.Dataset): The raster dataset to be rotated.
+        ds (xr.Dataset): Raster dataset to be rotated.
         rotation_angle (float): Angle to rotate the raster, in degrees. Positive values represent counterclockwise rotation.
-        pivot (Tuple[float, float], optional): The (x, y) coordinates of the pivot point. If not provided, raster's center is used.
+        resampling (Resampling): Resampling method to use during reprojection.
+        pivot (Optional[Tuple[float, float]]): (x, y) coordinates of the pivot point. If not provided, the raster's center is used.
 
     Returns:
-        xr.Dataset: The rotated raster dataset.
+        xr.Dataset: Rotated raster dataset.
 
-    Example:
-        >>> ds = xr.Dataset(...)
-        >>> rotated_ds = rotate_raster(ds, 45)
+    Raises:
+        UserWarning: If the absolute rotation angle is 45 degrees, which may result in a raster that is not of the expected shape, with a clipped view because the axis should also be swapped.
     """
+    if abs(rotation_angle) > 45:
+        msg = "The absolute rotation angle larger than 45 degrees, which may result in a raster that clipped. Consider adjusting the rotation in the other direction."
+        warnings.warn(
+            msg,
+            UserWarning,
+            stacklevel=2,
+        )
+
     src_transform = ds.rio.transform()
     rotation = Affine.rotation(rotation_angle, pivot=pivot)
+
+    # TODO: Compute the scaling factors for the new grid
+    # dst_transform = src_transform * Affine.scale(x_scale, y_scale)
+
     dst_transform = src_transform * rotation
 
     # Rescale the y-axis to correct the inversion
     rescale_y = Affine(1, 0, 0, 0, -1, ds.rio.height)
     dst_transform = dst_transform * rescale_y
 
-    ds = ds.rio.reproject(dst_crs=ds.rio.crs, transform=dst_transform)
+    ds = ds.rio.reproject(
+        dst_crs=ds.rio.crs, transform=dst_transform, resampling=resampling
+    )
     ds = ds.rio.write_transform(dst_transform)
     ds = ds.assign_coords(
-        {"y": ("y", range(ds.dims["y"])), "x": ("x", range(ds.dims["x"]))}
+        {"y": ("y", range(ds.sizes["y"])), "x": ("x", range(ds.sizes["x"]))}
     )
     return ds
 
@@ -152,20 +171,7 @@ def interpolate_raster(
     ds: xr.Dataset,
     y_shape: int,
     x_shape: int,
-    method: Literal[
-        "linear",
-        "nearest",
-        "zero",
-        "slinear",
-        "quadratic",
-        "cubic",
-        "polynomial",
-        "barycentric",
-        "krog",
-        "pchip",
-        "spline",
-        "akima",
-    ],
+    resampling: rasterio.enums.Resampling = rasterio.enums.Resampling.nearest,
 ) -> xr.Dataset:
     """
     Interpolates a given raster (xarray Dataset) to a specified resolution using the provided method.
@@ -174,8 +180,7 @@ def interpolate_raster(
         ds (xr.Dataset): The input raster to interpolate.
         y_shape (int): Desired number of grid points along y dimension.
         x_shape (int): Desired number of grid points along x dimension.
-        method (str, optional): The interpolation method to use. Defaults to "linear".
-                                Other methods like "nearest", "cubic" can also be used.
+        resampling: rasterio.enums.Resampling: The interpolation method to use.
 
     Returns:
         xr.Dataset: Interpolated raster without geospatial metadata.
@@ -196,10 +201,10 @@ def interpolate_raster(
     new_y = np.linspace(ds.y.min(), ds.y.max(), y_shape)
     new_x = np.linspace(ds.x.min(), ds.x.max(), x_shape)
 
-    interpolated = ds.interp(y=new_y, x=new_x, method=method)
+    interpolated = ds.interp(y=new_y, x=new_x, method=resampling)
 
     # add new coords because the old ones are now two dimensional
-    interpolated = interpolated.assign_coords(y=new_y, x=new_x)
+    interpolated = interpolated.assign_coords(y=range(y_shape), x=range(x_shape))
 
     # the transformation matrix can be computed by scaling the src one
     src_dims = ds.dims
