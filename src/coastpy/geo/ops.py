@@ -479,6 +479,7 @@ def determine_rotation_angle(
             (270, 360): lambda b: b - 270,
         }
 
+    # TODO: rename to landward right
     elif target_axis == "horizontal-right-aligned":
         angle_rotations = {
             (0, 90): lambda b: 90 + b,
@@ -505,6 +506,55 @@ def determine_rotation_angle(
 
     msg = "Invalid bearing computed. Expected bearing within range [0, 360]."
     raise ValueError(msg)
+
+
+def determine_xy_shape(
+    bearing: float,
+    long_side_size: int,
+    short_side_size: int,
+    target_axis: Literal[
+        "closest", "vertical", "horizontal", "horizontal-right-aligned"
+    ] = "closest",
+) -> tuple[int, int]:
+    """
+    Determine the output raster shape (y_shape, x_shape) based on the bearing and target axis.
+
+    Args:
+        bearing (float): The bearing angle in degrees (0-360).
+        long_side_size (int): The length of the long side of the area of interest in pixels.
+        short_side_size (int): The length of the short side of the area of interest in pixels.
+        target_axis (Literal["closest", "vertical", "horizontal", "horizontal-right-aligned"], optional):
+            The target axis to align the raster shape. Can be 'closest', 'vertical',
+            'horizontal', or 'horizontal-right-aligned'. Defaults to 'closest'.
+
+    Returns:
+        Tuple[int, int]: A tuple representing (y_shape, x_shape), where y_shape is the vertical size
+            and x_shape is the horizontal size of the raster after alignment.
+
+    Raises:
+        ValueError: If the target_axis is invalid or bearing falls outside expected ranges.
+        NotImplementedError: If the specified target_axis method is not yet implemented.
+    """
+    if target_axis == "closest":
+        shape_mappings = {
+            (0, 45): lambda: (long_side_size, short_side_size),
+            (45, 135): lambda: (short_side_size, long_side_size),
+            (135, 225): lambda: (long_side_size, short_side_size),
+            (225, 315): lambda: (short_side_size, long_side_size),
+            (315, 360): lambda: (long_side_size, short_side_size),
+        }
+        for (lower_bound, upper_bound), shape_func in shape_mappings.items():
+            if lower_bound <= bearing < upper_bound:
+                return shape_func()
+        msg = f"Bearing {bearing} is out of expected range."
+        raise ValueError(msg)
+
+    elif target_axis == "horizontal" or target_axis == "horizontal-right-aligned":
+        return (short_side_size, long_side_size)
+
+    else:
+        msg = f"The '{target_axis}' method is not yet implemented."
+        raise NotImplementedError(msg)
 
 
 def crosses_antimeridian(df: gpd.GeoDataFrame) -> pd.Series:
