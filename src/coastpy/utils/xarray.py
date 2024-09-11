@@ -215,6 +215,9 @@ def interpolate_raster(
     return interpolated
 
 
+import xarray as xr
+
+
 def trim_outer_nans(
     data: xr.DataArray | xr.Dataset,
     nodata: float | int | None = None,
@@ -262,12 +265,21 @@ def trim_outer_nans(
     # In Python slicing is end-exclusive, so we need to add 1 to the max indices
     trimmed_data = data.isel(y=slice(y_min, y_max + 1), x=slice(x_min, x_max + 1))
 
-    # Adjust the x, y offsets using the translation method
-    translation_x = x_min * transform.a + y_min * transform.b
-    translation_y = x_min * transform.d + y_min * transform.e
-    new_transform = transform * Affine.translation(translation_x, translation_y)
+    # Adjust the x,y offsets, taking into account the rotation and translation
+    new_c = transform.c + x_min * transform.a + y_min * transform.b
+    new_f = transform.f + x_min * transform.d + y_min * transform.e
 
-    # Make the new transformation matrix and write to the array
+    # Create the new transformation matrix
+    new_transform = Affine(
+        transform.a,
+        transform.b,
+        new_c,
+        transform.d,
+        transform.e,
+        new_f,
+    )
+
+    # Apply the new transformation to the trimmed data
     trimmed_data = trimmed_data.rio.write_transform(new_transform)
 
     return trimmed_data
