@@ -425,7 +425,7 @@ def generate_offset_line(line: LineString, offset: float) -> LineString:
     return line.offset_curve(offset) if offset != 0 else line
 
 
-def determine_rotation_angle(
+def get_rotation_angle(
     pt1: Point | tuple[float, float],
     pt2: Point | tuple[float, float],
     target_axis: Literal[
@@ -433,7 +433,7 @@ def determine_rotation_angle(
     ] = "closest",
 ) -> float | None:
     """
-    Determines the correct rotation angle to align a transect with a specified axis.
+    Computes the correct rotation angle to align with a specified axis.
 
     Args:
         pt1 (Union[Point, Tuple[float, float]]): The starting point of the transect.
@@ -479,6 +479,7 @@ def determine_rotation_angle(
             (270, 360): lambda b: b - 270,
         }
 
+    # TODO: rename to landward right
     elif target_axis == "horizontal-right-aligned":
         angle_rotations = {
             (0, 90): lambda b: 90 + b,

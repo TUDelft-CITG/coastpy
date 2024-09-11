@@ -172,3 +172,5 @@ logs/*
 .vscode
 
 src/coastpy/_version.py
+
+.idea
