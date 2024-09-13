@@ -200,6 +200,7 @@ dependencies:
       - more-itertools
       - networkx
       - stac-geoparquet  # pypi has more recent releases
+      - coloredlogs # added by Hugo
     # - dea-tools
     # - stactools-geoparquet-items
     # - odc-ui
