@@ -25,7 +25,6 @@ dependencies:
   - rasterio
   - rioxarray
   - shapely
-  - stac-geoparquet
   - xarray
 
   # Dev dependencies
@@ -56,3 +55,4 @@ dependencies:
       - antimeridian
       - duckdb
       - more-itertools
+      - stac-geoparquet  # pypi releases are more recent

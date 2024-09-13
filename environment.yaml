@@ -101,7 +101,6 @@ dependencies:
   - pooch
   - rasterio
   - rioxarray
-  - stac-geoparquet
   - stackstac
   - stactools
   - tqdm
@@ -113,6 +112,7 @@ dependencies:
       - duckdb
       - more-itertools
       - xvec
+      - stac-geoparquet # pypi releases are more recent
     # - dea-tools
     # - stactools-geoparquet-items
     # - odc-ui

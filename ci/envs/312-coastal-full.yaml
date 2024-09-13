@@ -169,7 +169,6 @@ dependencies:
   - rio-tiler
   - rioxarray
   - spatialpandas
-  - stac-geoparquet
   - stac-vrt
   - stackstac
   - stactools
@@ -186,11 +185,11 @@ dependencies:
   - xgboost
   # The packages below are heavy, so they are commented
   # - dask-ml
-  # - lightning
-  # - pytorch
+  - lightning
+  - pytorch::pytorch
   # - timm>=0.9
   # - torchgeo
-  # - torchvision
+  - pytorch::torchvision
 
   - pip:
       # - coastpy  # to install from pypi
@@ -200,6 +199,7 @@ dependencies:
       - movingpandas
       - more-itertools
       - networkx
+      - stac-geoparquet  # pypi has more recent releases
     # - dea-tools
     # - stactools-geoparquet-items
     # - odc-ui
