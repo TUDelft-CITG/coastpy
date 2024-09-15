@@ -187,6 +187,7 @@ dependencies:
   # - dask-ml
   - lightning
   - pytorch::pytorch
+  - tensorboard
   # - timm>=0.9
   # - torchgeo
   - pytorch::torchvision
