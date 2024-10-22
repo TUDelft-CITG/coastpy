@@ -108,7 +108,7 @@ dependencies:
 
   - pip:
       - antimeridian
-      - coastpy
+    # - coastpy # comment coastpy here to encourage dev installs at this stage 
       - duckdb
       - more-itertools
       - xvec
