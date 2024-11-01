@@ -191,17 +191,17 @@ dependencies:
   # - timm>=0.9
   # - torchgeo
   - pytorch::torchvision
+  - albumentations
 
   - pip:
-      # - coastpy  # to install from pypi
-      # -e ../../  # to install in dev mode
       - antimeridian
-      - duckdb
+      - duckdb  # pypi has more recent releases
       - movingpandas
       - more-itertools
       - networkx
       - stac-geoparquet  # pypi has more recent releases
-      - coloredlogs # added by Hugo
+      - coloredlogs
+      # - coastpy  # probably better to install in dev mode (pip install -e .)
     # - dea-tools
     # - stactools-geoparquet-items
     # - odc-ui
