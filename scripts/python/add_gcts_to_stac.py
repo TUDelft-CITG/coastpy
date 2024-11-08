@@ -51,8 +51,8 @@ reference line to measure coastal change, while providing a robust foundation to
 coastal characteristics and derive coastal statistics thereof. The Global Coastal Transect
 System consists of more than 11 million cross-shore coastal transects uniformly spaced at
 100-m intervals alongshore, for all OpenStreetMap coastlines that are longer than 5 kilometers.
-The dataset is more extensively described in Enabling Coastal Analytics at Planetary Scale
-(Calkoen, Floris. 2024, "Enabling Coastal Analytics at Planetary Scale. In review.).
+The dataset is more extensively described Calkoen et al., 2024. "Enabling Coastal Analytics
+at Planetary Scale" available [here](https://doi.org/10.1016/j.envsoft.2024.106257).
 """
 # Asset details
 ASSET_TITLE = "GCTS"
@@ -211,20 +211,21 @@ def create_collection(
             target="https://creativecommons.org/licenses/by/4.0/",
             media_type="text/html",
             title="CC BY 4.0 ",
-        )
+        ),
     ]
 
     keywords = [
-        "Coast",
-        "Coastal",
+        "Coastal analytics",
+        "Cloud technology",
+        "Coastal change",
+        "Coastal monitoring",
+        "Satellite-derived shorelines",
+        "Low elevation coastal zone",
+        "Data management",
         "Transects",
-        "Coastal transects",
-        "Coastal Change",
-        "Satellite-Derived Shorelines",
-        "SDS",
         "GCTS",
-        "CoCliCo",
         "Deltares",
+        "CoCliCo",
         "GeoParquet",
     ]
     if description is None:
@@ -268,16 +269,18 @@ def create_collection(
 
     ScientificExtension.add_to(collection)
     # TODO: revise citation upon publication
-    collection.extra_fields["sci:citation"] = (
-        """Calkoen, Floris. 2024. "Enabling Coastal Analytics at Planetary Scale." In review."""
-    )
-    # collection.extra_fields["sci:doi"] = ""
-    # collection.extra_fields["sci:publications"] = [
-    #     {
-    #         "doi": "",
-    #         "citation": """""",
-    #     }
-    # ]
+
+    CITATION = """
+    Floris Reinier Calkoen, Arjen Pieter Luijendijk, Kilian Vos, Etiënne Kras, Fedor Baart,
+    Enabling coastal analytics at planetary scale, Environmental Modelling & Software, 2024,
+    106257, ISSN 1364-8152, https://doi.org/10.1016/j.envsoft.2024.106257.
+    (https://www.sciencedirect.com/science/article/pii/S1364815224003189)
+    """
+
+    # NOTE: we could make a separate DOI for the transects and then link the paper in
+    # sci:citations as a feature. However, for now I (Floris) prefer to use the same DOI.
+    collection.extra_fields["sci:citation"] = CITATION
+    # collection.extra_fields["sci:doi"] = "https://doi.org/10.1016/j.envsoft.2024.106257"
 
     collection.stac_extensions.append(stac_table.SCHEMA_URI)
 
@@ -373,9 +376,11 @@ if __name__ == "__main__":
     layout = ParquetLayout()
 
     collection = create_collection(extra_fields={"container_uri": CONTAINER_URI})
+    collection.validate_all()
 
     for uri in uris:
         item = create_item(uri, storage_options=storage_options)
+        item.validate()
         collection.add_item(item)
 
     collection.update_extent_from_items()
