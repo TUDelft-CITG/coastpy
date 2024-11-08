@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the following work."
+authors:
+  - family-names: Calkoen
+    given-names: Floris Reinier
+  - family-names: Luijendijk
+    given-names: Arjen Pieter
+  - family-names: Vos
+    given-names: Kilian
+  - family-names: Kras
+    given-names: Etiënne
+  - family-names: Baart
+    given-names: Fedor
+title: "Enabling coastal analytics at planetary scale"
+doi: 10.1016/j.envsoft.2024.106257
+date-released: 2024-11-08
+url: https://doi.org/10.1016/j.envsoft.2024.106257
