@@ -41,9 +41,9 @@ az storage blob download-batch \
 ```
 
 ## Usage
-More extensive installation and usage instructions will come when we build the 
+More extensive installation and usage instructions will come when we build the
 documentation. For now, to run the tutorials, clone the repository, install the environment,
-launch jupyter lab and navigate to the tutorials directory. 
+launch jupyter lab and navigate to the tutorials directory.
 
 ```bash
 git clone https://TUDelft-CITG/coastpy.git
