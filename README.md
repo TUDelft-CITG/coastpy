@@ -8,18 +8,6 @@ Python tools for cloud-native coastal analytics.
 $ pip install coastpy
 ```
 
-## Usage
-More extensive installation and usage instructions will come when we build the 
-documentation. For now, to run the tutorials, clone the repository, install the environment,
-launch jupyter lab and navigate to the tutorials directory. 
-
-```bash
-git clone https://TUDelft-CITG/coastpy.git
-cd coastpy
-mamba env create -f environment.yml
-jupyter lab
-```
-
 ## Data
 
 The data that is produced with this software can be directly accessed via the cloud using
@@ -50,6 +38,18 @@ az storage blob download-batch \
     --source "gcts" \
     --pattern "release/2024-08-02/*.parquet" \
     --account-name coclico
+```
+
+## Usage
+More extensive installation and usage instructions will come when we build the 
+documentation. For now, to run the tutorials, clone the repository, install the environment,
+launch jupyter lab and navigate to the tutorials directory. 
+
+```bash
+git clone https://TUDelft-CITG/coastpy.git
+cd coastpy
+mamba env create -f environment.yml
+jupyter lab
 ```
 
 ## Citation:
