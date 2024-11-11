@@ -52,6 +52,7 @@ dependencies = [
 
     # Data processing and machine learning
     "scikit-learn",
+    "distributed",
     "numcodecs",
     "pooch",
 
