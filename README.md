@@ -9,8 +9,10 @@ $ pip install coastpy
 ```
 
 ## Usage
-Clone the repository, install the environment, launch jupyter lab and explore the
-tutorials.
+More extensive installation and usage instructions will be made available by
+documentation. For now you can clone the repository, install the environment, that comes
+with jupyterlab and then launch jupyter lab to explore the tutorials.
+
 ```bash
 git clone https://TUDelft-CITG/coastpy.git
 cd coastpy
@@ -20,7 +22,10 @@ jupyter lab
 
 ## Data
 
-The data that is produced with this software can be directly accessed via the cloud; see the [tutorials](./tutorials/) for the latest instructions.
+The data that is produced with this software can be directly accessed via the cloud using
+tools like
+[DuckDB](https://duckdb.org/docs/installation/?version=stable&environment=cli&platform=macos&download_method=package_manager);
+see the [tutorials](./tutorials/) for other methods and latest instructions.
 
 ### Global Coastal Transect System (GCTS)
 
@@ -32,17 +37,14 @@ The Global Coastal Transect System consists of more than 11 million cross-shore 
 transects uniformly spaced at 100-m intervals alongshore, for all OpenStreetMap
 coastlines that are longer than 5 kilometers.
 
-```sql
--- Downloading all transects for the United States using DuckDB
-COPY (
-    SELECT *
-    FROM 'az://coclico.blob.core.windows.net/gcts/release/2024-08-02/*.parquet' AS gcts
-    WHERE gcts.country = 'US'
-) TO 'United_States.parquet' (FORMAT 'parquet');
+
+```bash
+# Download all transects in the United States.
+duckdb -c "COPY (SELECT * FROM 'az://coclico.blob.core.windows.net/gcts/release/2024-08-02/*.parquet' AS gcts WHERE gcts.country = 'US') TO 'United_States.parquet' (FORMAT 'PARQUET')"
 ```
 
 ```bash
-# Downloading the full dataset using AZ CLI
+# Or, download the data in bulk using AZ CLI
 az storage blob download-batch \
     --destination "./" \
     --source "gcts" \
@@ -60,11 +62,10 @@ az storage blob download-batch \
   year    = {2024},
   pages   = {106257},
   issn    = {1364-8152},
-  doi     = {10.1016/j.envsoft.2024.106257}
+  doi     = {10.1016/j.envsoft.2024.106257},
+  url     = {https://www.sciencedirect.com/science/article/pii/S1364815224003189}
 }
 ```
-
-
 
 ## Contributing
 
