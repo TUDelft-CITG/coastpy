@@ -10,8 +10,8 @@ $ pip install coastpy
 
 ## Usage
 More extensive installation and usage instructions will come when we build the 
-documentation. For now you can clone the repository, install the environment - that comes
-with jupyterlab -, and then launch jupyter lab to explore the tutorials.
+documentation. For now, to run the tutorials, clone the repository, install the environment,
+launch jupyter lab and navigate to the tutorials directory. 
 
 ```bash
 git clone https://TUDelft-CITG/coastpy.git
