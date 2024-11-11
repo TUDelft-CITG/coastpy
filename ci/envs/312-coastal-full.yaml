@@ -28,6 +28,7 @@ dependencies:
   - poetry
   - pre-commit
   - pydantic
+  - msgspec
   - pytest
   - pytest-cov
   - recommonmark
