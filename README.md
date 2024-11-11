@@ -27,7 +27,7 @@ coastlines that are longer than 5 kilometers.
 
 
 ```bash
-# Download all transects in the United States.
+# Download all transects located in the United States.
 duckdb -c "COPY (SELECT * FROM 'az://coclico.blob.core.windows.net/gcts/release/2024-08-02/*.parquet' AS gcts WHERE gcts.country = 'US') TO 'United_States.parquet' (FORMAT 'PARQUET')"
 ```
 
