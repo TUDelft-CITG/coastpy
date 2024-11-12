@@ -13,7 +13,7 @@ $ pip install coastpy
 The data that is produced with this software can be directly accessed via the cloud using
 tools like
 [DuckDB](https://duckdb.org/docs/installation/?version=stable&environment=cli&platform=macos&download_method=package_manager);
-see the [tutorials](./tutorials/) for other methods and latest instructions.
+see the [tutorials](./tutorials/) and [analytics](./analytics/) other methods and latest instructions.
 
 ### Global Coastal Transect System (GCTS)
 
@@ -32,6 +32,11 @@ duckdb -c "COPY (SELECT * FROM 'az://coclico.blob.core.windows.net/gcts/release/
 ```
 
 ```bash
+# Download transects by bounding box.
+duckdb -c "COPY (SELECT * FROM 'az://coclico.blob.core.windows.net/gcts/release/2024-08-02/*.parquet' AS gcts WHERE bbox.xmin <= 14.58 AND bbox.ymin <= -22.77 AND bbox.xmax >= 14.27 AND bbox.ymax >= -23.57) TO area_of_interest.parquet (FORMAT 'PARQUET')"
+```
+
+```bash
 # Or, download the data in bulk using AZ CLI
 az storage blob download-batch \
     --destination "./" \
@@ -41,9 +46,12 @@ az storage blob download-batch \
 ```
 
 ## Usage
+
 More extensive installation and usage instructions will come when we build the
-documentation. For now, to run the tutorials, clone the repository, install the environment,
-launch jupyter lab and navigate to the tutorials directory.
+documentation. For now, to run the tutorials, analytics or scripts clone the repository,
+install the [environment](environment.yaml) using a package manager like
+[miniconda](https://github.com/conda-forge/miniforge?tab=readme-ov-file#download). You
+may use Jupyter lab to explore the interactive content of the notebooks.
 
 ```bash
 git clone https://TUDelft-CITG/coastpy.git
