@@ -57,8 +57,6 @@ dependencies = [
     "pooch",
 
     # Additional geospatial functionality
-    "h3-py",
-    "h3pandas",
     "esda",
     "libpysal",
 
