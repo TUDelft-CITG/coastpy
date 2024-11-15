@@ -84,7 +84,15 @@ class DaskClientManager:
         Returns:
             Client: The Dask SLURM client.
         """
-        from dask_jobqueue import SLURMCluster
+
+        try:
+            from dask_jobqueue import SLURMCluster
+        except ImportError as e:
+            msg = (
+                "dask_jobqueue is required to create a SLURM Dask client. "
+                "Please install it using `pip install dask-jobqueue`."
+            )
+            raise ImportError(msg) from e
 
         slurm_configs = {
             "cores": 10,  # Cores per worker
