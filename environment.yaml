@@ -37,7 +37,7 @@ dependencies:
   - voila
 
   # Interactive visualization libraries
-  - bokeh
+  - bokeh<3.5  # until https://github.com/holoviz/holoviews/issues/6453 is resolved
   - datashader
   - geoviews
   - holoviews
