@@ -21,12 +21,14 @@ classifiers = [
 ]
 
 dependencies = [
+    "shapely>=2.0.0",
+    "pyproj",
+    "pyogrio",
     "geopandas",
     "rioxarray",
     "fsspec",
     "pyarrow",
-    "python-dotenv",
-    "duckdb",
+    "duckdb>=1.0.0",
     "pystac",
     "dask_geopandas",
     "distributed",
