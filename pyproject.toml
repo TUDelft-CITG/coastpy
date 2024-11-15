@@ -21,17 +21,17 @@ classifiers = [
 ]
 
 dependencies = [
-    "dask_geopandas",
+    "geopandas",
     "rioxarray",
+    "fsspec",
+    "pyarrow",
+    "python-dotenv",
+    "duckdb",
+    "pystac",
+    "dask_geopandas",
     "distributed",
     "antimeridian",
-    "dotenv",
-    "duckdb",
-    "fsspec",
     "mercantile",
-    "pyarrow",
-    "pystac",
-    "urllib",
 ]
 
 [project.urls]
