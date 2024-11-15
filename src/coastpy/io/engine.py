@@ -1,7 +1,6 @@
 import os
 from typing import Literal
 
-import dotenv
 import duckdb
 import geopandas as gpd
 import pystac
@@ -21,9 +20,6 @@ class BaseQueryEngine:
     """
 
     def __init__(self, storage_backend: Literal["azure", "aws"] = "azure") -> None:
-        # Load environment variables
-        dotenv.load_dotenv(override=True)
-
         self.storage_backend = storage_backend
         self.con = duckdb.connect(database=":memory:", read_only=False)
         self._initialize_spatial_extension()
@@ -40,23 +36,6 @@ class BaseQueryEngine:
             self.con.execute("INSTALL azure;")
             self.con.execute("LOAD azure;")
 
-            # # NOTE: currently this is commented because the connection strings can only be made at storage account level
-            # if duckdb.__version__ > "0.10.0":
-            #     try:
-            #         self.con.execute(
-            #             f"""
-            #                     CREATE SECRET secret1 (
-            #                     TYPE AZURE,
-            #                     CONNECTION_STRING '{os.getenv('APPSETTING_DUCKDB_AZURE_STORAGE_CONNECTION_STRING')}');
-            #         """
-            #         )
-            #     except Exception as e:
-            #         print(f"{e}")
-
-            # else:
-            #     self.con.execute(
-            #         f"SET AZURE_STORAGE_CONNECTION_STRING = '{os.getenv('APPSETTING_DUCKDB_AZURE_STORAGE_CONNECTION_STRING')}';"
-            #     )
         elif self.storage_backend == "aws":
             self.con.execute("INSTALL httpfs;")
             self.con.execute("LOAD httpfs;")
