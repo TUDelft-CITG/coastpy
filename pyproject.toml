@@ -19,86 +19,19 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
 ]
+
 dependencies = [
-    # Core scientific libraries
-    "numpy",
-    "pandas",
-    "scipy",
-    "fsspec",
-    "bottleneck",
-
-    # Core geospatial libraries (pinned versions)
-    "geopandas>=0.12",
-    "shapely>=2.0",
-    "dask[dataframe]>=2022.06.0",
-    "rasterio>=1.3.7",
-    "xarray>=2024.7.0",
-    "stac-geoparquet>=0.6.0",
-    "duckdb>=1.1",
-
-    # Additional geospatial libraries
-    "pyproj",
+    "dask_geopandas",
     "rioxarray",
-    "cartopy",
-    "contextily",
-    "dask-geopandas",
-    "stackstac",
-
-    # Cloud and I/O
-    "adlfs",
-    "gcsfs",
-    "pyarrow",
-    "zarr",
-
-    # Data processing and machine learning
-    "scikit-learn",
     "distributed",
-    "numcodecs",
-    "pooch",
-
-    # Additional geospatial functionality
-    "esda",
-    "libpysal",
-
-    # Utility
-    "tqdm",
-    "more-itertools",
-    "python-dotenv",
-]
-
-[project.optional-dependencies]
-dev = [
-    "black",
-    "coverage",
-    "flake8",
-    "isort",
-    "mypy",
-    "nbsphinx",
-    "pre-commit",
-    "pytest-cov",
-    "pytest-mock",
-    "pytest",
-    "ruff",
-    "sphinx-gallery",
-    "sphinx-rtd-theme",
-    "sphinx",
-]
-
-docs = [
-    "nbsphinx",
-    "sphinx",
-    "sphinx-gallery",
-    "sphinx-rtd-theme",
-]
-
-test = [
-    "black",
-    "coverage",
-    "flake8",
-    "isort",
-    "pytest",
-    "pytest-cov",
-    "pytest-mock",
+    "antimeridian",
+    "dotenv",
+    "duckdb",
+    "fsspec",
+    "mercantile",
+    "pyarrow",
+    "pystac",
+    "urllib",
 ]
 
 [project.urls]
