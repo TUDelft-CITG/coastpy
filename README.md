@@ -63,15 +63,15 @@ jupyter lab
 ## Citation:
 
 ```latex
-@article{CALKOEN2024106257,
-  title   = {Enabling coastal analytics at planetary scale},
-  author  = {Floris Reinier Calkoen and Arjen Pieter Luijendijk and Kilian Vos and Etiënne Kras and Fedor Baart},
-  journal = {Environmental Modelling \& Software},
-  year    = {2024},
-  pages   = {106257},
-  issn    = {1364-8152},
-  doi     = {10.1016/j.envsoft.2024.106257},
-  url     = {https://www.sciencedirect.com/science/article/pii/S1364815224003189}
+@article{CALKOEN2025106257,
+  title     = {Enabling coastal analytics at planetary scale},
+  journal   = {Environmental Modelling & Software},
+  volume    = {183},
+  pages     = {106257},
+  year      = {2025},
+  issn      = {1364-8152},
+  doi       = {https://doi.org/10.1016/j.envsoft.2024.106257},
+  url       = {https://www.sciencedirect.com/science/article/pii/S1364815224003189},
 }
 ```
 
