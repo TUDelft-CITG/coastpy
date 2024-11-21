@@ -195,7 +195,7 @@ def create_item(block, item_id, antimeridian_strategy=antimeridian.Strategy.SPLI
 
     antimeridian.fix_item(item, antimeridian_strategy)
 
-    item.common_metadata.created = datetime.datetime.utcnow()
+    item.common_metadata.created = datetime.datetime.now(datetime.UTC)
 
     ext = pystac.extensions.projection.ProjectionExtension.ext(
         item, add_if_missing=True
