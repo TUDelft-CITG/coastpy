@@ -56,18 +56,18 @@ RESOLUTION = 30
 PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 
 CONTAINER_NAME = "deltares-delta-dtm"
-PREFIX = "v1.0.1"
+PREFIX = "v1.1"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 
-EXAMPLE_HREF = "az://deltares-delta-dtm/v1.0.1/europe/DeltaDTM_v1_0_N03W052.tif"
+EXAMPLE_HREF = "az://deltares-delta-dtm/v1.1/DeltaDTM_v1_1_N03W052.tif"
 
 
 @dataclasses.dataclass
 class PathParser:
     """
     Parses a cloud storage path into its component parts, specifically designed for Azure Blob Storage and COG data.
-    This class assumes paths are formatted like "az://<container>/<version>/<region>/<filename>.tif"
+    This class assumes paths are formatted like "az://<container>/<version>/<filename>.tif"
     """
 
     path: str
@@ -123,7 +123,7 @@ def create_collection(
 
     description = """
     A global coastal digital terrain model, based on CopernicusDEM, ESA WorldCover, ICESat-2 and
-    GEDI data. For more information, see Pronk et al. (2023) DeltaDTM: A global coastal digital terrain model.
+    GEDI data. For more information, see Pronk et al. (2024) DeltaDTM: A global coastal digital terrain model.
     """
 
     collection = pystac.Collection(
@@ -164,7 +164,7 @@ def create_collection(
 
     pystac.extensions.scientific.ScientificExtension.add_to(collection)
     collection.extra_fields["sci:citation"] = (
-        """Pronk, Maarten. 2023. “DeltaDTM: A Global Coastal Digital Terrain Model.” 4TU.ResearchData. https://doi.org/10.4121/21997565.V1."""
+        """Pronk, Maarten. 2024. “DeltaDTM v1.1: A Global Coastal Digital Terrain Model.” 4TU.ResearchData. https://doi.org/10.4121/21997565.V3."""
     )
     collection.extra_fields["sci:doi"] = "10.4121/21997565"
     collection.extra_fields["sci:publications"] = [
@@ -175,7 +175,7 @@ def create_collection(
     ]
 
     pystac.extensions.version.VersionExtension.add_to(collection)
-    collection.extra_fields["version"] = "1.0"
+    collection.extra_fields["version"] = "1.1"
 
     return collection
 
