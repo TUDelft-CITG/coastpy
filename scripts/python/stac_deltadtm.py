@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from pystac.extensions import raster
 from pystac.stac_io import DefaultStacIO
 from stactools.core.utils import antimeridian
+from tqdm import tqdm
 
 # Load the environment variables from the .env file
 load_dotenv(override=True)
@@ -256,7 +257,7 @@ if __name__ == "__main__":
     # filename=b'ed4e8723-89d8-4075-b946-1ae1a21cca03/ed4e8723-89d8-4075-b946-1ae1a21cca03.aux'
     logging.getLogger("rasterio").setLevel(logging.WARNING)
 
-    for fp in fps:
+    for fp in tqdm(fps, desc="Processing file paths"):
         href = "az://" + fp
         pp = PathParser(href)
 
@@ -325,5 +326,3 @@ if __name__ == "__main__":
         dest_href=str(STAC_DIR),
         stac_io=stac_io,
     )
-
-    catalog.validate_all()
