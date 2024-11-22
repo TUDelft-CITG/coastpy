@@ -8,6 +8,7 @@ from typing import Any
 
 import fsspec
 import pystac
+import pystac.media_type
 import rasterio
 import shapely
 import stac_geoparquet
@@ -20,7 +21,6 @@ import xarray as xr
 # os.system(f"git clone https://github.com/openearth/coclicodata.git {dev_dir / 'coclicodata'}")
 # # Install the package in development mode
 # os.system(f"pip install -e {dev_dir / 'coclicodata'}")
-from coclicodata.coclico_stac.io import CoCliCoStacIO
 from coclicodata.coclico_stac.layouts import CoCliCoCOGLayout
 from dotenv import load_dotenv
 from pystac.extensions import raster
@@ -34,12 +34,11 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 
 # Get the SAS token and storage account name from environment variables
 sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
-storage_options = {"account_name": storage_account_name, "credential": sas_token}
-item_type = "mosaic"  # "single" or "mosaic"
+STORAGE_ACCOUNT_NAME = "coclico"
+storage_options = {"account_name": STORAGE_ACCOUNT_NAME, "credential": sas_token}
 
 # CoCliCo STAC
-STAC_DIR = pathlib.Path.home() / "Documents" / "GitHub" / "coclicodata" / "current"
+STAC_DIR = pathlib.Path.home() / "dev" / "coclicodata" / "current"
 
 COLLECTION_ID = "deltares-delta-dtm"
 COLLECTION_TITLE = "DeltaDTM: A global coastal digital terrain model"
@@ -247,7 +246,7 @@ if __name__ == "__main__":
 
     fps = fs.glob(f"{root}/**/*.tif")
 
-    stac_io = DefaultStacIO() #CoCliCoStacIO()
+    stac_io = DefaultStacIO()  # CoCliCoStacIO()
     layout = CoCliCoCOGLayout()
 
     collection = create_collection()
@@ -295,16 +294,15 @@ if __name__ == "__main__":
         ),
     )
 
-    if item_type == "mosaic":
-        collection.add_asset(
-            "geoserver_link",
-            pystac.Asset(
-                # https://coclico.avi.deltares.nl/geoserver/%s/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=%s"%(COLLECTION_ID, COLLECTION_ID + ":" + ASSET_TITLE),
-                "https://coclico.avi.deltares.nl/geoserver/cfhp/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=cfhp:HIGH_DEFENDED_MAPS_Mean_spring_tide",  # test
-                title="Geoserver Mosaic link",
-                media_type="application/vnd.apache.parquet",
-            ),
-        )
+    collection.add_asset(
+        "geoserver_link",
+        pystac.Asset(
+            # https://coclico.avi.deltares.nl/geoserver/%s/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=%s"%(COLLECTION_ID, COLLECTION_ID + ":" + ASSET_TITLE),
+            "https://coclico.avi.deltares.nl/geoserver/cfhp/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=cfhp:HIGH_DEFENDED_MAPS_Mean_spring_tide",  # test
+            title="Geoserver Mosaic link",
+            media_type=pystac.media_type.MediaType.COG,
+        ),
+    )
 
     catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
 
