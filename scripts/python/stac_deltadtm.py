@@ -24,6 +24,7 @@ from coclicodata.coclico_stac.io import CoCliCoStacIO
 from coclicodata.coclico_stac.layouts import CoCliCoCOGLayout
 from dotenv import load_dotenv
 from pystac.extensions import raster
+from pystac.stac_io import DefaultStacIO
 from stactools.core.utils import antimeridian
 
 # Load the environment variables from the .env file
@@ -35,9 +36,10 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
 storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
 storage_options = {"account_name": storage_account_name, "credential": sas_token}
+item_type = "mosaic"  # "single" or "mosaic"
 
 # CoCliCo STAC
-STAC_DIR = pathlib.Path.home() / "dev" / "coclicodata" / "current"
+STAC_DIR = pathlib.Path.home() / "Documents" / "GitHub" / "coclicodata" / "current"
 
 COLLECTION_ID = "deltares-delta-dtm"
 COLLECTION_TITLE = "DeltaDTM: A global coastal digital terrain model"
@@ -245,7 +247,7 @@ if __name__ == "__main__":
 
     fps = fs.glob(f"{root}/**/*.tif")
 
-    stac_io = CoCliCoStacIO()
+    stac_io = DefaultStacIO() #CoCliCoStacIO()
     layout = CoCliCoCOGLayout()
 
     collection = create_collection()
@@ -292,6 +294,17 @@ if __name__ == "__main__":
             roles=["data"],
         ),
     )
+
+    if item_type == "mosaic":
+        collection.add_asset(
+            "geoserver_link",
+            pystac.Asset(
+                # https://coclico.avi.deltares.nl/geoserver/%s/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=%s"%(COLLECTION_ID, COLLECTION_ID + ":" + ASSET_TITLE),
+                "https://coclico.avi.deltares.nl/geoserver/cfhp/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=cfhp:HIGH_DEFENDED_MAPS_Mean_spring_tide",  # test
+                title="Geoserver Mosaic link",
+                media_type="application/vnd.apache.parquet",
+            ),
+        )
 
     catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
 
