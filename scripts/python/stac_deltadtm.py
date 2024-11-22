@@ -8,6 +8,7 @@ from typing import Any
 
 import fsspec
 import pystac
+import pystac.media_type
 import rasterio
 import shapely
 import stac_geoparquet
@@ -20,11 +21,12 @@ import xarray as xr
 # os.system(f"git clone https://github.com/openearth/coclicodata.git {dev_dir / 'coclicodata'}")
 # # Install the package in development mode
 # os.system(f"pip install -e {dev_dir / 'coclicodata'}")
-from coclicodata.coclico_stac.io import CoCliCoStacIO
 from coclicodata.coclico_stac.layouts import CoCliCoCOGLayout
 from dotenv import load_dotenv
 from pystac.extensions import raster
+from pystac.stac_io import DefaultStacIO
 from stactools.core.utils import antimeridian
+from tqdm import tqdm
 
 # Load the environment variables from the .env file
 load_dotenv(override=True)
@@ -33,8 +35,8 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 
 # Get the SAS token and storage account name from environment variables
 sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
-storage_options = {"account_name": storage_account_name, "credential": sas_token}
+STORAGE_ACCOUNT_NAME = "coclico"
+storage_options = {"account_name": STORAGE_ACCOUNT_NAME, "credential": sas_token}
 
 # CoCliCo STAC
 STAC_DIR = pathlib.Path.home() / "dev" / "coclicodata" / "current"
@@ -195,7 +197,7 @@ def create_item(block, item_id, antimeridian_strategy=antimeridian.Strategy.SPLI
 
     antimeridian.fix_item(item, antimeridian_strategy)
 
-    item.common_metadata.created = datetime.datetime.utcnow()
+    item.common_metadata.created = datetime.datetime.now(datetime.UTC)
 
     ext = pystac.extensions.projection.ProjectionExtension.ext(
         item, add_if_missing=True
@@ -245,7 +247,7 @@ if __name__ == "__main__":
 
     fps = fs.glob(f"{root}/**/*.tif")
 
-    stac_io = CoCliCoStacIO()
+    stac_io = DefaultStacIO()  # CoCliCoStacIO()
     layout = CoCliCoCOGLayout()
 
     collection = create_collection()
@@ -255,7 +257,7 @@ if __name__ == "__main__":
     # filename=b'ed4e8723-89d8-4075-b946-1ae1a21cca03/ed4e8723-89d8-4075-b946-1ae1a21cca03.aux'
     logging.getLogger("rasterio").setLevel(logging.WARNING)
 
-    for fp in fps:
+    for fp in tqdm(fps, desc="Processing file paths"):
         href = "az://" + fp
         pp = PathParser(href)
 
@@ -293,11 +295,25 @@ if __name__ == "__main__":
         ),
     )
 
+    collection.add_asset(
+        "geoserver_link",
+        pystac.Asset(
+            # https://coclico.avi.deltares.nl/geoserver/%s/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=%s"%(COLLECTION_ID, COLLECTION_ID + ":" + ASSET_TITLE),
+            "https://coclico.avi.deltares.nl/geoserver/cfhp/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=cfhp:HIGH_DEFENDED_MAPS_Mean_spring_tide",  # test
+            title="Geoserver Mosaic link",
+            media_type=pystac.media_type.MediaType.COG,
+        ),
+    )
+
     catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
 
-    if catalog.get_child(collection.id):
-        catalog.remove_child(collection.id)
-        print(f"Removed child: {collection.id}.")
+    # TODO: there should be a cleaner method to remove the previous stac catalog and its items
+    try:
+        if catalog.get_child(collection.id):
+            catalog.remove_child(collection.id)
+            print(f"Removed child: {collection.id}.")
+    except Exception:
+        pass
 
     catalog.add_child(collection)
 
@@ -310,5 +326,3 @@ if __name__ == "__main__":
         dest_href=str(STAC_DIR),
         stac_io=stac_io,
     )
-
-    catalog.validate_all()
