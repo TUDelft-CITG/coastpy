@@ -89,7 +89,7 @@ dependencies:
   - jsonschema
   - netcdf4
   - numcodecs
-  - numpy
+  - numpy<2
   - pandas
   - pint
   - polars
