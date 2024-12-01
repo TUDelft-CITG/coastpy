@@ -1,4 +1,6 @@
-from typing import Literal
+from typing import Annotated, Literal
+
+from msgspec import Meta
 
 # Type literals for structured data
 ShoreType = Literal[
@@ -38,3 +40,48 @@ LandformType = Literal[
 ]
 IsBuiltEnvironment = Literal["true", "false", "N/A"]
 HasDefense = Literal["true", "false", "N/A"]
+
+
+DeterminationMethod = Annotated[
+    Literal[
+        "ShorelineMonitor",
+        "CoastSat",
+        "Cassie",
+        "ManualDigitization",
+        "AIModel",
+        "Thresholding",
+    ],
+    Meta(
+        description="Methods or tools used to determine waterlines, including algorithms and software"
+    ),
+]
+
+EOInstrument = Annotated[
+    Literal[
+        "Sentinel-1 SAR",
+        "Sentinel-2 MSI",
+        "Landsat-8 OLI",
+        "WorldView-2",
+        "WorldView-3",
+        "PlanetScope",
+        "SkySat",
+    ],
+    Meta(
+        description="Earth Observation instruments or sensors used in coastal monitoring"
+    ),
+]
+
+Provider = Annotated[
+    Literal["Deltares", "USGS", "CoastSat", "Planetary Computer", "Maxar", "Airbus"],
+    Meta(description="Organizations or entities providing coastal monitoring data"),
+]
+
+WaterLineType = Annotated[
+    Literal["instantaneous", "composite"],
+    Meta(
+        description=(
+            "Types of waterlines: 'instantaneous' represents single moment waterlines (e.g., derived from one image), "
+            "while 'composite' refers to aggregated waterlines from multiple images."
+        )
+    ),
+]

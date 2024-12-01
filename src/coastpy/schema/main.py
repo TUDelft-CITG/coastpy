@@ -42,6 +42,10 @@ if __name__ == "__main__":
     )
 
     # fr = transect.to_frame2()
+    from coastpy.schema.types import ModelUnion
+
+    print(msgspec.json.schema(ModelUnion, schema_hook=custom_schema_hook))
+
     fr2 = train_sample.to_frame(geometry="transect.geometry", bbox="transect.bbox")
     test_sample = TypologyTestSample.example()
     fr3 = test_sample.to_frame()

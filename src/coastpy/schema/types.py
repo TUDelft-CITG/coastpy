@@ -1,6 +1,7 @@
 import datetime
 from abc import abstractmethod
 from typing import (
+    Annotated,
     Any,
     Literal,
     get_args,
@@ -24,10 +25,13 @@ from shapely.geometry import (
 from coastpy.schema.schema_hooks import decode_custom, encode_custom
 from coastpy.schema.type_enums import (
     CoastalType,
+    DeterminationMethod,
     HasDefense,
     IsBuiltEnvironment,
     LandformType,
+    Provider,
     ShoreType,
+    WaterLineType,
 )
 from coastpy.schema.type_mappings import GEOPARQUET_TYPE_MAP, PANDAS_TYPE_MAP
 
@@ -617,21 +621,21 @@ class TypologyTestSample(BaseModel, tag="typologytestsample"):
     pred_has_defense: HasDefense
     pred_is_built_environment: IsBuiltEnvironment
 
-    # def to_frame(
-    #     self, geometry="transect.geometry", bbox="transect.bbox", crs="EPSG:4326"
-    # ) -> pd.DataFrame | gpd.GeoDataFrame:
-    #     """
-    #     Convert the instance to a DataFrame or GeoDataFrame, flattening nested fields.
+    def to_frame(
+        self, geometry="transect.geometry", bbox="transect.bbox", crs="EPSG:4326"
+    ) -> pd.DataFrame | gpd.GeoDataFrame:
+        """
+        Convert the instance to a DataFrame or GeoDataFrame, flattening nested fields.
 
-    #     Args:
-    #         geometry (str): Dot-separated path to the geometry attribute.
-    #         bbox (str): Dot-separated path to the bbox attribute.
-    #         crs (str): Coordinate reference system for GeoDataFrame.
+        Args:
+            geometry (str): Dot-separated path to the geometry attribute.
+            bbox (str): Dot-separated path to the bbox attribute.
+            crs (str): Coordinate reference system for GeoDataFrame.
 
-    #     Returns:
-    #         pd.DataFrame | gpd.GeoDataFrame: Flattened DataFrame or GeoDataFrame.
-    #     """
-    #     return super().to_frame(geometry=geometry, bbox=bbox, crs=crs)
+        Returns:
+            pd.DataFrame | gpd.GeoDataFrame: Flattened DataFrame or GeoDataFrame.
+        """
+        return super().to_frame(geometry=geometry, bbox=bbox, crs=crs)
 
     @classmethod
     def example(cls) -> "TypologyTestSample":
@@ -652,6 +656,22 @@ class TypologyInferenceSample(BaseModel, tag="typologyinferencesample"):
     pred_has_defense: HasDefense
     pred_is_built_environment: IsBuiltEnvironment
 
+    def to_frame(
+        self, geometry="transect.geometry", bbox="transect.bbox", crs="EPSG:4326"
+    ) -> pd.DataFrame | gpd.GeoDataFrame:
+        """
+        Convert the instance to a DataFrame or GeoDataFrame, flattening nested fields.
+
+        Args:
+            geometry (str): Dot-separated path to the geometry attribute.
+            bbox (str): Dot-separated path to the bbox attribute.
+            crs (str): Coordinate reference system for GeoDataFrame.
+
+        Returns:
+            pd.DataFrame | gpd.GeoDataFrame: Flattened DataFrame or GeoDataFrame.
+        """
+        return super().to_frame(geometry=geometry, bbox=bbox, crs=crs)
+
     @classmethod
     def example(cls) -> "TypologyInferenceSample":
         _EXAMPLE_VALUES = {
@@ -662,6 +682,85 @@ class TypologyInferenceSample(BaseModel, tag="typologyinferencesample"):
             "pred_is_built_environment": "false",
         }
         return cls(**_EXAMPLE_VALUES)
+
+
+class SatelliteDerivedWaterLine(msgspec.Struct, tag="sdw"):
+    id: Annotated[str, msgspec.Meta(description="Unique identifier for the waterline")]
+    geometry: Annotated[
+        LineString,
+        msgspec.Meta(
+            description="Geometry of the waterline, represented as a LineString"
+        ),
+    ]
+    determination_method: DeterminationMethod
+    determination_datetime: Annotated[
+        datetime.datetime | list[datetime.datetime],
+        msgspec.Meta(
+            description=(
+                "Timestamp(s) for when the waterline was determined. "
+                "'instantaneous' types require a single timestamp, 'composite' requires multiple."
+            )
+        ),
+    ]
+    type: WaterLineType
+    bbox: Annotated[
+        dict[str, float] | None,
+        msgspec.Meta(
+            description="Bounding box of the waterline in geographic coordinates"
+        ),
+    ] = None
+    quadkey: Annotated[
+        str | None,
+        msgspec.Meta(description="Quadkey representing the waterline's spatial tile"),
+    ] = None
+    source: Provider
+    crs: Annotated[
+        str | None,
+        msgspec.Meta(
+            description="Coordinate reference system for the geometry, e.g., 'EPSG:4326'"
+        ),
+    ] = None
+
+    def __post_init__(self):
+        if self.type == "instantaneous" and isinstance(
+            self.determination_datetime, list
+        ):
+            msg = (
+                "Instantaneous waterlines cannot have multiple determination datetimes."
+            )
+            raise ValueError(msg)
+        elif self.type == "composite" and not isinstance(
+            self.determination_datetime, list
+        ):
+            msg = "Composite waterlines must have multiple determination datetimes."
+            raise ValueError(msg)
+
+    @classmethod
+    def example(cls):
+        return cls(
+            id="cl32408s01tr00223948",
+            geometry=LineString(
+                [
+                    [4.287529606158882, 52.106643659044614],
+                    [4.266728801968574, 52.11926398930266],
+                ]
+            ),
+            determination_method="CoastSat",
+            determination_datetime=[
+                datetime.datetime(2024, 1, 1, 12, 0),
+                datetime.datetime(2024, 1, 15, 12, 0),
+            ],
+            type="composite",
+            bbox={
+                "xmin": 4.266728801968574,
+                "xmax": 4.287529606158882,
+                "ymin": 52.106643659044614,
+                "ymax": 52.11926398930266,
+            },
+            quadkey="020202113000",
+            source="Planetary Computer",
+            crs="EPSG:4326",
+        )
 
 
 ModelUnion = (

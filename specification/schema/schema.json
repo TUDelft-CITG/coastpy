@@ -1,0 +1,415 @@
+{
+    "anyOf": [
+        {
+            "$ref": "#/$defs/Transect"
+        },
+        {
+            "$ref": "#/$defs/TypologyTrainSample"
+        },
+        {
+            "$ref": "#/$defs/TypologyTestSample"
+        },
+        {
+            "$ref": "#/$defs/TypologyInferenceSample"
+        }
+    ],
+    "discriminator": {
+        "propertyName": "type",
+        "mapping": {
+            "transect": "#/$defs/Transect",
+            "typology": "#/$defs/TypologyTrainSample",
+            "typologytestsample": "#/$defs/TypologyTestSample",
+            "typologyinferencesample": "#/$defs/TypologyInferenceSample"
+        }
+    },
+    "$defs": {
+        "Transect": {
+            "title": "Transect",
+            "type": "object",
+            "properties": {
+                "type": {
+                    "enum": [
+                        "transect"
+                    ]
+                },
+                "transect_id": {
+                    "type": "string"
+                },
+                "geometry": {
+                    "type": "string",
+                    "description": "A WKT representation of a LineString"
+                },
+                "lon": {
+                    "anyOf": [
+                        {
+                            "type": "number"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "lat": {
+                    "anyOf": [
+                        {
+                            "type": "number"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "bearing": {
+                    "anyOf": [
+                        {
+                            "type": "number"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "osm_coastline_is_closed": {
+                    "anyOf": [
+                        {
+                            "type": "boolean"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "osm_coastline_length": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "utm_epsg": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "bbox": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "number"
+                            }
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "quadkey": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "continent": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "country": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "common_country_name": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "common_region_name": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                }
+            },
+            "required": [
+                "type",
+                "transect_id",
+                "geometry"
+            ]
+        },
+        "TypologyTrainSample": {
+            "title": "TypologyTrainSample",
+            "type": "object",
+            "properties": {
+                "type": {
+                    "enum": [
+                        "typology"
+                    ]
+                },
+                "transect": {
+                    "$ref": "#/$defs/Transect"
+                },
+                "user": {
+                    "type": "string"
+                },
+                "uuid": {
+                    "type": "string"
+                },
+                "datetime_created": {
+                    "type": "string"
+                },
+                "datetime_updated": {
+                    "type": "string"
+                },
+                "shore_type": {
+                    "enum": [
+                        "ice_or_tundra",
+                        "muddy_sediments",
+                        "no_sediment_or_shore_platform",
+                        "rocky_shore_platform_or_large_boulders",
+                        "sandy_gravel_or_small_boulder_sediments"
+                    ]
+                },
+                "coastal_type": {
+                    "enum": [
+                        "bedrock_plain",
+                        "cliffed_or_steep",
+                        "coral",
+                        "dune",
+                        "engineered_structures",
+                        "inlet",
+                        "moderately_sloped",
+                        "sediment_plain",
+                        "wetland"
+                    ]
+                },
+                "landform_type": {
+                    "enum": [
+                        "N/A",
+                        "barrier",
+                        "barrier_island",
+                        "barrier_system",
+                        "bay",
+                        "coral_island",
+                        "delta",
+                        "estuary",
+                        "headland",
+                        "inlet",
+                        "lagoon",
+                        "mainland_coast",
+                        "pocket_beach",
+                        "spit",
+                        "tombolo"
+                    ]
+                },
+                "is_built_environment": {
+                    "enum": [
+                        "N/A",
+                        "false",
+                        "true"
+                    ]
+                },
+                "has_defense": {
+                    "enum": [
+                        "N/A",
+                        "false",
+                        "true"
+                    ]
+                },
+                "is_challenging": {
+                    "type": "boolean"
+                },
+                "comment": {
+                    "type": "string"
+                },
+                "link": {
+                    "type": "string"
+                },
+                "confidence": {
+                    "type": "string"
+                },
+                "is_validated": {
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "type",
+                "transect",
+                "user",
+                "uuid",
+                "datetime_created",
+                "datetime_updated",
+                "shore_type",
+                "coastal_type",
+                "landform_type",
+                "is_built_environment",
+                "has_defense",
+                "is_challenging",
+                "comment",
+                "link",
+                "confidence",
+                "is_validated"
+            ]
+        },
+        "TypologyTestSample": {
+            "title": "TypologyTestSample",
+            "type": "object",
+            "properties": {
+                "type": {
+                    "enum": [
+                        "typologytestsample"
+                    ]
+                },
+                "train_sample": {
+                    "$ref": "#/$defs/TypologyTrainSample"
+                },
+                "pred_shore_type": {
+                    "enum": [
+                        "ice_or_tundra",
+                        "muddy_sediments",
+                        "no_sediment_or_shore_platform",
+                        "rocky_shore_platform_or_large_boulders",
+                        "sandy_gravel_or_small_boulder_sediments"
+                    ]
+                },
+                "pred_coastal_type": {
+                    "enum": [
+                        "bedrock_plain",
+                        "cliffed_or_steep",
+                        "coral",
+                        "dune",
+                        "engineered_structures",
+                        "inlet",
+                        "moderately_sloped",
+                        "sediment_plain",
+                        "wetland"
+                    ]
+                },
+                "pred_has_defense": {
+                    "enum": [
+                        "N/A",
+                        "false",
+                        "true"
+                    ]
+                },
+                "pred_is_built_environment": {
+                    "enum": [
+                        "N/A",
+                        "false",
+                        "true"
+                    ]
+                }
+            },
+            "required": [
+                "type",
+                "train_sample",
+                "pred_shore_type",
+                "pred_coastal_type",
+                "pred_has_defense",
+                "pred_is_built_environment"
+            ]
+        },
+        "TypologyInferenceSample": {
+            "title": "TypologyInferenceSample",
+            "type": "object",
+            "properties": {
+                "type": {
+                    "enum": [
+                        "typologyinferencesample"
+                    ]
+                },
+                "transect": {
+                    "$ref": "#/$defs/Transect"
+                },
+                "pred_shore_type": {
+                    "enum": [
+                        "ice_or_tundra",
+                        "muddy_sediments",
+                        "no_sediment_or_shore_platform",
+                        "rocky_shore_platform_or_large_boulders",
+                        "sandy_gravel_or_small_boulder_sediments"
+                    ]
+                },
+                "pred_coastal_type": {
+                    "enum": [
+                        "bedrock_plain",
+                        "cliffed_or_steep",
+                        "coral",
+                        "dune",
+                        "engineered_structures",
+                        "inlet",
+                        "moderately_sloped",
+                        "sediment_plain",
+                        "wetland"
+                    ]
+                },
+                "pred_has_defense": {
+                    "enum": [
+                        "N/A",
+                        "false",
+                        "true"
+                    ]
+                },
+                "pred_is_built_environment": {
+                    "enum": [
+                        "N/A",
+                        "false",
+                        "true"
+                    ]
+                }
+            },
+            "required": [
+                "type",
+                "transect",
+                "pred_shore_type",
+                "pred_coastal_type",
+                "pred_has_defense",
+                "pred_is_built_environment"
+            ]
+        }
+    }
+}
