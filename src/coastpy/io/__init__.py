@@ -4,9 +4,9 @@ from .partitioner import EqualSizePartitioner
 from .utils import name_data
 
 __all__ = [
+    "EqualSizePartitioner",
+    "STACQueryEngine",
+    "name_data",
     "write_block",
     "write_table",
-    "name_data",
-    "STACQueryEngine",
-    "EqualSizePartitioner",
 ]

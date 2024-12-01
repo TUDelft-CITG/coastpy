@@ -16,15 +16,17 @@ repos:
         exclude: '\.ipynb$'
       - id: sort-simple-yaml
 
-
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.1
+    # Ruff version.
+    rev: v0.8.1
     hooks:
       # Run the linter.
       - id: ruff
-        args: [ --fix ]
+        types_or: [ python, pyi ]
+        args: ["--fix", "--unsafe-fixes"]
       # Run the formatter.
       - id: ruff-format
+        types_or: [ python, pyi ]
 
   - repo: https://github.com/kynan/nbstripout
     rev: 0.7.1
