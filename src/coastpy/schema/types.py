@@ -276,15 +276,12 @@ class BaseModel(
 
         return s
 
-    def to_flat_dict(
-        self, parent_key="", sep=".", ignore_fields: list | None = None
-    ) -> dict:
+    def to_flat_dict(self, sep=".", ignore_fields: list | None = None) -> dict:
         """
-        Recursively flatten the instance into a dictionary with namespaced keys,
+        Flatten the instance into a dictionary with namespaced keys,
         using class-level tags for nested BaseModel fields.
 
         Args:
-            parent_key (str): The base key for namespacing nested fields.
             sep (str): Separator for nested keys.
             ignore_fields (list | None): Attributes to exclude from flattening.
 
@@ -294,59 +291,54 @@ class BaseModel(
         if ignore_fields is None:
             ignore_fields = ["bbox"]
 
-        items = []
+        def _extract_fields_with_tag(instance, tag=None):
+            """
+            Extracts fields from a BaseModel instance, optionally tagging keys.
 
-        for field_name in self.__defined_struct_fields__:
-            field_value = getattr(self, field_name, None)
+            Args:
+                instance (BaseModel): The BaseModel instance to process.
+                tag (str | None): Optional tag to prefix keys.
 
-            # Determine the prefix for this field
-            if isinstance(field_value, BaseModel):
-                # Use tag if available, otherwise fallback to field name
-                field_tag = getattr(
-                    field_value.__class__.__struct_config__, "tag", field_name
-                )
-                new_key = f"{parent_key}{sep}{field_tag}" if parent_key else field_tag
-                items.extend(
-                    field_value.to_flat_dict(
-                        new_key, sep=sep, ignore_fields=ignore_fields
-                    ).items()
-                )
-            elif field_name in ignore_fields and isinstance(field_value, dict):
+            Returns:
+                dict: Extracted fields with appropriate tags.
+            """
+            flat_data = {}
+
+            for field_name in instance.__defined_struct_fields__:
+                field_value = getattr(instance, field_name, None)
+
+                # Handle nested BaseModel instances
+                if isinstance(field_value, BaseModel):
+                    # Use the nested BaseModel's tag
+                    nested_tag = getattr(
+                        field_value.__class__.__struct_config__, "tag", field_name
+                    )
+                    nested_data = _extract_fields_with_tag(field_value, tag=nested_tag)
+                    flat_data.update(nested_data)
+
                 # Handle special attributes (e.g., bbox)
-                new_key = f"{parent_key}{sep}{field_name}" if parent_key else field_name
-                items.append((new_key, field_value))
-            elif isinstance(field_value, dict):
-                # Flatten dictionaries (non-special attributes)
-                new_key = f"{parent_key}{sep}{field_name}" if parent_key else field_name
-                for k, v in field_value.items():
-                    nested_key = f"{new_key}{sep}{k}"
-                    items.extend(BaseModel._flatten_primitive(nested_key, v).items())
-            elif isinstance(field_value, list):
-                # Flatten lists
-                new_key = f"{parent_key}{sep}{field_name}" if parent_key else field_name
-                for i, v in enumerate(field_value):
-                    nested_key = f"{new_key}{sep}{i}"
-                    items.extend(BaseModel._flatten_primitive(nested_key, v).items())
-            else:
+                elif field_name in ignore_fields and isinstance(field_value, dict):
+                    flat_data[field_name] = field_value
+
+                # Handle dictionaries (non-special attributes)
+                elif isinstance(field_value, dict):
+                    for k, v in field_value.items():
+                        flat_data[f"{field_name}{sep}{k}"] = v
+
+                # Handle lists
+                elif isinstance(field_value, list):
+                    for i, v in enumerate(field_value):
+                        flat_data[f"{field_name}{sep}{i}"] = v
+
                 # Handle primitive values
-                new_key = f"{parent_key}{sep}{field_name}" if parent_key else field_name
-                items.append((new_key, field_value))
+                else:
+                    key = f"{tag}{sep}{field_name}" if tag else field_name
+                    flat_data[key] = field_value
 
-        return dict(items)
+            return flat_data
 
-    @staticmethod
-    def _flatten_primitive(key, value) -> dict:
-        """Helper to handle flattening of primitive values, incorporating tags for nested structures."""
-        if isinstance(value, BaseModel):
-            # Use the tag for nested structures if available
-            field_tag = getattr(value.__class__.__struct_config__, "tag", key)
-            return value.to_flat_dict(parent_key=field_tag)
-        elif isinstance(value, dict):
-            return {f"{key}.{k}": v for k, v in value.items()}
-        elif isinstance(value, list):
-            return {f"{key}.{i}": v for i, v in enumerate(value)}
-        else:
-            return {key: value}
+        # Extract fields from the current instance
+        return _extract_fields_with_tag(self)
 
     def encode(self) -> bytes:
         """Encode instance as JSON bytes."""

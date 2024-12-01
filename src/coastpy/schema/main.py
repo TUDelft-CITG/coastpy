@@ -43,15 +43,15 @@ if __name__ == "__main__":
 
     # fr = transect.to_frame2()
     fr2 = train_sample.to_frame(geometry="transect.geometry", bbox="transect.bbox")
+    test_sample = TypologyTestSample.example()
+    fr3 = test_sample.to_frame()
+
     d1 = train_sample.to_dict()
     d2 = train_sample.to_dict(flatten=True)
     d3 = TypologyTrainSample.from_dict(d1)
     d4 = TypologyTrainSample.from_dict(d2)
     d5 = TypologyTrainSample.from_frame(fr2)
     empty_frame = TypologyTrainSample.null().empty_frame(geometry="transect.geometry")
-
-    test_sample = TypologyTestSample.example()
-    fr3 = test_sample.to_frame()
 
     transect_nulls = Transect.null()
     train_nulls = TypologyTrainSample.null()
