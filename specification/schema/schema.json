@@ -11,6 +11,9 @@
         },
         {
             "$ref": "#/$defs/TypologyInferenceSample"
+        },
+        {
+            "$ref": "#/$defs/SatelliteDerivedWaterLine"
         }
     ],
     "discriminator": {
@@ -19,7 +22,8 @@
             "transect": "#/$defs/Transect",
             "typology": "#/$defs/TypologyTrainSample",
             "typologytestsample": "#/$defs/TypologyTestSample",
-            "typologyinferencesample": "#/$defs/TypologyInferenceSample"
+            "typologyinferencesample": "#/$defs/TypologyInferenceSample",
+            "sdw": "#/$defs/SatelliteDerivedWaterLine"
         }
     },
     "$defs": {
@@ -409,6 +413,121 @@
                 "pred_coastal_type",
                 "pred_has_defense",
                 "pred_is_built_environment"
+            ]
+        },
+        "SatelliteDerivedWaterLine": {
+            "title": "SatelliteDerivedWaterLine",
+            "type": "object",
+            "properties": {
+                "type": {
+                    "enum": [
+                        "sdw"
+                    ]
+                },
+                "id": {
+                    "description": "Unique identifier for the waterline",
+                    "type": "string"
+                },
+                "geometry": {
+                    "type": "string",
+                    "description": "Geometry of the waterline, represented as a LineString"
+                },
+                "determination_method": {
+                    "description": "Methods or tools used to determine waterlines, including algorithms and software",
+                    "enum": [
+                        "AIModel",
+                        "Cassie",
+                        "CoastSat",
+                        "ManualDigitization",
+                        "ShorelineMonitor",
+                        "Thresholding"
+                    ]
+                },
+                "determination_datetime": {
+                    "description": "Timestamp(s) for when the waterline was determined. 'instantaneous' types require a single timestamp, 'composite' requires multiple.",
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    ]
+                },
+                "waterline_type": {
+                    "description": "Types of waterlines: 'instantaneous' represents single moment waterlines (e.g., derived from one image), while 'composite' refers to aggregated waterlines from multiple images.",
+                    "enum": [
+                        "composite",
+                        "instantaneous"
+                    ]
+                },
+                "bbox": {
+                    "description": "Bounding box of the waterline in geographic coordinates",
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "number"
+                            }
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "quadkey": {
+                    "description": "Quadkey representing the waterline's spatial tile",
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "source": {
+                    "anyOf": [
+                        {
+                            "description": "Organizations or entities providing coastal monitoring data",
+                            "enum": [
+                                "Airbus",
+                                "CoastSat",
+                                "Deltares",
+                                "Maxar",
+                                "Planetary Computer",
+                                "USGS"
+                            ]
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "crs": {
+                    "description": "Coordinate reference system for the geometry, e.g., 'EPSG:4326'",
+                    "anyOf": [
+                        {},
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                }
+            },
+            "required": [
+                "type",
+                "id",
+                "geometry",
+                "determination_method",
+                "determination_datetime",
+                "waterline_type"
             ]
         }
     }

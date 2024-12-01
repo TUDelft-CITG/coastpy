@@ -50,6 +50,7 @@ DeterminationMethod = Annotated[
         "ManualDigitization",
         "AIModel",
         "Thresholding",
+        "FieldSurvey",
     ],
     Meta(
         description="Methods or tools used to determine waterlines, including algorithms and software"

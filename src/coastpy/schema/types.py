@@ -702,7 +702,7 @@ class SatelliteDerivedWaterLine(msgspec.Struct, tag="sdw"):
             )
         ),
     ]
-    type: WaterLineType
+    waterline_type: WaterLineType
     bbox: Annotated[
         dict[str, float] | None,
         msgspec.Meta(
@@ -713,23 +713,23 @@ class SatelliteDerivedWaterLine(msgspec.Struct, tag="sdw"):
         str | None,
         msgspec.Meta(description="Quadkey representing the waterline's spatial tile"),
     ] = None
-    source: Provider
+    source: Provider | None = None
     crs: Annotated[
-        str | None,
+        Any | None,
         msgspec.Meta(
             description="Coordinate reference system for the geometry, e.g., 'EPSG:4326'"
         ),
     ] = None
 
     def __post_init__(self):
-        if self.type == "instantaneous" and isinstance(
+        if self.waterline_type == "instantaneous" and isinstance(
             self.determination_datetime, list
         ):
             msg = (
                 "Instantaneous waterlines cannot have multiple determination datetimes."
             )
             raise ValueError(msg)
-        elif self.type == "composite" and not isinstance(
+        elif self.waterline_type == "composite" and not isinstance(
             self.determination_datetime, list
         ):
             msg = "Composite waterlines must have multiple determination datetimes."
@@ -750,7 +750,7 @@ class SatelliteDerivedWaterLine(msgspec.Struct, tag="sdw"):
                 datetime.datetime(2024, 1, 1, 12, 0),
                 datetime.datetime(2024, 1, 15, 12, 0),
             ],
-            type="composite",
+            waterline_type="composite",
             bbox={
                 "xmin": 4.266728801968574,
                 "xmax": 4.287529606158882,
@@ -763,6 +763,80 @@ class SatelliteDerivedWaterLine(msgspec.Struct, tag="sdw"):
         )
 
 
+import datetime
+from typing import Annotated
+
+import msgspec
+from shapely.geometry import LineString
+
+
+class SatelliteDerivedShorelinePosition(msgspec.Struct, tag="sdsp"):
+    sdw_id: Annotated[
+        str,
+        msgspec.Meta(
+            description="Unique identifier for the associated SatelliteDerivedWaterLine (SDW)"
+        ),
+    ]
+    transect_id: Annotated[
+        str, msgspec.Meta(description="Unique identifier for the associated transect")
+    ]
+    geometry: Annotated[
+        Point,
+        msgspec.Meta(description="Point geometry representing the shoreline position"),
+    ]
+    determination_datetime: Annotated[
+        datetime.datetime,
+        msgspec.Meta(
+            description="Timestamp for when the shoreline position was determined"
+        ),
+    ]
+    waterline_type: WaterLineType
+    tidal_height: Annotated[
+        float | None,
+        msgspec.Meta(
+            description="Tidal height at the shoreline position (required for instantaneous waterlines)"
+        ),
+    ] = None
+    slope: Annotated[
+        float | None,
+        msgspec.Meta(
+            description="Slope of the transect at the shoreline position (required for instantaneous waterlines)"
+        ),
+    ] = None
+
+    def __post_init__(self):
+        # Fetch associated SDW for validation (pseudo-code, assumes fetching is possible)
+        waterline_type = "instantaneous"  # Replace with actual fetch logic for SDW
+        if waterline_type == "instantaneous" and (
+            self.tidal_height is None or self.slope is None
+        ):
+            msg = (
+                "Instantaneous waterlines require tidal_height and slope to be defined."
+            )
+            raise ValueError(msg)
+        if waterline_type == "composite" and (
+            self.tidal_height is not None or self.slope is not None
+        ):
+            msg = "Composite waterlines cannot have tidal_height or slope."
+            raise ValueError(msg)
+
+    @classmethod
+    def example(cls):
+        return cls(
+            sdw_id="cl32408s01tr00223948",  # Reference to an example SDW
+            transect_id="transect_123",  # Reference to an example transect
+            geometry=Point(4.277131, 52.112953),
+            determination_datetime=datetime.datetime(2024, 1, 15, 12, 0),
+            waterline_type="instantaneous",
+            tidal_height=2.5,
+            slope=0.15,
+        )
+
+
 ModelUnion = (
-    Transect | TypologyTrainSample | TypologyTestSample | TypologyInferenceSample
+    Transect
+    | TypologyTrainSample
+    | TypologyTestSample
+    | TypologyInferenceSample
+    | SatelliteDerivedWaterLine
 )
