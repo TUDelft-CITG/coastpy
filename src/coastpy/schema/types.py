@@ -684,7 +684,7 @@ class TypologyInferenceSample(BaseModel, tag="typologyinferencesample"):
         return cls(**_EXAMPLE_VALUES)
 
 
-class SatelliteDerivedWaterLine(msgspec.Struct, tag="sdw"):
+class SatelliteDerivedWaterLine(BaseModel, tag="sdw"):
     id: Annotated[str, msgspec.Meta(description="Unique identifier for the waterline")]
     geometry: Annotated[
         LineString,
@@ -763,14 +763,7 @@ class SatelliteDerivedWaterLine(msgspec.Struct, tag="sdw"):
         )
 
 
-import datetime
-from typing import Annotated
-
-import msgspec
-from shapely.geometry import LineString
-
-
-class SatelliteDerivedShorelinePosition(msgspec.Struct, tag="sdsp"):
+class SatelliteDerivedShorelinePosition(BaseModel, tag="sdsp"):
     sdw_id: Annotated[
         str,
         msgspec.Meta(
@@ -788,6 +781,12 @@ class SatelliteDerivedShorelinePosition(msgspec.Struct, tag="sdsp"):
         datetime.datetime,
         msgspec.Meta(
             description="Timestamp for when the shoreline position was determined"
+        ),
+    ]
+    chainage: Annotated[
+        float,
+        msgspec.Meta(
+            description="Distance along the transect from the start point to the shoreline position"
         ),
     ]
     waterline_type: WaterLineType
@@ -827,6 +826,7 @@ class SatelliteDerivedShorelinePosition(msgspec.Struct, tag="sdsp"):
             transect_id="transect_123",  # Reference to an example transect
             geometry=Point(4.277131, 52.112953),
             determination_datetime=datetime.datetime(2024, 1, 15, 12, 0),
+            chainage=123.45,
             waterline_type="instantaneous",
             tidal_height=2.5,
             slope=0.15,
@@ -839,4 +839,5 @@ ModelUnion = (
     | TypologyTestSample
     | TypologyInferenceSample
     | SatelliteDerivedWaterLine
+    | SatelliteDerivedShorelinePosition
 )

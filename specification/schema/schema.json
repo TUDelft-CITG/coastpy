@@ -438,6 +438,7 @@
                         "AIModel",
                         "Cassie",
                         "CoastSat",
+                        "FieldSurvey",
                         "ManualDigitization",
                         "ShorelineMonitor",
                         "Thresholding"
