@@ -1,4 +1,3 @@
-import copy
 import itertools
 import logging
 import operator
@@ -77,42 +76,36 @@ def stackstac_to_dataset(stack: xr.DataArray) -> xr.Dataset:
 
 def read_snapshot(collection, columns=None, storage_options=None):
     """
-    Reads the extent of items from a STAC collection and returns a GeoDataFrame with specified columns.
+    Reads the extent of items from a STAC collection and returns a GeoDataFrame.
 
     Args:
         collection: A STAC collection object that contains assets.
-        columns: List of columns to return. Default is ["geometry", "assets", "href"].
-        storage_options: Storage options to pass to fsspec. Default is None.
+        columns: List of columns to return. If None, all columns are read.
+        storage_options: Storage options to pass to fsspec. Default is {"account_name": "coclico"}.
 
     Returns:
-        GeoDataFrame containing the specified columns.
+        GeoDataFrame containing the requested columns. The 'href' column is derived from the 'assets' column if included.
     """
     if storage_options is None:
         storage_options = {"account_name": "coclico"}
 
-    # Set default columns
-    if columns is None:
-        columns = ["geometry", "assets", "href"]
-
-    columns_ = copy.deepcopy(columns)
-
-    # Ensure 'assets' is always in the columns
-    if "assets" not in columns:
-        columns.append("assets")
-        logger.debug("'assets' column added to the list of columns")
-
-    # Open the parquet file and read the specified columns
+    # Get the Parquet file path
     href = collection.assets["geoparquet-stac-items"].href
-    with fsspec.open(href, mode="rb", **storage_options) as f:
-        extents = gpd.read_parquet(f, columns=[c for c in columns if c != "href"])
 
-    # If 'href' is requested, extract it from the 'assets' column
-    if "href" in columns:
+    # Read the GeoParquet file
+    with fsspec.open(href, mode="rb", **storage_options) as f:
+        extents = gpd.read_parquet(f, columns=columns)  # Pass None to read all columns
+
+    # If 'href' is requested, derive it from the 'assets' column
+    if columns is None or "href" in columns:
+        if "assets" not in extents.columns:
+            msg = "The 'assets' column is required to extract 'href'."
+            raise ValueError(msg)
         extents["href"] = extents["assets"].apply(lambda x: x["data"]["href"])
         logger.debug("'href' column extracted from 'assets'")
 
-    # Drop 'assets' if it was not originally requested
-    if "assets" not in columns_:
+    # Drop 'assets' column if it wasn't explicitly requested
+    if columns is not None and "assets" not in columns:
         extents = extents.drop(columns=["assets"])
         logger.debug("'assets' column dropped from the GeoDataFrame")
 
