@@ -4,8 +4,16 @@ Python tools for cloud-native coastal analytics.
 
 ## Installation
 
+If you have all GDAL dependencies installed correctly you can install with pip:
+
 ```bash
-$ pip install coastpy
+pip install coastpy
+```
+
+although it's probably easier to install with conda:
+
+```bash
+conda env create -f environment.yaml
 ```
 
 ## Data
