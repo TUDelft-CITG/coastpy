@@ -1,4 +1,3 @@
-import copy
 import json
 import logging
 import pathlib
@@ -256,50 +255,6 @@ def name_data(
         return f"{prefix}/{filename}"
 
     return filename
-
-
-def read_items_extent(collection, columns=None, storage_options=None):
-    """
-    Reads the extent of items from a STAC collection and returns a GeoDataFrame with specified columns.
-
-    Args:
-        collection: A STAC collection object that contains assets.
-        columns: List of columns to return. Default is ["geometry", "assets", "href"].
-        storage_options: Storage options to pass to fsspec. Default is None.
-
-    Returns:
-        GeoDataFrame containing the specified columns.
-    """
-    if storage_options is None:
-        storage_options = {}
-
-    # Set default columns
-    if columns is None:
-        columns = ["geometry", "assets", "href"]
-
-    columns_ = copy.deepcopy(columns)
-
-    # Ensure 'assets' is always in the columns
-    if "assets" not in columns:
-        columns.append("assets")
-        logger.debug("'assets' column added to the list of columns")
-
-    # Open the parquet file and read the specified columns
-    href = collection.assets["geoparquet-stac-items"].href
-    with fsspec.open(href, mode="rb", **storage_options) as f:
-        extents = gpd.read_parquet(f, columns=[c for c in columns if c != "href"])
-
-    # If 'href' is requested, extract it from the 'assets' column
-    if "href" in columns:
-        extents["href"] = extents["assets"].apply(lambda x: x["data"]["href"])
-        logger.debug("'href' column extracted from 'assets'")
-
-    # Drop 'assets' if it was not originally requested
-    if "assets" not in columns_:
-        extents = extents.drop(columns=["assets"])
-        logger.debug("'assets' column dropped from the GeoDataFrame")
-
-    return extents
 
 
 def write_log_entry(

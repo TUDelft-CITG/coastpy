@@ -7,7 +7,7 @@ import pystac
 import shapely
 from shapely.wkb import loads as wkb_loads
 
-from coastpy.io.utils import read_items_extent
+from coastpy.stac.utils import read_snapshot
 
 
 class BaseQueryEngine:
@@ -94,7 +94,7 @@ class STACQueryEngine(BaseQueryEngine):
         columns: list[str] | None = None,
     ) -> None:
         super().__init__(storage_backend=storage_backend)
-        self.extents = read_items_extent(
+        self.extents = read_snapshot(
             stac_collection, columns=["geometry", "assets", "proj:epsg", "href"]
         )
         self.proj_epsg = self.extents["proj:epsg"].unique().item()
