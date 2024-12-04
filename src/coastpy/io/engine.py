@@ -95,7 +95,7 @@ class STACQueryEngine(BaseQueryEngine):
     ) -> None:
         super().__init__(storage_backend=storage_backend)
         self.extents = read_snapshot(
-            stac_collection, columns=["geometry", "assets", "proj:epsg", "href"]
+            stac_collection, columns=["geometry", "assets", "proj:epsg"], add_href=True
         )
         self.proj_epsg = self.extents["proj:epsg"].unique().item()
 

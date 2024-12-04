@@ -74,39 +74,35 @@ def stackstac_to_dataset(stack: xr.DataArray) -> xr.Dataset:
     return ds
 
 
-def read_snapshot(collection, columns=None, storage_options=None):
+def read_snapshot(collection, columns=None, add_href=True, storage_options=None):
     """
-    Reads the extent of items from a STAC collection and returns a GeoDataFrame.
+    Reads the extent of items from a STAC collection and returns a GeoDataFrame with specified columns.
 
     Args:
         collection: A STAC collection object that contains assets.
-        columns: List of columns to return. If None, all columns are read.
+        columns: List of columns to return. If None, all columns will be read.
+        add_href: Boolean indicating whether to extract and add the 'href' column from 'assets'. Default is True.
         storage_options: Storage options to pass to fsspec. Default is {"account_name": "coclico"}.
 
     Returns:
-        GeoDataFrame containing the requested columns. The 'href' column is derived from the 'assets' column if included.
+        GeoDataFrame containing the specified columns.
     """
+    # Set default storage options
     if storage_options is None:
         storage_options = {"account_name": "coclico"}
 
-    # Get the Parquet file path
+    if columns is not None and "assets" not in columns:
+        columns.append("assets")
+
+    # Open the Parquet file and read the specified columns
     href = collection.assets["geoparquet-stac-items"].href
-
-    # Read the GeoParquet file
     with fsspec.open(href, mode="rb", **storage_options) as f:
-        extents = gpd.read_parquet(f, columns=columns)  # Pass None to read all columns
+        extents = gpd.read_parquet(f, columns=columns)
 
-    # If 'href' is requested, derive it from the 'assets' column
-    if columns is None or "href" in columns:
+    if add_href:
         if "assets" not in extents.columns:
             msg = "The 'assets' column is required to extract 'href'."
             raise ValueError(msg)
         extents["href"] = extents["assets"].apply(lambda x: x["data"]["href"])
-        logger.debug("'href' column extracted from 'assets'")
-
-    # Drop 'assets' column if it wasn't explicitly requested
-    if columns is not None and "assets" not in columns:
-        extents = extents.drop(columns=["assets"])
-        logger.debug("'assets' column dropped from the GeoDataFrame")
 
     return extents
