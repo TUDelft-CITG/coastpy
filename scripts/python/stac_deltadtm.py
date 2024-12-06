@@ -78,6 +78,8 @@ class PathParser:
     name: str | None = None
     stac_item_id: str | None = None
 
+    _base_href = f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+
     def __post_init__(self) -> None:
         stripped_path = re.sub(r"^\w+://", "", self.path)
         split_path = stripped_path.rstrip("/").split("/")
@@ -86,6 +88,7 @@ class PathParser:
         self.name = split_path[-1]
         self.prefix = "/".join(split_path[1:-1])
         self.stac_item_id = self.name.rsplit(".", 1)[0]
+        self.href = f"{self._base_href}/{self.container}/{self.prefix}/{self.name}"
 
 
 def create_collection(
@@ -268,7 +271,7 @@ if __name__ == "__main__":
         item = create_asset(
             item,
             ASSET_TITLE,
-            pp.path,
+            pp.href,
             nodata=NODATA_VALUE,
             resolution=RESOLUTION,
             data_type=raster.DataType.FLOAT32,
