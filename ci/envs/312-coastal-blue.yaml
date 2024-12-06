@@ -1,4 +1,4 @@
-name: coastal-full
+name: coastal-blue
 channels:
   - conda-forge
   - defaults
@@ -184,15 +184,15 @@ dependencies:
   # Machine learning libraries
   - wandb
   - xgboost
-  # The packages below are heavy, so they are commented
+  # The ML packages below are tricky (CUDA), so they are commented
   # - dask-ml
-  - lightning
-  - pytorch::pytorch
-  - tensorboard
+  # - lightning
+  # - pytorch::pytorch
+  # - tensorboard
   # - timm>=0.9
   # - torchgeo
-  - pytorch::torchvision
-  - albumentations
+  # - pytorch::torchvision
+  # - albumentations
 
   - pip:
       - antimeridian

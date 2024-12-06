@@ -184,15 +184,15 @@ dependencies:
   # Machine learning libraries
   - wandb
   - xgboost
-  # The ml packages below are heavy, so they are commented
+  # Some of the ML libs below are tricky, so they are commented
   # - dask-ml
-  # - lightning
-  # - pytorch::pytorch
+  - lightning
+  - pytorch::pytorch
   # - tensorboard
-  # - timm>=0.9
-  # - torchgeo
-  # - pytorch::torchvision
-  # - albumentations
+  - timm>=0.9
+  - torchgeo
+  - pytorch::torchvision
+  - albumentations
 
   - pip:
       - antimeridian
