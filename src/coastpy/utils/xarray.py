@@ -1,10 +1,122 @@
 import warnings
+from typing import Literal
 
 import numpy as np
+import rioxarray  # noqa
 import xarray as xr
 from affine import Affine
 from rasterio.enums import Resampling
 from shapely import Polygon
+
+
+def get_nodata(
+    da: xr.DataArray | xr.Dataset, band: str | None = None
+) -> float | int | None:
+    """
+    Find the nodata value in an Xarray DataArray or Dataset.
+
+    This function checks for the nodata value in the following order:
+    1. `nodata` attribute.
+    2. `_FillValue` attribute.
+    3. `rio.nodata` (if using rioxarray).
+
+    Args:
+        da (xr.DataArray | xr.Dataset): Input Xarray object.
+        band (str, optional): Band name to check if input is a Dataset.
+
+    Returns:
+        float | None: The nodata value if found, otherwise None.
+    """
+    # Get the target DataArray
+    if isinstance(da, xr.Dataset):
+        if band is None:
+            msg = "For Dataset input, 'band' must be specified."
+            raise ValueError(msg)
+        if band not in da:
+            msg = f"Band '{band}' not found in the Dataset."
+            raise ValueError(msg)
+        da = da[band]
+
+    # Check for 'nodata' in attrs
+    nodata_value = da.attrs.get("nodata", None)
+    if nodata_value is not None:
+        return nodata_value
+
+    # Check for '_FillValue' in attrs
+    nodata_value = da.attrs.get("_FillValue", None)
+    if nodata_value is not None:
+        return nodata_value
+
+    # Check for rioxarray nodata
+    try:
+        nodata_value = da.rio.nodata
+        if nodata_value is not None:
+            return nodata_value
+    except AttributeError:
+        # rioxarray is not available
+        pass
+
+    # Raise a warning if no nodata value is found
+    warnings.warn(  # noqa: B028
+        "No nodata value found in 'nodata', '_FillValue', or 'rio.nodata'.",
+        UserWarning,
+    )
+    return None
+
+
+def set_nodata(
+    da: xr.DataArray | xr.Dataset,
+    nodata_value: float | int | None,
+    band: str | None = None,
+    target: Literal["nodata", "_FillValue"] = "nodata",
+) -> xr.DataArray | xr.Dataset:
+    """
+    Set the nodata value for an Xarray DataArray or Dataset.
+
+    This function sets the nodata value in the specified attribute
+    (`nodata` or `_FillValue`) and attempts to set `rio.nodata` for compatibility
+    with rioxarray.
+
+    Args:
+        da (xr.DataArray | xr.Dataset): Input Xarray object to modify.
+        nodata_value (float | int | None): The nodata value to set. Use `None` to clear.
+        band (str, optional): Band name to modify if input is a Dataset.
+        target (str, optional): Target attribute to set, either 'nodata' (default) or '_FillValue'.
+
+    Returns:
+        xr.DataArray | xr.Dataset: The modified DataArray or Dataset.
+    """
+    if target not in ["nodata", "_FillValue"]:
+        msg = "The target parameter must be either 'nodata' or '_FillValue'."
+        raise ValueError(msg)
+
+    # Handle Dataset case
+    if isinstance(da, xr.Dataset):
+        if band is None:
+            msg = "For Dataset input, 'band' must be specified."
+            raise ValueError(msg)
+        if band not in da:
+            msg = f"Band '{band}' not found in the Dataset."
+            raise ValueError(msg)
+        da = da[band]
+
+    # Set the specified attribute
+    if nodata_value is not None:
+        da.attrs[target] = nodata_value
+    else:
+        da.attrs.pop(target, None)  # Remove the attribute if nodata_value is None
+
+    # Always attempt to set rioxarray nodata
+    try:
+        if nodata_value is not None:
+            da.rio.write_nodata(nodata_value, inplace=True)
+        else:
+            da.rio.update_attrs({"nodata": None}, inplace=True)
+    except AttributeError:
+        # rioxarray is not available or not in use
+        pass
+
+    return da
 
 
 def make_template(data: xr.DataArray) -> xr.DataArray:
