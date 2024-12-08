@@ -48,6 +48,7 @@ def generate(
     datetime_column=None,
     infer_datetime=InferDatetimeOptions.no,
     count_rows=True,
+    asset_href=None,
     asset_key="data",
     asset_extra_fields=None,
     proj=True,
@@ -252,6 +253,8 @@ def generate(
         )
 
     if asset_key:
+        if asset_href is not None:
+            uri = asset_href
         asset = pystac.asset.Asset(
             # NOTE: consider using the https protocol; makes it easier for user to download
             # to_https_url(items[0].assets["data"].href, storage_options={"account_name": "coclico"})

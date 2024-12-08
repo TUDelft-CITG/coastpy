@@ -16,7 +16,7 @@ from shapely.validation import make_valid
 
 from coastpy.utils.dask import silence_shapely_warnings
 
-BUFFER_SIZE = 15000
+BUFFER_SIZE = 500
 TOLERANCE = 100
 MIN_COASTLINE_LENGTH = 0
 
@@ -29,6 +29,7 @@ OSM_COASTLINE_SAMPLE_URI = (
 UTM_GRID_URI = "az://public/utm_grid.parquet"
 
 PRC_EPSG = 3857
+DST_CRS = 4326
 
 STORAGE_URLPATH = (
     f"az://coastal-zone/release/{RELEASE}/coastal_zone_{BUFFER_SIZE}m.parquet"
@@ -454,6 +455,7 @@ if __name__ == "__main__":
     buffer = buffer[
         (buffer.geom_type == "Polygon") | (buffer.geom_type == "MultiPolygon")
     ]
+    buffer = buffer.to_crs(DST_CRS)
 
     logging.info(f"Writing buffer to {STORAGE_URLPATH}..")
     with fsspec.open(STORAGE_URLPATH, mode="wb", **storage_options) as f:

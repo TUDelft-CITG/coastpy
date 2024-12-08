@@ -23,110 +23,55 @@ load_dotenv()
 
 # Get the SAS token and storage account name from environment variables
 sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-storage_account_name = "coclico"
-storage_options = {"account_name": storage_account_name, "credential": sas_token}
+STORAGE_ACCOUNT_NAME = "coclico"
+storage_options = {"account_name": STORAGE_ACCOUNT_NAME, "credential": sas_token}
 
 # Container and URI configuration
-CONTAINER_NAME = "gcts"
-RELEASE_DATE = "2024-08-02"
+CONTAINER_NAME = "coastal-zone"
+RELEASE_DATE = "2024-12-08"
 PREFIX = f"release/{RELEASE_DATE}"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
 PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 LICENSE = "CC-BY-4.0"
 
 # Collection information
-COLLECTION_ID = "gcts"
-COLLECTION_TITLE = "Global Coastal Transect System (GCTS)"
-
-# Transect and zoom configuration
-TRANSECT_LENGTH = 2000
-ZOOM = 9
+COLLECTION_ID = "coastal-zone"
+COLLECTION_TITLE = "Coastal Zone"
 
 DESCRIPTION = """
-Cross-shore coastal transects are essential to coastal monitoring, offering a consistent
-reference line to measure coastal change, while providing a robust foundation to map
-coastal characteristics and derive coastal statistics thereof. The Global Coastal Transect
-System consists of more than 11 million cross-shore coastal transects uniformly spaced at
-100-m intervals alongshore, for all OpenStreetMap coastlines that are longer than 5 kilometers.
-The dataset is more extensively described Calkoen et al., 2024. "Enabling Coastal Analytics
-at Planetary Scale" available [here](https://doi.org/10.1016/j.envsoft.2024.106257).
+The Coastal Zone dataset provides a vectorized representation of coastal zones at multiple buffer distances.
+It is derived from a generalized version of the OpenStreetMap coastline (2023-02) and serves as a valuable
+tool for masking other datasets or for spatial analysis in coastal regions.
+
+This STAC collection includes multiple layers, each corresponding to a specific buffer distance:
+500m, 1000m, 2000m, 5000m, 10000m, and 15000m. The buffer distance defines the zone's extent, with the
+total width being twice the buffer distance (e.g., a 5000m buffer results in a zone 10km wide).
+
+Each layer in the collection is stored as a separate item and can be filtered using the `buffer_size`
+field in the item's properties. These layers contain only the geometry, enabling seamless integration with
+other geospatial data.
+
+Please consider the following citation when using this dataset:
+
+Floris Reinier Calkoen, Arjen Pieter Luijendijk, Kilian Vos, Etiënne Kras, Fedor Baart,
+Enabling coastal analytics at planetary scale, Environmental Modelling & Software, 2024,
+106257, ISSN 1364-8152, https://doi.org/10.1016/j.envsoft.2024.106257.
+(https://www.sciencedirect.com/science/article/pii/S1364815224003189)
+
 """
-# Asset details
-ASSET_TITLE = "GCTS"
-ASSET_DESCRIPTION = f"Parquet dataset with coastal transects ({TRANSECT_LENGTH} m) at 100 m alongshore resolution for this region."
+
+ASSET_TITLE = "Coastal Zone"
+ASSET_DESCRIPTION = (
+    "Parquet dataset with coastal zone geometries for multiple buffer distances."
+)
 
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 
 COLUMN_DESCRIPTIONS = [
     {
-        "name": "transect_id",
-        "type": "string",
-        "description": "A unique identifier for each transect, constructed from three key components: the 'coastline_id', 'segment_id', and 'interpolated_distance'. The 'coastline_id' corresponds to the FID in OpenStreetMap (OSM) and is prefixed with 'cl'. The 'segment_id' indicates the segment of the OSM coastline split by a UTM grid, prefixed with 's'. The 'interpolated_distance' represents the distance from the starting point of the coastline to the transect, interpolated along the segment, and is prefixed with 'tr'. The complete structure is 'cl[coastline_id]s[segment_id]tr[interpolated_distance]', exemplified by 'cl32946s04tr08168547'. This composition ensures each transect name is a distinct and informative representation of its geographical and spatial attributes.",
-    },
-    {
-        "name": "lon",
-        "type": "float",
-        "description": "Longitude of the transect origin.",
-    },
-    {
-        "name": "lat",
-        "type": "float",
-        "description": "Latitude of the transect origin.",
-    },
-    {
-        "name": "bearing",
-        "type": "float",
-        "description": "North bearing of the transect from the landward side in degrees, with the north as reference.",
-    },
-    {
         "name": "geometry",
         "type": "byte_array",
         "description": "Well-Known Binary (WKB) representation of the transect as a linestring geometry.",
-    },
-    {
-        "name": "osm_coastline_is_closed",
-        "type": "bool",
-        "description": "Indicates whether the source OpenStreetMap (OSM) coastline, from which the transects were derived, forms a closed loop. A value of 'true' suggests that the coastline represents an enclosed area, such as an island.",
-    },
-    {
-        "name": "osm_coastline_length",
-        "type": "int32",
-        "description": "Represents the total length of the source OpenStreetMap (OSM) coastline, that is summed across various UTM regions. It reflects the aggregate length of the original coastline from which the transects are derived.",
-    },
-    {
-        "name": "utm_epsg",
-        "type": "int32",
-        "description": "EPSG code representing the UTM Coordinate Reference System for the transect.",
-    },
-    {
-        "name": "bbox",
-        "type": "struct<minx: double, miny: double, maxx: double, maxy: double>",
-        "description": "Bounding box of the transect geometry, given by minimum and maximum coordinates in x (longitude) and y (latitude).",
-    },
-    {
-        "name": "quadkey",
-        "type": "string",
-        "description": "QuadKey corresponding to the transect origin location at zoom 12, following the Bing Maps Tile System for spatial indexing.",
-    },
-    {
-        "name": "continent",
-        "type": "string",
-        "description": "Name of the continent in which the transect is located.",
-    },
-    {
-        "name": "country",
-        "type": "string",
-        "description": "ISO alpha-2 country code for the country in which the transect is located. The country data are extracted from Overture Maps (divisions).",
-    },
-    {
-        "name": "common_country_name",
-        "type": "string",
-        "description": "Common country name (EN) in which the transect is located. The country data are extracted from Overture Maps (divisions).",
-    },
-    {
-        "name": "common_region_name",
-        "type": "string",
-        "description": "Common region name (EN) in which the transect is located. The regions are extracted from Overture Maps (divisions).",
     },
 ]
 
@@ -156,6 +101,9 @@ class PathParts:
     prefix: str | None = None
     name: str | None = None
     stac_item_id: str | None = None
+    href: str | None = None
+
+    _base_href = f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
 
     def __post_init__(self) -> None:
         # Strip any protocol pattern like "az://"
@@ -173,6 +121,8 @@ class PathParts:
 
         # stac_item_id is the filename without the .parquet extension
         self.stac_item_id = self.name.replace(".parquet", "")
+
+        self.href = f"{self._base_href}/{self.container}/{self.prefix}/{self.name}"
 
 
 def create_collection(
@@ -213,10 +163,7 @@ def create_collection(
         "Coastal change",
         "Coastal monitoring",
         "Satellite-derived shorelines",
-        "Low elevation coastal zone",
-        "Data management",
-        "Transects",
-        "GCTS",
+        "Coastal zone",
         "Deltares",
         "CoCliCo",
         "GeoParquet",
@@ -237,7 +184,7 @@ def create_collection(
     collection.add_asset(
         "thumbnail",
         pystac.Asset(
-            "https://coclico.blob.core.windows.net/assets/thumbnails/gcts-thumbnail.jpeg",
+            "https://coclico.blob.core.windows.net/assets/thumbnails/coastal-zone-thumbnail.jpeg",
             title="Thumbnail",
             media_type=pystac.MediaType.JPEG,
         ),
@@ -287,6 +234,7 @@ def create_item(
     asset_href: str,
     storage_options: dict[str, Any] | None = None,
     asset_extra_fields: dict[str, Any] | None = None,
+    extra_properties: dict[str, Any] | None = None,
 ) -> pystac.Item:
     """Create a STAC Item
 
@@ -301,17 +249,15 @@ def create_item(
 
     parts = PathParts(asset_href)
 
-    properties = {
-        "title": ASSET_TITLE,
-        "description": ASSET_DESCRIPTION,
-    }
+    if extra_properties is None:
+        extra_properties = {}
 
     dt = datetime.datetime.strptime(RELEASE_DATE, "%Y-%m-%d")
     # shape = shapely.box(*bbox)
     # geometry = shapely.geometry.mapping(shape)
     template = pystac.Item(
         id=parts.stac_item_id,
-        properties=properties,
+        properties=extra_properties,
         geometry=None,
         bbox=None,
         datetime=dt,
@@ -326,6 +272,7 @@ def create_item(
         datetime_column=None,
         infer_datetime=stac_table.InferDatetimeOptions.no,
         count_rows=True,
+        asset_href=parts.href,
         asset_key="data",
         asset_extra_fields=asset_extra_fields,
         proj=True,
@@ -372,7 +319,16 @@ if __name__ == "__main__":
     collection.validate_all()
 
     for uri in uris:
-        item = create_item(uri, storage_options=storage_options)
+        match = re.search(r"_([0-9]+m)\.parquet$", uri)
+        if match:
+            buffer_size = match.group(1)
+            extra_properties = {"buffer_size": buffer_size}
+        item = create_item(
+            uri,
+            storage_options=storage_options,
+            asset_extra_fields=ASSET_EXTRA_FIELDS,
+            extra_properties=extra_properties,
+        )
         item.validate()
         collection.add_item(item)
 
