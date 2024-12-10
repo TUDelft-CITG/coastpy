@@ -32,8 +32,9 @@ conda activate "$ENV_NAME" || {
 }
 
 # Execute the Python script
-echo "Running Python script..."
-python /home/frcalkoen/dev/coastpy/scripts/python/make_coastal_grid.py --zoom 5 6 7 8 9 --buffer_size 500m 1000m 2000m 5000m 10000m 15000m --release 2024-12-10 --force || {
+SCRIPT = "$HOME/dev/coastpy/scripts/python/make_coastal_grid.py"
+echo "Running Python script: $SCRIPT"
+python "$SCRIPT" --zoom 5 6 7 8 9 --buffer_size 500m 1000m 2000m 5000m 10000m 15000m --release 2024-12-10 --force || {
     echo "Python script execution failed"
     exit 1
 }
