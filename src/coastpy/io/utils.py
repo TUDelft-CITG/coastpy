@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 import pathlib
@@ -5,12 +6,12 @@ import uuid
 import warnings
 from datetime import datetime
 from posixpath import join as urljoin
-from urllib.parse import urlsplit
+from typing import Any
+from urllib.parse import urlparse, urlsplit
 
 import fsspec
 import geopandas as gpd
 import pandas as pd
-import xarray
 import xarray as xr
 from pyproj import Transformer
 from shapely.geometry import box
@@ -19,9 +20,9 @@ from shapely.ops import transform
 logger = logging.getLogger(__name__)
 
 
-def is_local_file_path(path: str | pathlib.Path) -> bool:
+def is_file(urlpath: str | pathlib.Path) -> bool:
     """
-    Determine if a given path is a local filesystem path using urlsplit.
+    Determine if a urlpath is a filesystem path by using urlsplit.
 
     Args:
         path (str): The path to check.
@@ -29,9 +30,183 @@ def is_local_file_path(path: str | pathlib.Path) -> bool:
     Returns:
         bool: True if it's a local file path, False otherwise.
     """
-    parsed = urlsplit(str(path))
+    parsed = urlsplit(str(urlpath))
 
     return parsed.scheme in ["", "file"]
+
+
+@dataclasses.dataclass
+class PathParser:
+    """
+    Parses cloud storage paths into components, supporting multiple protocols.
+
+    Attributes:
+        urlpath (str): Full URL or URI to parse.
+        scheme (str): Protocol from the URL (e.g., "https", "az", "gs", "s3").
+        container (str): Storage container, bucket, or top-level directory.
+        prefix (str | None): Path prefix inside the container/bucket.
+        name (str): File name including its extension.
+        suffix (str): File extension (e.g., ".parquet", ".tif").
+        stac_item_id (str): Identifier for STAC, derived from the file name.
+        base_url (str): Base HTTPS URL for accessing the resource.
+        base_uri (str): Base URI for the cloud storage provider.
+        href (str): Full HTTPS URL for accessing the resource.
+        uri (str): Full URI for cloud-specific access.
+        account_name (str | None): Account name for cloud storage (required for Azure).
+        path (str): Full path within the container, excluding the container name.
+    """
+
+    urlpath: str
+    scheme: str = ""
+    container: str = ""
+    path: str = ""
+    name: str = ""
+    suffix: str = ""
+    stac_item_id: str = ""
+    https_url: str = ""
+    cloud_uri: str = ""
+    account_name: str | None = None
+    cloud_protocol: str = ""
+    base_dir: str | pathlib.Path = ""
+    _base_https_url: str = ""
+    _base_cloud_uri: str = ""
+
+    SUPPORTED_PROTOCOLS = {"https", "az", "gs", "s3"}
+    DEFAULT_BASE_DIR = pathlib.Path.home() / "data" / "tmp"
+
+    def __post_init__(self):
+        if is_file(self.urlpath):
+            self._parse_path()
+        else:
+            self._parse_url()
+
+    def _parse_url(self):
+        parsed = urlparse(self.urlpath)
+
+        # Basic parsing
+        self.scheme = parsed.scheme
+        self.name = parsed.path.split("/")[-1]
+        self.suffix = f".{self.name.split('.')[-1]}"
+        self.stac_item_id = self.name.split(".")[0]
+
+        if not self.base_dir:
+            self.base_dir = self.DEFAULT_BASE_DIR
+
+        # Check for supported protocols
+        if self.scheme not in self.SUPPORTED_PROTOCOLS:
+            msg = f"Unsupported protocol: {self.scheme}"
+            raise ValueError(msg)
+
+        # Protocol-specific parsing
+        if self.scheme == "https":
+            self.container = parsed.path.split("/")[1]
+            self._base_https_url = (
+                self.scheme + "://" + parsed.netloc + "/" + self.container
+            )
+            self.path = "/".join(parsed.path.split("/")[2:])
+
+            if "windows" in self._base_https_url:
+                if not self.cloud_protocol:
+                    self.cloud_protocol = "az"
+            elif "google" in self._base_https_url:
+                if not self.cloud_protocol:
+                    self.cloud_protocol = "gs"
+            elif "amazon" in self._base_https_url:  # noqa: SIM102
+                if not self.cloud_protocol:
+                    self.cloud_protocol = "s3"
+
+        elif self.scheme in {"az", "gs", "s3"}:
+            self.path = parsed.path.lstrip("/")  # Remove leading slash
+            self.container = parsed.netloc
+            self.cloud_protocol = self.scheme
+
+            if self.scheme == "az":
+                if not self.account_name:
+                    msg = "For 'az://' URIs, 'account_name' must be provided."
+                    raise ValueError(msg)
+                self._base_https_url = f"https://{self.account_name}.blob.core.windows.net/{self.container}"
+            elif self.scheme == "gs":
+                self._base_https_url = (
+                    f"https://storage.googleapis.com/{self.container}"
+                )
+            elif self.scheme == "s3":
+                self._base_https_url = f"https://{self.container}.s3.amazonaws.com"
+
+        # Common attributes
+        self.https_url = f"{self._base_https_url}/{self.path}"
+        self.cloud_uri = f"{self.cloud_protocol}://{self.container}/{self.path}"
+
+    def _parse_path(self):
+        path = pathlib.Path(self.urlpath)
+
+        if not self.base_dir:
+            msg = "For local file paths, 'base_dir' must be provided."
+            raise ValueError(msg)
+
+        if not self.cloud_protocol:
+            msg = "For local file paths, 'cloud_protocol' must be provided."
+            raise ValueError(msg)
+
+        path = path.relative_to(self.base_dir)
+        parts = path.parts
+        if len(parts) < 2:
+            msg = "Local file paths must have at least two components."
+            raise ValueError(msg)
+        self.container = parts[0]
+        self.path = "/".join(parts[1:])
+        self.name = path.name
+        self.suffix = f".{path.suffix}"
+        self.stac_item_id = path.stem
+
+        if self.cloud_protocol == "az":
+            if not self.account_name:
+                msg = "For 'az://' URIs, 'account_name' must be provided."
+                raise ValueError(msg)
+            self._base_https_url = (
+                f"https://{self.account_name}.blob.core.windows.net/{self.container}"
+            )
+
+        elif self.cloud_protocol == "gs":
+            self._base_https_url = f"https://storage.googleapis.com/{self.container}"
+
+        elif self.cloud_protocol == "s3":
+            self._base_https_url = f"https://{self.container}.s3.amazonaws.com"
+
+        # Common attributes
+        self.https_url = f"{self._base_https_url}/{self.path}"
+        self.cloud_uri = f"{self.cloud_protocol}://{self.container}/{self.path}"
+
+    def to_filepath(self, base_dir: pathlib.Path | str | None = None) -> pathlib.Path:
+        """
+        Convert the parsed path to a local file path.
+
+        Args:
+            base_dir (pathlib.Path | str | None): Base directory for constructing the path.
+
+        Returns:
+            pathlib.Path: The constructed local file path.
+        """
+        if base_dir is None:
+            base_dir = self.base_dir
+        return pathlib.Path(base_dir) / self.container / self.path
+
+    def to_https_url(self) -> str:
+        """
+        Convert the parsed path to an HTTPS URL.
+
+        Returns:
+            str: The corresponding HTTPS URL.
+        """
+        return self.https_url
+
+    def to_cloud_uri(self) -> str:
+        """
+        Convert the parsed path to a cloud storage URI.
+
+        Returns:
+            str: The corresponding cloud storage URI.
+        """
+        return self.cloud_uri
 
 
 def name_block(
@@ -103,7 +278,7 @@ def name_block(
 
     name = f"{'_'.join(components)}.tif"
 
-    if not is_local_file_path(storage_prefix):  # cloud storage
+    if not is_file(storage_prefix):  # cloud storage
         return str(urljoin(storage_prefix, name))
     else:  # local storage
         return str(pathlib.Path(storage_prefix) / name)
@@ -165,14 +340,37 @@ def name_table(
 
     name = f"{'_'.join(components)}.parquet"
 
-    if not is_local_file_path(storage_prefix):
+    if not is_file(storage_prefix):
         return str(urljoin(storage_prefix, name))
     else:
         return str(pathlib.Path(storage_prefix) / name)
 
 
+def name_bounds(bounds: tuple, crs: Any):
+    """
+    Generate a location-based name for bounding box coordinates.
+
+    Args:
+        bounds (tuple): Bounding box as (minx, miny, maxx, maxy).
+        crs (str): Coordinate reference system of the bounds.
+
+    Returns:
+        str: Formatted name, e.g., "n45e123".
+    """
+    bounds_geometry = box(*bounds)
+    if crs != "EPSG:4326":
+        transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+        bounds_geometry = transform(transformer.transform, bounds_geometry)
+    minx, miny, _, _ = bounds_geometry.bounds
+    lon_prefix = "e" if minx >= 0 else "w"
+    lat_prefix = "n" if miny >= 0 else "s"
+    formatted_minx = f"{abs(minx):03.0f}"
+    formatted_miny = f"{abs(miny):02.0f}"
+    return f"{lat_prefix}{formatted_miny}{lon_prefix}{formatted_minx}"
+
+
 def name_data(
-    data: pd.DataFrame | gpd.GeoDataFrame | xarray.Dataset | xarray.DataArray,
+    data: pd.DataFrame | gpd.GeoDataFrame | xr.Dataset | xr.DataArray,
     prefix: str | None = None,
     filename_prefix: str | None = None,
     include_bounds: bool = True,
@@ -208,7 +406,7 @@ def name_data(
         suffix = ".parquet"
 
     if include_bounds and isinstance(
-        data, gpd.GeoDataFrame | xarray.Dataset | xarray.DataArray
+        data, gpd.GeoDataFrame | xr.Dataset | xr.DataArray
     ):
         if isinstance(data, gpd.GeoDataFrame):
             bounds = data.total_bounds
@@ -219,19 +417,7 @@ def name_data(
             bounds = data.rio.bounds()
             crs = data.rio.crs.to_string()
 
-        def name_bounds(bounds, crs):
-            bounds_geometry = box(*bounds)
-            if crs != "EPSG:4326":
-                transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
-                bounds_geometry = transform(transformer.transform, bounds_geometry)
-            minx, miny, _, _ = bounds_geometry.bounds
-            lon_prefix = "e" if minx >= 0 else "w"
-            lat_prefix = "n" if miny >= 0 else "s"
-            formatted_minx = f"{abs(minx):03.0f}"
-            formatted_miny = f"{abs(miny):02.0f}"
-            return f"{lat_prefix}{formatted_miny}{lon_prefix}{formatted_minx}"
-
-        bounds_part = name_bounds(bounds, crs)
+        bounds_part = name_bounds(tuple(bounds), crs)
         if bounds_part:
             parts.append(bounds_part)
 
