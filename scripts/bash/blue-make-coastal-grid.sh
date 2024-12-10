@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name="create-env"
 #SBATCH --partition=compute-p1,compute-p2
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --account=research-ceg-he
@@ -19,11 +19,11 @@ export CONDA_ENVS_DIRS="/scratch/${USER}/.conda/envs"
 ENV_NAME="coastal-blue"
 ENV_DIR="/scratch/${USER}/.conda/envs/$ENV_NAME"
 
-# Remove existing environment if it exists
-if [ -d "$ENV_DIR" ]; then
-    echo "Environment does not exist: $ENV_DIR"
+echo "Initializing Miniforge environment..."
+source $HOME/miniforge3/etc/profile.d/conda.sh || {
+    echo "Failed to initialize Conda"
     exit 1
-fi
+}
 
 echo "Activating Conda environment: $ENV_NAME"
 conda activate "$ENV_NAME" || {
