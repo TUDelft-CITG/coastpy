@@ -36,23 +36,6 @@ STORAGE_URLPATH = (
 )
 
 
-def add_lengths(df, utm_crs):
-    silence_shapely_warnings()
-    # compute geometry length in local utm crs
-    df = (
-        df.to_crs(utm_crs)
-        .assign(geometry_length=lambda df: df.geometry.length)
-        .to_crs(df.crs)
-    )
-    # compute total coastline length per FID
-    coastline_lengths = (
-        df.groupby("FID")["geometry_length"].sum().rename("FID_length").reset_index()
-    )
-    # add to dataframe
-    df = pd.merge(df.drop(columns=["geometry_length"]), coastline_lengths, on="FID")
-    return df
-
-
 def silence_warnings():
     """
     Silence specific warnings for a cleaner output.
@@ -105,7 +88,7 @@ if __name__ == "__main__":
 
     [utm_grid_scattered] = client.scatter(
         [utm_grid.loc[:, ["geometry", "epsg", "utm_code"]]], broadcast=True
-    )
+    )  # type: ignore
 
     try:
         # NOTE: the source coastline cannot be made public. So here we attempt to
@@ -167,7 +150,7 @@ if __name__ == "__main__":
         crs="EPSG:4326",
     ).to_crs(PRC_EPSG)
 
-    [utm_extent_scattered] = client.scatter([utm_extent], broadcast=True)
+    [utm_extent_scattered] = client.scatter([utm_extent], broadcast=True)  # type: ignore
 
     def overlay_by_grid(df, grid):
         return gpd.overlay(
