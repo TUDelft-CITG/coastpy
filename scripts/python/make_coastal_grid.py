@@ -192,6 +192,12 @@ def main(
         ) as f:
             mgrs = gpd.read_parquet(f).to_crs(4326)
 
+        with fsspec.open(
+            "https://coclico.blob.core.windows.net/public/utm_grid.parquet"
+        ) as f:
+            utm_grid = gpd.read_parquet(f, columns=["geometry", "epsg"])
+        utm_grid = utm_grid.dissolve("epsg").reset_index()
+
         grid = make_mercantiles(zoom).rename(
             columns={"quadkey": "coastal_grid:quadkey"}
         )
@@ -207,15 +213,9 @@ def main(
         add_proc_id_partial = partial(add_proc_id, crs=tiles.crs)
         tiles["coastal_grid:id"] = tiles.geometry.map(add_proc_id_partial)
 
-        def add_utm_epsg(geometry, crs):
-            return (
-                gpd.GeoDataFrame(geometry=[geometry], crs=crs)
-                .estimate_utm_crs()
-                .to_epsg()
-            )
-
-        add_utm_epsg_partial = partial(add_utm_epsg, crs=tiles.crs)
-        tiles["coastal_grid:utm_epsg"] = tiles.geometry.map(add_utm_epsg_partial)
+        points = tiles.representative_point().to_frame("geometry")
+        utm_epsg = gpd.sjoin(points, utm_grid).drop(columns=["index_right"])["epsg"]
+        tiles["coastal_grid:utm_epsg"] = utm_epsg
 
         # Aggregate tiles with country and continent data
         tiles = add_divisions(tiles, countries)
