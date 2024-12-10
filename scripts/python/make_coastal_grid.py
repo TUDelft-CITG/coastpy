@@ -18,10 +18,6 @@ from coastpy.geo.quadtiles import make_mercantiles
 from coastpy.geo.quadtiles_utils import add_geo_columns
 from coastpy.io.utils import name_bounds
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 
 def short_id(seed: str, length: int = 3) -> str:
     """Generate a short deterministic ID based on a seed."""
@@ -56,7 +52,7 @@ def load_data(
         df = gpd.read_parquet(f)
     if to_crs:
         df = df.to_crs(to_crs)
-    logger.info(f"Loaded {uri} with {len(df)} features.")
+    logging.info(f"Loaded {uri} with {len(df)} features.")
     return df
 
 
@@ -70,12 +66,12 @@ def clip_and_filter(grid, coastal_zone):
         .drop_duplicates(subset="coastal_grid:quadkey")
         .drop(columns=["index_right"])
     )
-    logger.info(f"Filtered grid tiles: {len(filtered_tiles)} features.")
+    logging.info(f"Filtered grid tiles: {len(filtered_tiles)} features.")
 
     # Clip the tiles by the coastal zone
     clipped_tiles = gpd.overlay(filtered_tiles, coastal_zone, how="intersection")
     clipped_tiles = clipped_tiles.explode(index_parts=False).reset_index(drop=True)
-    logger.info(f"Clipped tiles: {len(clipped_tiles)} features.")
+    logging.info(f"Clipped tiles: {len(clipped_tiles)} features.")
     return clipped_tiles
 
 
@@ -131,7 +127,7 @@ def read_coastal_zone(
         msg = f"Coastal zone item for {buffer_size} not found"
         raise ValueError(msg)
     href = item.assets["data"].href
-    with fsspec.open(href, mode="rb") as f:
+    with fsspec.open(href, mode="rb", account_name="coclico") as f:
         coastal_zone = gpd.read_parquet(f)
     return coastal_zone
 
@@ -141,6 +137,7 @@ COLUMN_ORDER = [
     "coastal_grid:id",
     "coastal_grid:quadkey",
     "coastal_grid:bbox",
+    "coastal_grid:utm_epsg",
     "admin:countries",
     "admin:continents",
     "s2:mgrs_tile",
@@ -152,6 +149,7 @@ def main(
     buffer_sizes: Literal["500m", "1000m", "2000m", "5000m", "10000m", "15000m"],
     zooms: list[int],
     release,
+    force=False,
 ):
     """
     Main function to process coastal grids for given buffer sizes and zoom levels.
@@ -173,6 +171,14 @@ def main(
 
         # Construct storage path
         storage_urlpath = f"az://coastal-grid/release/{release}/coastal_grid_z{zoom}_{buffer_size}.parquet"
+
+        if not force:
+            try:
+                with fsspec.open(storage_urlpath, mode="rb", **storage_options) as f:
+                    logging.info(f"File already exists: {storage_urlpath}")
+                    continue
+            except FileNotFoundError:
+                pass
 
         # Load datasets
         coastal_zone = read_coastal_zone(buffer_size)  # type: ignore
@@ -201,6 +207,16 @@ def main(
         add_proc_id_partial = partial(add_proc_id, crs=tiles.crs)
         tiles["coastal_grid:id"] = tiles.geometry.map(add_proc_id_partial)
 
+        def add_utm_epsg(geometry, crs):
+            return (
+                gpd.GeoDataFrame(geometry=[geometry], crs=crs)
+                .estimate_utm_crs()
+                .to_epsg()
+            )
+
+        add_utm_epsg_partial = partial(add_utm_epsg, crs=tiles.crs)
+        tiles["coastal_grid:utm_epsg"] = tiles.geometry.map(add_utm_epsg_partial)
+
         # Aggregate tiles with country and continent data
         tiles = add_divisions(tiles, countries)
         tiles = add_mgrs(tiles, mgrs)
@@ -210,7 +226,7 @@ def main(
         with fsspec.open(storage_urlpath, mode="wb", **storage_options) as f:
             tiles.to_parquet(f)
 
-        logger.info(f"Saved: {storage_urlpath}")
+        logging.info(f"Saved: {storage_urlpath}")
 
 
 if __name__ == "__main__":
@@ -248,6 +264,12 @@ if __name__ == "__main__":
         required=True,
         help="Release date in yyyy-mm-dd format (e.g., 2024-12-09).",
     )
+
+    parser.add_argument(
+        "--force",
+        action="store_true",  # Automatically sets `force=True` if the flag is present
+        help="Force compute all even if the coastal grid file already exists.",
+    )
     args = parser.parse_args()
 
-    main(args.buffer_size, args.zoom, args.release)
+    main(args.buffer_size, args.zoom, args.release, args.force)
