@@ -152,6 +152,7 @@ def main(
     buffer_sizes: Literal["500m", "1000m", "2000m", "5000m", "10000m", "15000m"],
     zooms: list[int],
     release,
+    force=False,
 ):
     """
     Main function to process coastal grids for given buffer sizes and zoom levels.
@@ -173,6 +174,14 @@ def main(
 
         # Construct storage path
         storage_urlpath = f"az://coastal-grid/release/{release}/coastal_grid_z{zoom}_{buffer_size}.parquet"
+
+        if not force:
+            try:
+                with fsspec.open(storage_urlpath, mode="rb", **storage_options) as f:
+                    logger.info(f"File already exists: {storage_urlpath}")
+                    continue
+            except FileNotFoundError:
+                pass
 
         # Load datasets
         coastal_zone = read_coastal_zone(buffer_size)  # type: ignore
@@ -200,6 +209,16 @@ def main(
         tiles = tiles.sort_values("coastal_grid:quadkey")
         add_proc_id_partial = partial(add_proc_id, crs=tiles.crs)
         tiles["coastal_grid:id"] = tiles.geometry.map(add_proc_id_partial)
+
+        def add_utm_epsg(geometry, crs):
+            return (
+                gpd.GeoDataFrame(geometry=[geometry], crs=crs)
+                .estimate_utm_crs()
+                .to_epsg()
+            )
+
+        add_utm_epsg_partial = partial(add_utm_epsg, crs=tiles.crs)
+        tiles["coastal_grid:utm_epsg"] = tiles.geometry.map(add_utm_epsg_partial)
 
         # Aggregate tiles with country and continent data
         tiles = add_divisions(tiles, countries)
@@ -248,6 +267,12 @@ if __name__ == "__main__":
         required=True,
         help="Release date in yyyy-mm-dd format (e.g., 2024-12-09).",
     )
+
+    parser.add_argument(
+        "--force",
+        action="store_true",  # Automatically sets `force=True` if the flag is present
+        help="Force compute all even if the coastal grid file already exists.",
+    )
     args = parser.parse_args()
 
-    main(args.buffer_size, args.zoom, args.release)
+    main(args.buffer_size, args.zoom, args.release, args.force)
