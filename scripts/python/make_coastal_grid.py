@@ -127,7 +127,7 @@ def read_coastal_zone(
         msg = f"Coastal zone item for {buffer_size} not found"
         raise ValueError(msg)
     href = item.assets["data"].href
-    with fsspec.open(href, mode="rb") as f:
+    with fsspec.open(href, mode="rb", account_name="coclico") as f:
         coastal_zone = gpd.read_parquet(f)
     return coastal_zone
 
