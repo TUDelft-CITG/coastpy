@@ -5,6 +5,7 @@ from typing import Any
 
 import geopandas as gpd
 import numpy as np
+import odc.geo.geom
 import odc.stac
 import pyproj
 import pystac
@@ -32,6 +33,7 @@ class ImageCollection:
         self.catalog_url = catalog_url
         self.collection = collection
         self.catalog = pystac_client.Client.open(self.catalog_url)
+        self.clip = None
 
         # Configuration
         self.search_params = {}
@@ -66,12 +68,14 @@ class ImageCollection:
         Returns:
             ImageCollection: Updated instance with items populated.
         """
+        geom = roi.to_crs(4326).geometry.item()
         self.search_params = {
             "collections": self.collection,
-            "intersects": roi.to_crs(4326).geometry.item(),
+            "intersects": geom,
             "datetime": datetime_range,
             "query": query,
         }
+        self.geometry = odc.geo.geom.Geometry(geom)
 
         # Perform the actual search
         logging.info(f"Executing search with params: {self.search_params}")
@@ -113,6 +117,7 @@ class ImageCollection:
         like: xr.Dataset | None = None,
         patch_url: str | None = None,
         dst_crs: Any | None = None,
+        clip: bool | None = None,
     ) -> "ImageCollection":
         """
         Configure loading parameters.
@@ -135,6 +140,7 @@ class ImageCollection:
         self.spectral_indices = spectral_indices
         self.percentile = percentile
         self.dst_crs = dst_crs
+        self.clip = clip
 
         # ODC StaC load parameters
         self.load_params = {
