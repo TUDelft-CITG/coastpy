@@ -10,7 +10,7 @@ If you have all GDAL dependencies installed correctly you can install with pip:
 pip install coastpy
 ```
 
-although it's probably easier to install with conda:
+However, if you start from scratch, it's probably easier to install with conda:
 
 ```bash
 conda env create -f environment.yaml
@@ -21,7 +21,8 @@ conda env create -f environment.yaml
 The data that is produced with this software can be directly accessed via the cloud using
 tools like
 [DuckDB](https://duckdb.org/docs/installation/?version=stable&environment=cli&platform=macos&download_method=package_manager);
-see the [tutorials](./tutorials/) and [analytics](./analytics/) other methods and latest instructions.
+see the [tutorials](./tutorials/) and [analytics](./analytics/) other for other access
+methods (Python) and latest usage instructions.
 
 ### Global Coastal Transect System (GCTS)
 
@@ -32,7 +33,6 @@ coastal characteristics and derive coastal statistics thereof.
 The Global Coastal Transect System consists of more than 11 million cross-shore coastal
 transects uniformly spaced at 100-m intervals alongshore, for all OpenStreetMap
 coastlines that are longer than 5 kilometers.
-
 
 ```bash
 # Download all transects located in the United States.
@@ -53,13 +53,19 @@ az storage blob download-batch \
     --account-name coclico
 ```
 
+### Coastal Grid
+
+The Coastal Grid dataset provides a global tiling system for coastal analytics. It
+supports scalable data processing workflows by offering coastal tiles at varying zoom
+levels (5, 6, 7) and buffer sizes (500 m, 1000 m, 2000 m, 5000 m, 10000 m, 15000 m).
+
 ## Usage
 
-More extensive installation and usage instructions will come when we build the
-documentation. For now, to run the tutorials, analytics or scripts clone the repository,
-install the [environment](environment.yaml) using a package manager like
-[miniconda](https://github.com/conda-forge/miniforge?tab=readme-ov-file#download). You
-may use Jupyter lab to explore the interactive content of the notebooks.
+More installation and usage instructions will come when we build the documentation. For
+now, to run the tutorials, analytics or scripts proceed as follows. Clone the repository,
+and install the [environment](environment.yaml) using a package manager like
+[miniconda](https://github.com/conda-forge/miniforge?tab=readme-ov-file#download). Then you
+may use Jupyter lab to run and/or explore the (interactive) content in the notebooks.
 
 ```bash
 git clone https://TUDelft-CITG/coastpy.git
@@ -90,8 +96,5 @@ Interested in contributing? Check out the contributing guidelines. Please note t
 ## License
 
 `coastpy` was created by Floris Calkoen. The software is licensed under the terms of the
-MIT license. Data licenses can be found in the respective STAC collection.
-
-## Credits
-
-Initial template of `coastpy` was created with [`cookiecutter`](https://cookiecutter.readthedocs.io/en/latest/) and the `py-pkgs-cookiecutter` [template](https://github.com/py-pkgs/py-pkgs-cookiecutter).
+MIT license. Data licenses are typically CC-BY-4.0, and can be found in the respective
+STAC collection.
