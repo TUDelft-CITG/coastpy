@@ -1,6 +1,7 @@
 import datetime
 import os
 import pathlib
+import re
 from typing import Any
 
 import fsspec
@@ -27,108 +28,85 @@ STORAGE_ACCOUNT_NAME = "coclico"
 storage_options = {"account_name": STORAGE_ACCOUNT_NAME, "credential": sas_token}
 
 # Container and URI configuration
-VERSION = "2024-08-02"
+VERSION = "2024-12-10"
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
 DATETIME_DATA_CREATED = datetime.datetime(2023, 2, 9)
-CONTAINER_NAME = "gcts"
+CONTAINER_NAME = "coastal-grid"
 PREFIX = f"release/{VERSION}"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
 PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 LICENSE = "CC-BY-4.0"
 
 # Collection information
-COLLECTION_ID = "gcts"
-COLLECTION_TITLE = "Global Coastal Transect System (GCTS)"
-
-# Transect and zoom configuration
-TRANSECT_LENGTH = 2000
-ZOOM = 9
+COLLECTION_ID = "coastal-grid"
+COLLECTION_TITLE = "Coastal Grid"
 
 DESCRIPTION = """
-Cross-shore coastal transects are essential to coastal monitoring, offering a consistent
-reference line to measure coastal change, while providing a robust foundation to map
-coastal characteristics and derive coastal statistics thereof. The Global Coastal Transect
-System consists of more than 11 million cross-shore coastal transects uniformly spaced at
-100-m intervals alongshore, for all OpenStreetMap coastlines that are longer than 5 kilometers.
-The dataset is more extensively described Calkoen et al., 2024. "Enabling Coastal Analytics
-at Planetary Scale" available [here](https://doi.org/10.1016/j.envsoft.2024.106257).
+The Coastal Grid dataset provides a global tiling system for geospatial analytics in coastal areas.
+It supports scalable data processing workflows by offering structured grids at varying zoom levels
+(5, 6, 7) and buffer sizes (500m, 1000m, 2000m, 5000m, 10000m, 15000m).
+
+Each tile contains information on intersecting countries, continents, and Sentinel-2 MGRS tiles
+as nested JSON lists. The dataset is particularly suited for applications requiring global coastal
+coverage, such as satellite-based coastal monitoring, spatial analytics, and large-scale data processing.
+
+Key Features:
+- Global coverage of the coastal zone, derived from OpenStreetMap's generalized coastline (2023-02).
+- Precomputed intersections with countries, continents, and MGRS tiles.
+- Designed for use in scalable geospatial workflows.
+
+This dataset is structured as a STAC collection, with individual items for each zoom level and buffer
+size combination. Users can filter items by the `zoom` and `buffer_size` fields in the STAC metadata.
+
+Please consider the following citation when using this dataset:
+
+Floris Reinier Calkoen, Arjen Pieter Luijendijk, Kilian Vos, Etiënne Kras, Fedor Baart,
+Enabling coastal analytics at planetary scale, Environmental Modelling & Software, 2024,
+106257, ISSN 1364-8152, https://doi.org/10.1016/j.envsoft.2024.106257.
 """
-# Asset details
-ASSET_TITLE = "GCTS"
-ASSET_DESCRIPTION = f"Parquet dataset with coastal transects ({TRANSECT_LENGTH} m) at 100 m alongshore resolution for this region."
+
+ASSET_TITLE = "Coastal Grid"
+ASSET_DESCRIPTION = (
+    "Parquet dataset providing a global structured coastal grid for coastal analytics"
+)
 
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 
 COLUMN_DESCRIPTIONS = [
     {
-        "name": "transect_id",
+        "name": "coastal_grid:id",
         "type": "string",
-        "description": "A unique identifier for each transect, constructed from three key components: the 'coastline_id', 'segment_id', and 'interpolated_distance'. The 'coastline_id' corresponds to the FID in OpenStreetMap (OSM) and is prefixed with 'cl'. The 'segment_id' indicates the segment of the OSM coastline split by a UTM grid, prefixed with 's'. The 'interpolated_distance' represents the distance from the starting point of the coastline to the transect, interpolated along the segment, and is prefixed with 'tr'. The complete structure is 'cl[coastline_id]s[segment_id]tr[interpolated_distance]', exemplified by 'cl32946s04tr08168547'. This composition ensures each transect name is a distinct and informative representation of its geographical and spatial attributes.",
+        "description": "Unique identifier for each tile, derived from bounds and a deterministic hex suffix.",
     },
     {
-        "name": "lon",
-        "type": "float",
-        "description": "Longitude of the transect origin.",
+        "name": "coastal_grid:quadkey",
+        "type": "string",
+        "description": "Mercator quadkey for each tile, indicating its spatial location and zoom level.",
     },
     {
-        "name": "lat",
-        "type": "float",
-        "description": "Latitude of the transect origin.",
+        "name": "coastal_grid:bbox",
+        "type": "object",
+        "description": "Bounding box of the tile in WGS84 coordinates, represented as a dictionary.",
     },
     {
-        "name": "bearing",
-        "type": "float",
-        "description": "North bearing of the transect from the landward side in degrees, with the north as reference.",
+        "name": "admin:countries",
+        "type": "string",
+        "description": """JSON list of countries intersecting the tile (e.g., '["CA", "US"]').""",
+    },
+    {
+        "name": "admin:continents",
+        "type": "string",
+        "description": """JSON list of continents intersecting the tile (e.g., '["NA", "SA"]').""",
+    },
+    {
+        "name": "s2:mgrs_tile",
+        "type": "string",
+        "description": """JSON list of Sentinel-2 MGRS tiles intersecting the tile (e.g., '["15XWL", "16XDR"]').""",
     },
     {
         "name": "geometry",
-        "type": "byte_array",
-        "description": "Well-Known Binary (WKB) representation of the transect as a linestring geometry.",
-    },
-    {
-        "name": "osm_coastline_is_closed",
-        "type": "bool",
-        "description": "Indicates whether the source OpenStreetMap (OSM) coastline, from which the transects were derived, forms a closed loop. A value of 'true' suggests that the coastline represents an enclosed area, such as an island.",
-    },
-    {
-        "name": "osm_coastline_length",
-        "type": "int32",
-        "description": "Represents the total length of the source OpenStreetMap (OSM) coastline, that is summed across various UTM regions. It reflects the aggregate length of the original coastline from which the transects are derived.",
-    },
-    {
-        "name": "utm_epsg",
-        "type": "int32",
-        "description": "EPSG code representing the UTM Coordinate Reference System for the transect.",
-    },
-    {
-        "name": "bbox",
-        "type": "struct<minx: double, miny: double, maxx: double, maxy: double>",
-        "description": "Bounding box of the transect geometry, given by minimum and maximum coordinates in x (longitude) and y (latitude).",
-    },
-    {
-        "name": "quadkey",
-        "type": "string",
-        "description": "QuadKey corresponding to the transect origin location at zoom 12, following the Bing Maps Tile System for spatial indexing.",
-    },
-    {
-        "name": "continent",
-        "type": "string",
-        "description": "Name of the continent in which the transect is located.",
-    },
-    {
-        "name": "country",
-        "type": "string",
-        "description": "ISO alpha-2 country code for the country in which the transect is located. The country data are extracted from Overture Maps (divisions).",
-    },
-    {
-        "name": "common_country_name",
-        "type": "string",
-        "description": "Common country name (EN) in which the transect is located. The country data are extracted from Overture Maps (divisions).",
-    },
-    {
-        "name": "common_region_name",
-        "type": "string",
-        "description": "Common region name (EN) in which the transect is located. The regions are extracted from Overture Maps (divisions).",
+        "type": "geometry",
+        "description": "Polygon geometry defining the spatial extent of the tile.",
     },
 ]
 
@@ -161,15 +139,6 @@ def add_citation_extension(collection):
 
     # Optionally add publications (if applicable)
     sci_ext.publications = [Publication(doi=DOI, citation=CITATION)]
-
-    # Add a link to the DOI
-    collection.add_link(
-        pystac.Link(
-            rel="cite-as",
-            target=f"https://doi.org/{DOI}",
-            title="Citation DOI",
-        )
-    )
 
     return collection
 
@@ -206,14 +175,10 @@ def create_collection(
 
     keywords = [
         "Coastal analytics",
-        "Cloud technology",
         "Coastal change",
         "Coastal monitoring",
         "Satellite-derived shorelines",
-        "Low elevation coastal zone",
-        "Data management",
-        "Transects",
-        "GCTS",
+        "Coastal zone",
         "Deltares",
         "CoCliCo",
         "GeoParquet",
@@ -234,10 +199,9 @@ def create_collection(
     collection.add_asset(
         "thumbnail",
         pystac.Asset(
-            "https://coclico.blob.core.windows.net/assets/thumbnails/gcts-thumbnail.jpeg",
+            "https://coclico.blob.core.windows.net/assets/thumbnails/coastal-grid-thumbnail.jpeg",
             title="Thumbnail",
             media_type=pystac.MediaType.JPEG,
-            roles=["thumbnail"],
         ),
     )
     collection.links = links
@@ -259,6 +223,7 @@ def create_collection(
         collection.extra_fields.update(extra_fields)
 
     collection = add_citation_extension(collection)
+
     version_ext = VersionExtension.ext(collection, add_if_missing=True)
     version_ext.version = VERSION
 
@@ -355,13 +320,25 @@ if __name__ == "__main__":
 
     stac_io = DefaultStacIO()
     layout = ParquetLayout()
+
     collection = create_collection(
         extra_fields={"storage_pattern": CONTAINER_URI + "/*.parquet"}
     )
     collection.validate_all()
 
     for uri in tqdm.tqdm(uris, desc="Processing files"):
-        item = create_item(uri, storage_options=storage_options)
+        match = re.search(r"_z([0-9]+)_([0-9]+m)\.parquet$", uri)
+        if match:
+            zoom_level = match.group(1)  # Capture the zoom level
+            buffer_size = match.group(2)  # Capture the buffer size
+            item_extra_fields = {"zoom_level": zoom_level, "buffer_size": buffer_size}
+
+        item = create_item(
+            uri,
+            storage_options=storage_options,
+            asset_extra_fields=ASSET_EXTRA_FIELDS,
+            item_extra_fields=item_extra_fields,
+        )
         item.validate()
         collection.add_item(item)
 

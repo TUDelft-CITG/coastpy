@@ -7,22 +7,24 @@ Generate STAC Collections for tabular datasets.
 """
 
 import copy
+import datetime
 import enum
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import dask
+import pystac
 
 # NOTE: until query planning is enabled in Dask GeoPandas
 dask.config.set({"dataframe.query-planning": False})
-
 import dask_geopandas
 import fsspec
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyproj
-import pystac
 import shapely.geometry
+from pystac.asset import Asset
+from pystac.extensions import projection
 from shapely.ops import transform
 
 T = TypeVar("T", pystac.Collection, pystac.Item)
@@ -42,122 +44,71 @@ class InferDatetimeOptions(str, enum.Enum):
 
 def generate(
     uri: str,
-    template,
-    infer_bbox=None,
-    infer_geometry=False,
-    datetime_column=None,
-    infer_datetime=InferDatetimeOptions.no,
-    count_rows=True,
-    asset_href=None,
-    asset_key="data",
-    asset_extra_fields=None,
-    proj=True,
-    storage_options=None,
-    validate=True,
-) -> T:
+    template: pystac.Item,
+    infer_bbox: bool = True,
+    proj: bool | dict | None = None,
+    infer_geometry: bool = False,
+    infer_datetime: str = "no",
+    datetime_column: str | None = None,
+    data_created: datetime.datetime | None = None,
+    metadata_created: datetime.datetime | None = None,
+    count_rows: bool = True,
+    asset_href: str | None = None,
+    asset_key: str = "data",
+    asset_title: str = "Dataset root",
+    asset_description: str = "Root of the dataset",
+    asset_media_type: str = "application/vnd.apache.parquet",
+    asset_roles: list[str] | None = None,
+    asset_extra_fields: dict[str, Any] | None = None,
+    storage_options: dict[str, Any] | None = None,
+    validate: bool = True,
+) -> pystac.Item:
     """
-    Generate a STAC Item from a Parquet Dataset.
+    Generate a STAC Item from a Parquet dataset.
 
-    Parameters
-    ----------
-    uri : str
-        The fsspec-compatible URI pointing to the input table to generate a
-        STAC item for.
-    template : pystac.Item
-        The template item. This will be cloned and new data will be filled in.
-    infer_bbox : str, optional
-        The column name to use setting the Item's bounding box.
+    Args:
+        uri (str): URI of the dataset (e.g., "az://path/to/file.parquet").
+        template (pystac.Item): Template STAC item to clone and populate.
+        infer_bbox (bool, optional): Whether to infer the bounding box.
+        proj (bool or dict, optional): Include projection information.
+            - Pass `True` for default projection metadata (e.g., `proj:crs`).
+            - Pass a dictionary for custom projection values.
+        infer_geometry (bool, optional): Whether to compute and add geometry information.
+        infer_datetime (str, optional): Method to infer datetime:
+            - "no": Do not infer datetime.
+            - "midpoint": Use the midpoint of the datetime range.
+            - "unique": Use the unique datetime value (raises an error if not unique).
+            - "range": Add `start_datetime` and `end_datetime` based on the range.
+        datetime_column (str, optional): Name of the column containing datetime values.
+            Required if `infer_datetime` is not "no".
+        data_created (str, optional): ISO 8601 timestamp for when the data was created.
+        metadata_created (str, optional): ISO 8601 timestamp for when metadata was created.
+        count_rows (bool, optional): Add the row count to `table:row_count`.
+        asset_href (str, optional): Custom URI for the asset (overrides `uri` if provided).
+        asset_key (str, optional): Key for the asset in the STAC item (default: "data").
+        asset_title (str, optional): Title of the asset.
+        asset_description (str, optional): Description of the asset.
+        asset_media_type (str, optional): Media type of the asset (e.g., Parquet MIME type).
+        asset_roles (str or list, optional): Roles for the asset (default: "data").
+        asset_extra_fields (dict, optional): Additional metadata fields for the asset.
+        storage_options (dict, optional): fsspec storage options for accessing the dataset.
+        validate (bool, optional): Validate the generated STAC item (default: True).
 
-        .. note::
-
-           If the dataset doesn't provide spatial partitions, this will
-           require computation.
-
-    infer_geometry: bool, optional
-        Whether to fill the item's `geometry` field with the union of the
-        geometries in the `infer_bbox` column.
-
-    datetime_column: str, optional
-        The column name to use when setting the Item's `datetime` or
-        `start_datetime` and `end_datetime` properties. The method used is
-        determined by `infer_datetime`.
-
-    infer_datetime: str, optional.
-        The method used to find a datetime from the values in `datetime_column`.
-        Use the options in the `InferDatetimeOptions` enum.
-
-        - no : do not infer a datetime
-        - midpoint : Set `datetime` to the midpoint of the highest and lowest values.
-        - unique : Set `datetime` to the unique value. Raises if more than one
-          unique value is found.
-        - range : Set `start_datetime` and `end_datetime` to the minimum and
-          maximum values.
-
-    count_rows : bool, default True
-        Whether to add the row count to `table:row_count`.
-
-    asset_key : str, default "data"
-        The asset key to use for the parquet dataset. The href will be the ``uri`` and
-        the roles will be ``["data"]``.
-
-    asset_extra_fields : dict, optional
-        Additional fields to set in the asset's ``extra_fields``.
-
-    proj : bool or dict, default True
-        Whether to extract projection information from the dataset and store it
-        using the `projection` extension.
-
-        By default, just `proj:crs` is extracted. If `infer_bbox` or `infer_geometry`
-        are specified, those will be set as well.
-
-        Alternatively, provide a dict of values to include.
-
-    storage_options: mapping, optional
-        A dictionary of keywords to provide to :meth:`fsspec.get_fs_token_paths`
-        when creating an fsspec filesystem with a str ``ds``.
-
-    validate : bool, default True
-        Whether to validate the returned pystac.Item.
-
-    Returns
-    -------
-    pystac.Item
-        The updated pystac.Item with the following fields set
-
-        * stac_extensions : added `table` extension
-        * table:columns
-
-    Examples
-    --------
-
-    This example generates a STAC item based on the "naturalearth_lowres" datset
-    from geopandas. There's a bit of setup.
-
-    >>> import datetime, geopandas, pystac, stac_table
-    >>> gdf = geopandas.read_file(geopandas.datasets.get_path("naturalearth_lowres"))
-    >>> gdf.to_parquet("data.parquet")
-
-    Now we can create the item.
-
-    >>> # Create the template Item
-    >>> item = pystac.Item(
-    ...     "naturalearth_lowres",
-    ...     geometry=None,
-    ...     bbox=None,
-    ...     datetime=datetime.datetime(2021, 1, 1),
-    ...     properties={},
-    ... )
-    >>> result = stac_table.generate("data.parquet", item)
-    >>> result
-    <Item id=naturalearth_lowres>
+    Returns:
+        pystac.Item: A STAC item populated with metadata and assets.
     """
-    template = copy.deepcopy(template)
+
+    if asset_roles is None:
+        asset_roles = ["data"]
+
+    if proj is None or proj is False:
+        proj = {}
+
+    # NOTE: Consider if its better to create from template or from scratch
+    item = copy.deepcopy(template)
 
     data = None
     storage_options = storage_options or {}
-    # data = dask_geopandas.read_parquet(
-    #     ds, storage_options=storage_options
-    # )
     ds = parquet_dataset_from_url(uri, storage_options)
 
     if (
@@ -171,109 +122,124 @@ def generate(
             uri, storage_options=storage_options, gather_spatial_partitions=False
         )
         data.calculate_spatial_partitions()
-    # #     # TODO: this doesn't actually work
-    #     data = dask_geopandas.read_parquet(
-    #         ds.files, filesystem=ds.filesystem,
-    #     )
 
     columns = get_columns(ds.schema)
-    template.properties["table:columns"] = columns
+    item.properties["table:columns"] = columns
 
     if proj is True:
         proj = get_proj(data)
     proj = proj or {}
 
     # TODO: Add schema when published
-    if SCHEMA_URI not in template.stac_extensions:
-        template.stac_extensions.append(SCHEMA_URI)
-    if proj and pystac.extensions.projection.SCHEMA_URI not in template.stac_extensions:
-        template.stac_extensions.append(pystac.extensions.projection.SCHEMA_URI)
+    if SCHEMA_URI not in item.stac_extensions:
+        item.stac_extensions.append(SCHEMA_URI)
+    if proj and projection.SCHEMA_URI not in item.stac_extensions:
+        item.stac_extensions.append(projection.SCHEMA_URI)
 
     extra_proj = {}
     if infer_bbox:
-        src_crs = data.spatial_partitions.crs.to_epsg()
+        spatial_partitions = data.spatial_partitions  # type: ignore
+
+        if spatial_partitions is None:
+            msg = "No spatial partitions found in the dataset."
+            raise ValueError(msg)
+
+        src_crs = spatial_partitions.crs.to_epsg()
         tf = pyproj.Transformer.from_crs(src_crs, 4326, always_xy=True)
 
-        bbox = data.spatial_partitions.unary_union.bounds
+        bbox = spatial_partitions.unary_union.bounds
         # NOTE: bbox of unary union will be stored under proj extension as projected
         extra_proj["proj:bbox"] = bbox
 
         # NOTE: bbox will be stored in pystsac.Item.bbox in EPSG:4326
         bbox = transform(tf.transform, shapely.geometry.box(*bbox))
-        template.bbox = bbox.bounds
+        item.bbox = list(bbox.bounds)
 
     if infer_geometry:
         # NOTE: geom  under proj extension as projected
-        geometry = data.unary_union.compute()
+        geometry = data.unary_union.compute()  # type: ignore
         extra_proj["proj:geometry"] = shapely.geometry.mapping(geometry)
 
         # NOTE: geometry will be stored in pystsac.Item.geometry in EPSG:4326
-        src_crs = data.spatial_partitions.crs.to_epsg()
+        src_crs = data.spatial_partitions.crs.to_epsg()  # type: ignore
         tf = pyproj.Transformer.from_crs(src_crs, 4326, always_xy=True)
         geometry = transform(tf.transform, geometry)
-        template.geometry = shapely.geometry.mapping(geometry)
+        item.geometry = shapely.geometry.mapping(geometry)
 
-    if infer_bbox and template.geometry is None:
+    if infer_bbox and item.geometry is None:
         # If bbox is set then geometry must be set as well.
-        template.geometry = shapely.geometry.mapping(
-            shapely.geometry.box(*template.bbox)
+        item.geometry = shapely.geometry.mapping(
+            shapely.geometry.box(*item.bbox, ccw=True)  # type: ignore
         )
 
-    if infer_geometry and template.bbox is None:
-        template.bbox = shapely.geometry.shape(template.geometry).bounds
+    if infer_geometry and item.bbox is None:
+        item.bbox = shapely.geometry.shape(item.geometry).bounds  # type: ignore
 
     if proj or extra_proj:
-        template.properties.update(**extra_proj, **proj)
+        item.properties.update(**extra_proj, **proj)
 
-    if infer_datetime != InferDatetimeOptions.no and datetime_column is None:
-        msg = "Must specify 'datetime_column' when 'infer_datetime != no'."
-        raise ValueError(msg)
+    if infer_datetime == InferDatetimeOptions.no:
+        if data_created is None:
+            msg = "Must specify 'datetime_data' when 'infer_datetime == no'."
+            raise ValueError(msg)
+        if datetime_column is not None:
+            msg = "Leave 'datetime_column' empty when 'infer_datetime == no'."
+            raise ValueError(msg)
+    else:
+        if datetime_column is None:
+            msg = "Must specify 'datetime_column' when 'infer_datetime != no'."
+            raise ValueError(msg)
+        if data_created is not None:
+            msg = "Leave 'datetime_data' empty when inferring datetime."
+            raise ValueError(msg)
+
+    if metadata_created is not None:
+        item.common_metadata.created = metadata_created
+
+    if data_created is not None:
+        item.datetime = data_created
 
     if infer_datetime == InferDatetimeOptions.midpoint:
-        values = dask.compute(data[datetime_column].min(), data[datetime_column].max())
-        template.properties["datetime"] = pd.Series(values).mean().to_pydatetime()
+        values = dask.compute(data[datetime_column].min(), data[datetime_column].max())  # type: ignore
+        item.datetime = pd.Timestamp(pd.Series(values).mean()).to_pydatetime()
 
-    if infer_datetime == InferDatetimeOptions.unique:
-        values = data[datetime_column].unique().compute()
+    if infer_datetime == InferDatetimeOptions.unique and data_created is not None:
+        values = data[datetime_column].unique().compute()  # type: ignore
         n = len(values)
         if n > 1:
             msg = f"infer_datetime='unique', but {n} unique values found."
             raise ValueError(msg)
-        template.properties["datetime"] = values[0].to_pydatetime()
+        item.datetime = values[0].to_pydatetime()
 
     if infer_datetime == InferDatetimeOptions.range:
-        values = dask.compute(data[datetime_column].min(), data[datetime_column].max())
+        values = dask.compute(data[datetime_column].min(), data[datetime_column].max())  # type: ignore
         values = np.array(pd.Series(values).dt.to_pydatetime())
-        template.properties["start_datetime"] = values[0].isoformat() + "Z"
-        template.properties["end_datetime"] = values[1].isoformat() + "Z"
+        item.common_metadata.start_datetime = values[0]
+        item.common_metadata.end_datetime = values[1]
 
     if count_rows:
-        template.properties["table:row_count"] = sum(
-            x.count_rows() for x in ds.fragments
-        )
+        item.properties["table:row_count"] = sum(x.count_rows() for x in ds.fragments)
 
     if asset_key:
-        if asset_href is not None:
-            uri = asset_href
-        asset = pystac.asset.Asset(
-            # NOTE: consider using the https protocol; makes it easier for user to download
-            # to_https_url(items[0].assets["data"].href, storage_options={"account_name": "coclico"})
-            uri,
-            title="Dataset root",
-            media_type=PARQUET_MEDIA_TYPE,
-            roles=["data"],
-            # extra_fields={"table:storage_options": asset_extra_fields},
+        href = asset_href if asset_href is not None else uri
+        asset = Asset(
+            href,
+            title=asset_title,
+            description=asset_description,
+            media_type=asset_media_type,
+            roles=asset_roles,
             extra_fields=asset_extra_fields,
         )
-        template.add_asset(asset_key, asset)
+
+        item.add_asset(asset_key, asset)
 
     if validate:
-        template.validate()
+        item.validate()
 
-    return template
+    return item
 
 
-def get_proj(ds):
+def get_proj(ds) -> dict:
     """
     Read projection information from the dataset.
     """
@@ -313,11 +279,29 @@ def get_columns(schema: pa.Schema, prefix: str = "") -> list:
     return columns
 
 
-def parquet_dataset_from_url(url: str, storage_options):
-    fs, _, _ = fsspec.get_fs_token_paths(url, storage_options=storage_options)
+def parquet_dataset_from_url(url: str, storage_options: dict):
+    """
+    Load a Parquet dataset from a URL, handling both `https://` and `az://` protocols.
+
+    Args:
+        url (str): The URL of the dataset (e.g., `az://path/to/file.parquet` or `https://...`).
+        storage_options (dict): Options for cloud storage (e.g., account name, SAS tokens).
+
+    Returns:
+        pyarrow.parquet.ParquetDataset: A ParquetDataset object for the given URL.
+    """
+    protocol = url.split("://")[0]
+    _storage_options = {} if protocol == "https" else storage_options or {}
+    fs, _, _ = fsspec.get_fs_token_paths(url, storage_options=_storage_options)
     pa_fs = pa.fs.PyFileSystem(pa.fs.FSSpecHandler(fs))
-    url2 = url.split("://", 1)[-1]  # pyarrow doesn't auto-strip the prefix.
-    # NOTE: use_legacy_dataset will be deprecated, so test if it works without it.
-    # ds = pa.parquet.ParquetDataset(url2, filesystem=pa_fs, use_legacy_dataset=False)
+    url2 = url.split("://", 1)[-1]
     ds = pa.parquet.ParquetDataset(url2, filesystem=pa_fs)
     return ds
+
+
+# def parquet_dataset_from_url(url: str, storage_options):
+#     fs, _, _ = fsspec.get_fs_token_paths(url, storage_options=storage_options)
+#     pa_fs = pa.fs.PyFileSystem(pa.fs.FSSpecHandler(fs))
+#     url2 = url.split("://", 1)[-1]  # pyarrow doesn't auto-strip the prefix.
+#     ds = pa.parquet.ParquetDataset(url2, filesystem=pa_fs)
+#     return ds

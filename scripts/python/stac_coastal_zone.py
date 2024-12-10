@@ -1,4 +1,3 @@
-import dataclasses
 import datetime
 import os
 import pathlib
@@ -8,13 +7,15 @@ from typing import Any
 import fsspec
 import pystac
 import stac_geoparquet
+import tqdm
 from dotenv import load_dotenv
 from pystac.extensions.item_assets import ItemAssetsExtension
-from pystac.extensions.scientific import ScientificExtension
+from pystac.extensions.scientific import Publication, ScientificExtension
 from pystac.extensions.version import VersionExtension
 from pystac.provider import ProviderRole
 from pystac.stac_io import DefaultStacIO
 
+from coastpy.io.utils import PathParser
 from coastpy.libs import stac_table
 from coastpy.stac import ParquetLayout
 
@@ -26,10 +27,13 @@ sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
 STORAGE_ACCOUNT_NAME = "coclico"
 storage_options = {"account_name": STORAGE_ACCOUNT_NAME, "credential": sas_token}
 
+
 # Container and URI configuration
+VERSION = "2024-12-08"
+DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
+DATETIME_DATA_CREATED = datetime.datetime(2023, 2, 9)
 CONTAINER_NAME = "coastal-zone"
-RELEASE_DATE = "2024-12-08"
-PREFIX = f"release/{RELEASE_DATE}"
+PREFIX = f"release/{VERSION}"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
 PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 LICENSE = "CC-BY-4.0"
@@ -82,47 +86,39 @@ ASSET_EXTRA_FIELDS = {
 }
 
 
-@dataclasses.dataclass
-class PathParts:
+def add_citation_extension(collection):
     """
-    Parses a path into its component parts, supporting variations with and without hive partitioning,
-    and with and without geographical bounds.
-
-    Attributes:
-        path (str): The full path to parse.
-        container (str | None): The storage container or bucket name.
-        prefix (str | None): The path prefix between the container and the file name.
-        name (str | None): The file name including its extension.
-        stac_item_id (str | None): The identifier used for STAC, which is the file name without the .parquet extension.
+    Add citation-related metadata to the STAC collection using the Citation Extension.
     """
+    # Add the Scientific Extension to the collection
+    ScientificExtension.add_to(collection)
 
-    path: str
-    container: str | None = None
-    prefix: str | None = None
-    name: str | None = None
-    stac_item_id: str | None = None
-    href: str | None = None
+    # Define the DOI and citation
+    DOI = "10.1016/j.envsoft.2024.106257"
+    CITATION = (
+        "Floris Reinier Calkoen, Arjen Pieter Luijendijk, Kilian Vos, Etiënne Kras, Fedor Baart, "
+        "Enabling coastal analytics at planetary scale, Environmental Modelling & Software, 2024, "
+        "106257, ISSN 1364-8152, https://doi.org/10.1016/j.envsoft.2024.106257."
+    )
 
-    _base_href = f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+    # Add the DOI and citation to the collection's extra fields
+    sci_ext = ScientificExtension.ext(collection, add_if_missing=True)
+    sci_ext.doi = DOI
+    sci_ext.citation = CITATION
 
-    def __post_init__(self) -> None:
-        # Strip any protocol pattern like "az://"
-        stripped_path = re.sub(r"^\w+://", "", self.path)
-        split = stripped_path.rstrip("/").split("/")
+    # Optionally add publications (if applicable)
+    sci_ext.publications = [Publication(doi=DOI, citation=CITATION)]
 
-        # Extract the container which is the first part of the path
-        self.container = split[0]
+    # Add a link to the DOI
+    collection.add_link(
+        pystac.Link(
+            rel="cite-as",
+            target=f"https://doi.org/{DOI}",
+            title="Citation DOI",
+        )
+    )
 
-        # The file name is the last element in the split path
-        self.name = split[-1]
-
-        # The prefix is everything between the container and the filename
-        self.prefix = "/".join(split[1:-1]) if len(split) > 2 else None
-
-        # stac_item_id is the filename without the .parquet extension
-        self.stac_item_id = self.name.replace(".parquet", "")
-
-        self.href = f"{self._base_href}/{self.container}/{self.prefix}/{self.name}"
+    return collection
 
 
 def create_collection(
@@ -141,11 +137,9 @@ def create_collection(
         ),
     ]
 
-    start_datetime = datetime.datetime.strptime(RELEASE_DATE, "%Y-%m-%d")
-
     extent = pystac.Extent(
         pystac.SpatialExtent([[-180.0, 90.0, 180.0, -90.0]]),
-        pystac.TemporalExtent([[start_datetime, None]]),
+        pystac.TemporalExtent([[DATETIME_DATA_CREATED, None]]),
     )
 
     links = [
@@ -187,6 +181,7 @@ def create_collection(
             "https://coclico.blob.core.windows.net/assets/thumbnails/coastal-zone-thumbnail.jpeg",
             title="Thumbnail",
             media_type=pystac.MediaType.JPEG,
+            roles=["thumbnail"],
         ),
     )
     collection.links = links
@@ -207,81 +202,65 @@ def create_collection(
     if extra_fields:
         collection.extra_fields.update(extra_fields)
 
-    ScientificExtension.add_to(collection)
-    # TODO: revise citation upon publication
+    collection = add_citation_extension(collection)
+    version_ext = VersionExtension.ext(collection, add_if_missing=True)
+    version_ext.version = VERSION
 
-    CITATION = """
-    Floris Reinier Calkoen, Arjen Pieter Luijendijk, Kilian Vos, Etiënne Kras, Fedor Baart,
-    Enabling coastal analytics at planetary scale, Environmental Modelling & Software, 2024,
-    106257, ISSN 1364-8152, https://doi.org/10.1016/j.envsoft.2024.106257.
-    (https://www.sciencedirect.com/science/article/pii/S1364815224003189)
-    """
-
-    # NOTE: we could make a separate DOI for the transects and then link the paper in
-    # sci:citations as a feature. However, for now I (Floris) prefer to use the same DOI.
-    collection.extra_fields["sci:citation"] = CITATION
-    # collection.extra_fields["sci:doi"] = "https://doi.org/10.1016/j.envsoft.2024.106257"
-
-    collection.stac_extensions.append(stac_table.SCHEMA_URI)
-
-    VersionExtension.add_to(collection)
-    collection.extra_fields["version"] = RELEASE_DATE
+    # NOTE: Add schema validation after making a PR to the stac-table repo
+    # collection.stac_extensions.append(stac_table.SCHEMA_URI)
 
     return collection
 
 
 def create_item(
-    asset_href: str,
+    urlpath: str,
     storage_options: dict[str, Any] | None = None,
+    properties: dict[str, Any] | None = None,
+    item_extra_fields: dict[str, Any] | None = None,
     asset_extra_fields: dict[str, Any] | None = None,
-    extra_properties: dict[str, Any] | None = None,
 ) -> pystac.Item:
-    """Create a STAC Item
+    """Create a STAC Item"""
 
-    For
+    if item_extra_fields is None:
+        item_extra_fields = {}
 
-    Args:
-        asset_href (str): The HREF pointing to an asset associated with the item
+    if properties is None:
+        properties = {}
 
-    Returns:
-        Item: STAC Item object
-    """
+    pp = PathParser(urlpath, account_name=STORAGE_ACCOUNT_NAME)
 
-    parts = PathParts(asset_href)
-
-    if extra_properties is None:
-        extra_properties = {}
-
-    dt = datetime.datetime.strptime(RELEASE_DATE, "%Y-%m-%d")
-    # shape = shapely.box(*bbox)
-    # geometry = shapely.geometry.mapping(shape)
     template = pystac.Item(
-        id=parts.stac_item_id,
-        properties=extra_properties,
+        id=pp.stac_item_id,
+        properties=properties,
         geometry=None,
         bbox=None,
-        datetime=dt,
+        datetime=DATETIME_DATA_CREATED,
         stac_extensions=[],
     )
+    template.common_metadata.created = DATETIME_STAC_CREATED
 
     item = stac_table.generate(
-        uri=asset_href,
+        uri=pp.to_cloud_uri(),
         template=template,
         infer_bbox=True,
-        infer_geometry=None,
-        datetime_column=None,
-        infer_datetime=stac_table.InferDatetimeOptions.no,
-        count_rows=True,
-        asset_href=parts.href,
-        asset_key="data",
-        asset_extra_fields=asset_extra_fields,
         proj=True,
+        infer_geometry=False,
+        infer_datetime=stac_table.InferDatetimeOptions.no,
+        datetime_column=None,
+        metadata_created=DATETIME_STAC_CREATED,
+        data_created=DATETIME_DATA_CREATED,
+        count_rows=True,
+        asset_key="data",
+        asset_href=pp.to_cloud_uri(),
+        asset_title=ASSET_TITLE,
+        asset_description=ASSET_DESCRIPTION,
+        asset_media_type=PARQUET_MEDIA_TYPE,
+        asset_roles=["data"],
+        asset_extra_fields=asset_extra_fields,
         storage_options=storage_options,
         validate=False,
     )
     assert isinstance(item, pystac.Item)
-
-    item.common_metadata.created = datetime.datetime.now(datetime.UTC)
 
     # add descriptions to item properties
     if "table:columns" in ASSET_EXTRA_FIELDS and "table:columns" in item.properties:
@@ -294,10 +273,16 @@ def create_item(
         if source_col:
             target_col.setdefault("description", source_col.get("description"))
 
-    # TODO: make configurable upstream
-    item.assets["data"].title = ASSET_TITLE
-    item.assets["data"].description = ASSET_DESCRIPTION
-
+    # Optionally add an HTTPS link if the URI uses a 'cloud protocol'
+    if not item.assets["data"].href.startswith("https://"):
+        item.add_link(
+            pystac.Link(
+                rel="alternate",
+                target=pp.to_https_url(),
+                title="HTTPS access",
+                media_type=PARQUET_MEDIA_TYPE,
+            )
+        )
     return item
 
 
@@ -315,19 +300,22 @@ if __name__ == "__main__":
     stac_io = DefaultStacIO()
     layout = ParquetLayout()
 
-    collection = create_collection(extra_fields={"container_uri": CONTAINER_URI})
+    collection = create_collection(
+        extra_fields={"storage_pattern": CONTAINER_URI + "/*.parquet"}
+    )
     collection.validate_all()
 
-    for uri in uris:
+    for uri in tqdm.tqdm(uris, desc="Processing files"):
         match = re.search(r"_([0-9]+m)\.parquet$", uri)
         if match:
             buffer_size = match.group(1)
-            extra_properties = {"buffer_size": buffer_size}
+            item_extra_fields = {"buffer_size": buffer_size}
+
         item = create_item(
             uri,
             storage_options=storage_options,
             asset_extra_fields=ASSET_EXTRA_FIELDS,
-            extra_properties=extra_properties,
+            item_extra_fields=item_extra_fields,
         )
         item.validate()
         collection.add_item(item)
@@ -341,16 +329,15 @@ if __name__ == "__main__":
     with fsspec.open(GEOPARQUET_STAC_ITEMS_HREF, mode="wb", **storage_options) as f:
         item_extents.to_parquet(f)
 
-    collection.add_asset(
-        "geoparquet-stac-items",
-        pystac.Asset(
-            GEOPARQUET_STAC_ITEMS_HREF,
-            title="GeoParquet STAC items",
-            description="Snapshot of the collection's STAC items exported to GeoParquet format.",
-            media_type=PARQUET_MEDIA_TYPE,
-            roles=["data"],
-        ),
+    gpq_items_asset = pystac.Asset(
+        GEOPARQUET_STAC_ITEMS_HREF,
+        title="GeoParquet STAC items",
+        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
+        media_type=PARQUET_MEDIA_TYPE,
+        roles=["metadata"],
     )
+    gpq_items_asset.common_metadata.created = DATETIME_DATA_CREATED
+    collection.add_asset("geoparquet-stac-items", gpq_items_asset)
 
     # TODO: there should be a cleaner method to remove the previous stac catalog and its items
     try:
