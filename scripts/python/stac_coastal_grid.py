@@ -89,6 +89,11 @@ COLUMN_DESCRIPTIONS = [
         "description": "Bounding box of the tile in WGS84 coordinates, represented as a dictionary.",
     },
     {
+        "name": "coastal_grid:utm_epsg",
+        "type": "int32",
+        "description": "EPSG code for the UTM zone of the tile estimated by GeoPandas.estimate_utm_crs().",
+    },
+    {
         "name": "admin:countries",
         "type": "string",
         "description": """JSON list of countries intersecting the tile (e.g., '["CA", "US"]').""",
