@@ -18,10 +18,6 @@ from coastpy.geo.quadtiles import make_mercantiles
 from coastpy.geo.quadtiles_utils import add_geo_columns
 from coastpy.io.utils import name_bounds
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 
 def short_id(seed: str, length: int = 3) -> str:
     """Generate a short deterministic ID based on a seed."""
@@ -56,7 +52,7 @@ def load_data(
         df = gpd.read_parquet(f)
     if to_crs:
         df = df.to_crs(to_crs)
-    logger.info(f"Loaded {uri} with {len(df)} features.")
+    logging.info(f"Loaded {uri} with {len(df)} features.")
     return df
 
 
@@ -70,12 +66,12 @@ def clip_and_filter(grid, coastal_zone):
         .drop_duplicates(subset="coastal_grid:quadkey")
         .drop(columns=["index_right"])
     )
-    logger.info(f"Filtered grid tiles: {len(filtered_tiles)} features.")
+    logging.info(f"Filtered grid tiles: {len(filtered_tiles)} features.")
 
     # Clip the tiles by the coastal zone
     clipped_tiles = gpd.overlay(filtered_tiles, coastal_zone, how="intersection")
     clipped_tiles = clipped_tiles.explode(index_parts=False).reset_index(drop=True)
-    logger.info(f"Clipped tiles: {len(clipped_tiles)} features.")
+    logging.info(f"Clipped tiles: {len(clipped_tiles)} features.")
     return clipped_tiles
 
 
@@ -141,6 +137,7 @@ COLUMN_ORDER = [
     "coastal_grid:id",
     "coastal_grid:quadkey",
     "coastal_grid:bbox",
+    "coastal_grid:utm_epsg",
     "admin:countries",
     "admin:continents",
     "s2:mgrs_tile",
@@ -178,7 +175,7 @@ def main(
         if not force:
             try:
                 with fsspec.open(storage_urlpath, mode="rb", **storage_options) as f:
-                    logger.info(f"File already exists: {storage_urlpath}")
+                    logging.info(f"File already exists: {storage_urlpath}")
                     continue
             except FileNotFoundError:
                 pass
@@ -229,7 +226,7 @@ def main(
         with fsspec.open(storage_urlpath, mode="wb", **storage_options) as f:
             tiles.to_parquet(f)
 
-        logger.info(f"Saved: {storage_urlpath}")
+        logging.info(f"Saved: {storage_urlpath}")
 
 
 if __name__ == "__main__":
