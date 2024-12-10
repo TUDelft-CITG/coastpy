@@ -1,9 +1,7 @@
-import dataclasses
 import datetime
 import logging
 import os
 import pathlib
-import re
 from typing import Any
 
 import fsspec
@@ -24,9 +22,17 @@ import xarray as xr
 from coclicodata.coclico_stac.layouts import CoCliCoCOGLayout
 from dotenv import load_dotenv
 from pystac.extensions import raster
+from pystac.extensions.file import FileExtension
+from pystac.extensions.item_assets import ItemAssetsExtension
+from pystac.extensions.projection import ProjectionExtension
+from pystac.extensions.scientific import ScientificExtension
+from pystac.extensions.version import VersionExtension
+from pystac.provider import ProviderRole
 from pystac.stac_io import DefaultStacIO
 from stactools.core.utils import antimeridian
 from tqdm import tqdm
+
+from coastpy.io.utils import PathParser
 
 # Load the environment variables from the .env file
 load_dotenv(override=True)
@@ -50,45 +56,25 @@ ASSET_EXTRA_FIELDS = {
     "xarray:storage_options": {"account_name": "coclico"},
 }
 
-DATE = datetime.datetime(2023, 10, 30, tzinfo=datetime.UTC)
+# Container and URI configuration
+VERSION = "v1.1"
+DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
+DATETIME_DATA_CREATED = datetime.datetime(2023, 10, 30, tzinfo=datetime.UTC)
+CONTAINER_NAME = "deltares-delta-dtm"
+CONTAINER_URI = f"az://{CONTAINER_NAME}/{VERSION}"
+GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
+LICENSE = "CC-BY-4.0"
 
+# Data specifics
 NODATA_VALUE = -9999
 RESOLUTION = 30
+DATA_TYPE = raster.DataType.FLOAT32
+UNIT = "m"
 
 PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 
-CONTAINER_NAME = "deltares-delta-dtm"
-PREFIX = "v1.1"
-CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
-GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
-
+# NOTE: Since December 2024 we have changed to https hrefs instead of az blob storage paths
 EXAMPLE_HREF = "https://coclico.blob.core.windows.net/deltares-delta-dtm/v1.1/DeltaDTM_v1_1_N03W052.tif"
-
-
-@dataclasses.dataclass
-class PathParser:
-    """
-    Parses a cloud storage path into its component parts, specifically designed for Azure Blob Storage and COG data.
-    This class assumes paths are formatted like "az://<container>/<version>/<filename>.tif"
-    """
-
-    path: str
-    container: str | None = None
-    prefix: str | None = None
-    name: str | None = None
-    stac_item_id: str | None = None
-
-    _base_href = f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
-
-    def __post_init__(self) -> None:
-        stripped_path = re.sub(r"^\w+://", "", self.path)
-        split_path = stripped_path.rstrip("/").split("/")
-
-        self.container = split_path[0]
-        self.name = split_path[-1]
-        self.prefix = "/".join(split_path[1:-1])
-        self.stac_item_id = self.name.rsplit(".", 1)[0]
-        self.href = f"{self._base_href}/{self.container}/{self.prefix}/{self.name}"
 
 
 def create_collection(
@@ -98,10 +84,10 @@ def create_collection(
         pystac.Provider(
             name="Deltares",
             roles=[
-                pystac.provider.ProviderRole.PRODUCER,
-                pystac.provider.ProviderRole.PROCESSOR,
-                pystac.provider.ProviderRole.HOST,
-                pystac.provider.ProviderRole.LICENSOR,
+                ProviderRole.PRODUCER,
+                ProviderRole.PROCESSOR,
+                ProviderRole.HOST,
+                ProviderRole.LICENSOR,
             ],
             url="https://deltares.nl",
         ),
@@ -109,7 +95,7 @@ def create_collection(
 
     extent = pystac.Extent(
         pystac.SpatialExtent([[-180.0, 90.0, 180.0, -90.0]]),
-        pystac.TemporalExtent([[DATE, None]]),
+        pystac.TemporalExtent([[DATETIME_DATA_CREATED, None]]),
     )
 
     links = [
@@ -147,12 +133,13 @@ def create_collection(
             "https://coclico.blob.core.windows.net/assets/thumbnails/deltares-delta-dtm-thumbnail.jpeg",
             title="Thumbnail",
             media_type=pystac.MediaType.JPEG,
+            roles=["thumbnail"],
         ),
     )
     collection.links = links
     collection.keywords = keywords
 
-    pystac.extensions.item_assets.ItemAssetsExtension.add_to(collection)
+    ItemAssetsExtension.add_to(collection)
 
     collection.extra_fields["item_assets"] = {
         "data": {
@@ -167,7 +154,7 @@ def create_collection(
     if extra_fields:
         collection.extra_fields.update(extra_fields)
 
-    pystac.extensions.scientific.ScientificExtension.add_to(collection)
+    ScientificExtension.add_to(collection)
     collection.extra_fields["sci:citation"] = (
         """Pronk, Maarten. 2024. “DeltaDTM v1.1: A Global Coastal Digital Terrain Model.” 4TU.ResearchData. https://doi.org/10.4121/21997565.V3."""
     )
@@ -179,7 +166,7 @@ def create_collection(
         }
     ]
 
-    pystac.extensions.version.VersionExtension.add_to(collection)
+    VersionExtension.add_to(collection)
     collection.extra_fields["version"] = "1.1"
 
     return collection
@@ -194,19 +181,16 @@ def create_item(block, item_id, antimeridian_strategy=antimeridian.Strategy.SPLI
         id=item_id,
         geometry=geometry,
         bbox=bbox,
-        datetime=DATE,
+        datetime=DATETIME_DATA_CREATED,
         properties={},
     )
+    item.common_metadata.created = DATETIME_STAC_CREATED
 
     antimeridian.fix_item(item, antimeridian_strategy)
 
-    item.common_metadata.created = datetime.datetime.now(datetime.UTC)
-
-    ext = pystac.extensions.projection.ProjectionExtension.ext(
-        item, add_if_missing=True
-    )
+    ext = ProjectionExtension.ext(item, add_if_missing=True)
     ext.bbox = block.rio.bounds()  # these are provided in the crs of the data
-    ext.shape = tuple(v for k, v in block.sizes.items() if k in ["y", "x"])
+    ext.shape = [v for k, v in block.sizes.items() if k in ["y", "x"]]
     ext.epsg = block.rio.crs.to_epsg()
     ext.geometry = shapely.geometry.mapping(shapely.geometry.box(*ext.bbox))
     ext.transform = list(block.rio.transform())[:6]
@@ -216,7 +200,7 @@ def create_item(block, item_id, antimeridian_strategy=antimeridian.Strategy.SPLI
 
 
 def create_asset(
-    item, asset_title, asset_href, nodata, resolution, data_type, nbytes=None
+    item, asset_title, asset_href, nodata, resolution, data_type, nbytes=None, unit=None
 ):
     asset = pystac.Asset(
         href=asset_href,
@@ -224,10 +208,11 @@ def create_asset(
         title=asset_title,
         roles=["data"],
     )
+    asset.common_metadata.created = DATETIME_DATA_CREATED
 
     item.add_asset("data", asset)
 
-    pystac.extensions.file.FileExtension.ext(asset, add_if_missing=True)
+    FileExtension.ext(asset, add_if_missing=True)
 
     if nbytes:
         asset.extra_fields["file:size"] = nbytes
@@ -236,7 +221,8 @@ def create_asset(
         raster.RasterBand.create(
             nodata=nodata,
             spatial_resolution=resolution,
-            data_type=data_type,  # e.g., raster.DataType.INT8
+            data_type=data_type,
+            unit=unit,
         )
     ]
 
@@ -262,19 +248,20 @@ if __name__ == "__main__":
 
     for fp in tqdm(fps, desc="Processing file paths"):
         href = "az://" + fp
-        pp = PathParser(href)
+        urlpath = PathParser(href, account_name=STORAGE_ACCOUNT_NAME)
 
         with fs.open(fp, "rb") as f:
             block = xr.open_dataset(f, engine="rasterio")["band_data"].squeeze()
 
-        item = create_item(block, pp.stac_item_id)
+        item = create_item(block, urlpath.stac_item_id)
         item = create_asset(
             item,
             ASSET_TITLE,
-            pp.href,
+            urlpath.to_https_url(),
             nodata=NODATA_VALUE,
             resolution=RESOLUTION,
-            data_type=raster.DataType.FLOAT32,
+            data_type=DATA_TYPE,
+            unit=UNIT,
         )
         collection.add_item(item)
 
@@ -287,25 +274,25 @@ if __name__ == "__main__":
     with fsspec.open(GEOPARQUET_STAC_ITEMS_HREF, mode="wb", **storage_options) as f:
         item_extents.to_parquet(f)
 
-    collection.add_asset(
-        "geoparquet-stac-items",
-        pystac.Asset(
-            GEOPARQUET_STAC_ITEMS_HREF,
-            title="GeoParquet STAC items",
-            description="Snapshot of the collection's STAC items exported to GeoParquet format.",
-            media_type=PARQUET_MEDIA_TYPE,
-            roles=["data"],
-        ),
+    gpq_items_asset = pystac.Asset(
+        GEOPARQUET_STAC_ITEMS_HREF,
+        title="GeoParquet STAC items",
+        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
+        media_type=PARQUET_MEDIA_TYPE,
+        roles=["metadata"],
     )
+    gpq_items_asset.common_metadata.created = DATETIME_DATA_CREATED
+    collection.add_asset("geoparquet-stac-items", gpq_items_asset)
 
-    collection.add_asset(
-        "geoserver_link",
-        pystac.Asset(
-            # https://coclico.avi.deltares.nl/geoserver/%s/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=%s"%(COLLECTION_ID, COLLECTION_ID + ":" + ASSET_TITLE),
-            "https://coclico.avi.deltares.nl/geoserver/cfhp/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=cfhp:HIGH_DEFENDED_MAPS_Mean_spring_tide",  # test
-            title="Geoserver Mosaic link",
-            media_type=pystac.media_type.MediaType.COG,
-        ),
+    # Currently this is a link for testing purpose. When the data is available on the WMS
+    # server it will be updated here.
+    collection.add_link(
+        pystac.Link(
+            rel="service",
+            target="https://coclico.avi.deltares.nl/geoserver/cfhp/wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=cfhp:HIGH_DEFENDED_MAPS_Mean_spring_tide",
+            title="Geoserver WMS Link",
+            media_type="application/vnd.ogc.wms_xml",
+        )
     )
 
     catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
