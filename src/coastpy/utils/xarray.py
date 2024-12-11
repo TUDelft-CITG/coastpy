@@ -439,3 +439,17 @@ def extract_data_inside_polygon(rotated: xr.Dataset, polygon: Polygon) -> xr.Dat
     subset = rotated.isel(x=x_slice, y=y_slice)
 
     return subset
+
+
+def apply_mask(da: xr.DataArray, values: list[int]) -> xr.DataArray:
+    """
+    Mask specific pixel values in the input DataArray.
+
+    Args:
+        da (xr.DataArray): The input DataArray to be masked.
+        values (list[int]): List of numeric values to mask.
+
+    Returns:
+        xr.DataArray: The input DataArray with pixels matching the values set to NaN.
+    """
+    return da.where(~da.isin(values))
