@@ -5,6 +5,7 @@ import odc.geo
 import odc.stac  # noqa
 import rioxarray  # noqa
 import xarray as xr
+from odc.geo import geom
 
 
 class SceneClassification(Enum):
@@ -131,6 +132,42 @@ def numeric_mask(
 
     if isinstance(data, xr.DataArray):
         return data.isin(values)
+
+    msg = f"Unsupported input type: {type(data)}"
+    raise TypeError(msg)
+
+
+def geometry_mask(
+    data: xr.Dataset | xr.DataArray,
+    geometry: geom.Geometry,
+    invert: bool = False,
+    all_touched: bool = True,
+) -> xr.Dataset | xr.DataArray:
+    """
+    Generate a mask for an xarray Dataset or DataArray based on a geometry.
+
+    Args:
+        data (xr.Dataset | xr.DataArray): The input data to mask.
+        geometry (odc.geo.geom.Geometry): The geometry to use as the mask.
+        invert (bool, optional): Whether to invert the mask (mask inside instead of outside).
+            Defaults to False.
+        all_touched (bool, optional): Whether to include all pixels touched by the geometry.
+            Defaults to True.
+        keep_attrs (bool, optional): Whether to retain the attributes of the input data.
+            Defaults to True.
+
+    Returns:
+        xr.Dataset | xr.DataArray: The masked data.
+
+    Raises:
+        TypeError: If the input data is not an xarray Dataset or DataArray.
+    """
+
+    if isinstance(data, xr.Dataset):
+        return data.map(lambda da: geometry_mask(da, geometry, invert, all_touched))
+
+    if isinstance(data, xr.DataArray):
+        return data.odc.mask(geometry, invert=invert, all_touched=all_touched)
 
     msg = f"Unsupported input type: {type(data)}"
     raise TypeError(msg)

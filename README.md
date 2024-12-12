@@ -57,7 +57,7 @@ az storage blob download-batch \
 
 The Coastal Grid dataset provides a global tiling system for coastal analytics. It
 supports scalable data processing workflows by offering coastal tiles at varying zoom
-levels (5, 6, 7) and buffer sizes (500 m, 1000 m, 2000 m, 5000 m, 10000 m, 15000 m).
+levels (5, 6, 7, 8, 9, 10) and buffer sizes (500 m, 1000 m, 2000 m, 5000 m, 10000 m, 15000 m).
 
 ## Usage
 

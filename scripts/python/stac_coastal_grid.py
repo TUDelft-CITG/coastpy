@@ -28,7 +28,7 @@ STORAGE_ACCOUNT_NAME = "coclico"
 storage_options = {"account_name": STORAGE_ACCOUNT_NAME, "credential": sas_token}
 
 # Container and URI configuration
-VERSION = "2024-12-10"
+VERSION = "2024-12-11"
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
 DATETIME_DATA_CREATED = datetime.datetime(2023, 2, 9)
 CONTAINER_NAME = "coastal-grid"
@@ -44,7 +44,7 @@ COLLECTION_TITLE = "Coastal Grid"
 DESCRIPTION = """
 The Coastal Grid dataset provides a global tiling system for geospatial analytics in coastal areas.
 It supports scalable data processing workflows by offering structured grids at varying zoom levels
-(5, 6, 7) and buffer sizes (500m, 1000m, 2000m, 5000m, 10000m, 15000m).
+(5, 6, 7, 8, 9, 10) and buffer sizes (500m, 1000m, 2000m, 5000m, 10000m, 15000m).
 
 Each tile contains information on intersecting countries, continents, and Sentinel-2 MGRS tiles
 as nested JSON lists. The dataset is particularly suited for applications requiring global coastal

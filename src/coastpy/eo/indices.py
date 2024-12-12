@@ -46,11 +46,11 @@ INDEX_DICT = {
         "description": "Modified Soil Adjusted Vegetation Index, Qi et al. 1994",
     },
     "NDMI": {
-        "formula": lambda ds: (ds.nir - ds.swir1) / (ds.nir + ds.swir1),
+        "formula": lambda ds: (ds.nir - ds.swir16) / (ds.nir + ds.swir16),
         "description": "Normalized Difference Moisture Index, Gao 1996",
     },
     "NBR": {
-        "formula": lambda ds: (ds.nir - ds.swir2) / (ds.nir + ds.swir2),
+        "formula": lambda ds: (ds.nir - ds.swir22) / (ds.nir + ds.swir22),
         "description": "Normalized Burn Ratio, Lopez Garcia 1991",
     },
     "BAI": {
@@ -58,15 +58,15 @@ INDEX_DICT = {
         "description": "Burn Area Index, Martin 1998",
     },
     "NDCI": {
-        "formula": lambda ds: (ds.red_edge_1 - ds.red) / (ds.red_edge_1 + ds.red),
+        "formula": lambda ds: (ds.rededge1 - ds.red) / (ds.rededge1 + ds.red),
         "description": "Normalized Difference Chlorophyll Index, Mishra & Mishra, 2012",
     },
     "NDSI": {
-        "formula": lambda ds: (ds.green - ds.swir1) / (ds.green + ds.swir1),
+        "formula": lambda ds: (ds.green - ds.swir16) / (ds.green + ds.swir16),
         "description": "Normalized Difference Snow Index, Hall 1995",
     },
     "NDTI": {
-        "formula": lambda ds: (ds.swir1 - ds.swir2) / (ds.swir1 + ds.swir2),
+        "formula": lambda ds: (ds.swir16 - ds.swir22) / (ds.swir16 + ds.swir22),
         "description": "Normalized Difference Tillage Index, Van Deventer et al. 1997",
     },
     "NDWI": {
@@ -74,40 +74,40 @@ INDEX_DICT = {
         "description": "Normalized Difference Water Index, McFeeters 1996",
     },
     "MNDWI": {
-        "formula": lambda ds: (ds.green - ds.swir1) / (ds.green + ds.swir1),
+        "formula": lambda ds: (ds.green - ds.swir16) / (ds.green + ds.swir16),
         "description": "Modified Normalized Difference Water Index, Xu 2006",
     },
     "NDBI": {
-        "formula": lambda ds: (ds.swir1 - ds.nir) / (ds.swir1 + ds.nir),
+        "formula": lambda ds: (ds.swir16 - ds.nir) / (ds.swir16 + ds.nir),
         "description": "Normalized Difference Built-Up Index, Zha 2003",
     },
     "BUI": {
-        "formula": lambda ds: ((ds.swir1 - ds.nir) / (ds.swir1 + ds.nir))
+        "formula": lambda ds: ((ds.swir16 - ds.nir) / (ds.swir16 + ds.nir))
         - ((ds.nir - ds.red) / (ds.nir + ds.red)),
         "description": "Built-Up Index, He et al. 2010",
     },
     "BAEI": {
-        "formula": lambda ds: (ds.red + 0.3) / (ds.green + ds.swir1),
+        "formula": lambda ds: (ds.red + 0.3) / (ds.green + ds.swir16),
         "description": "Built-Up Area Extraction Index, Bouzekri et al. 2015",
     },
     "NBI": {
-        "formula": lambda ds: (ds.swir1 + ds.red) / ds.nir,
+        "formula": lambda ds: (ds.swir16 + ds.red) / ds.nir,
         "description": "New Built-Up Index, Jieli et al. 2010",
     },
     "BSI": {
-        "formula": lambda ds: ((ds.swir1 + ds.red) - (ds.nir + ds.blue))
-        / ((ds.swir1 + ds.red) + (ds.nir + ds.blue)),
+        "formula": lambda ds: ((ds.swir16 + ds.red) - (ds.nir + ds.blue))
+        / ((ds.swir16 + ds.red) + (ds.nir + ds.blue)),
         "description": "Bare Soil Index, Rikimaru et al. 2002",
     },
     "AWEI_ns": {
         "formula": lambda ds: (
-            4 * (ds.green - ds.swir1) - (0.25 * ds.nir + 2.75 * ds.swir2)
+            4 * (ds.green - ds.swir16) - (0.25 * ds.nir + 2.75 * ds.swir22)
         ),
         "description": "Automated Water Extraction Index (no shadows), Feyisa 2014",
     },
     "AWEI_sh": {
         "formula": lambda ds: (
-            ds.blue + 2.5 * ds.green - 1.5 * (ds.nir + ds.swir1) - 0.25 * ds.swir2
+            ds.blue + 2.5 * ds.green - 1.5 * (ds.nir + ds.swir16) - 0.25 * ds.swir22
         ),
         "description": "Automated Water Extraction Index (shadows), Feyisa 2014",
     },
@@ -117,8 +117,8 @@ INDEX_DICT = {
             + 171 * ds.green
             + 3 * ds.red
             - 70 * ds.nir
-            - 45 * ds.swir1
-            - 71 * ds.swir2
+            - 45 * ds.swir16
+            - 71 * ds.swir22
         ),
         "description": "Water Index, Fisher 2016",
     },
@@ -128,8 +128,8 @@ INDEX_DICT = {
             + 0.2021 * ds.green
             + 0.3102 * ds.red
             + 0.1594 * ds.nir
-            + -0.6806 * ds.swir1
-            + -0.6109 * ds.swir2
+            + -0.6806 * ds.swir16
+            + -0.6109 * ds.swir22
         ),
         "description": "Tasseled Cap Wetness, Crist 1985",
     },
@@ -139,8 +139,8 @@ INDEX_DICT = {
             + -0.2819 * ds.green
             + -0.4934 * ds.red
             + 0.7940 * ds.nir
-            + -0.0002 * ds.swir1
-            + -0.1446 * ds.swir2
+            + -0.0002 * ds.swir16
+            + -0.1446 * ds.swir22
         ),
         "description": "Tasseled Cap Greeness, Crist 1985",
     },
@@ -150,50 +150,17 @@ INDEX_DICT = {
             + 0.4158 * ds.green
             + 0.5524 * ds.red
             + 0.5741 * ds.nir
-            + 0.3124 * ds.swir1
-            + -0.2303 * ds.swir2
+            + 0.3124 * ds.swir16
+            + -0.2303 * ds.swir22
         ),
         "description": "Tasseled Cap Brightness, Crist 1985",
     },
-    "TCW_GSO": {
-        "formula": lambda ds: (
-            0.0649 * ds.blue
-            + 0.2802 * ds.green
-            + 0.3072 * ds.red
-            + -0.0807 * ds.nir
-            + -0.4064 * ds.swir1
-            + -0.5602 * ds.swir2
-        ),
-        "description": "Tasseled Cap Wetness, Nedkov 2017",
-    },
-    "TCG_GSO": {
-        "formula": lambda ds: (
-            -0.0635 * ds.blue
-            + -0.168 * ds.green
-            + -0.348 * ds.red
-            + 0.3895 * ds.nir
-            + -0.4587 * ds.swir1
-            + -0.4064 * ds.swir2
-        ),
-        "description": "Tasseled Cap Greeness, Nedkov 2017",
-    },
-    "TCB_GSO": {
-        "formula": lambda ds: (
-            0.0822 * ds.blue
-            + 0.136 * ds.green
-            + 0.2611 * ds.red
-            + 0.5741 * ds.nir
-            + 0.3882 * ds.swir1
-            + 0.1366 * ds.swir2
-        ),
-        "description": "Tasseled Cap Brightness, Nedkov 2017",
-    },
     "CMR": {
-        "formula": lambda ds: (ds.swir1 / ds.swir2),
+        "formula": lambda ds: (ds.swir16 / ds.swir22),
         "description": "Clay Minerals Ratio, Drury 1987",
     },
     "FMR": {
-        "formula": lambda ds: (ds.swir1 / ds.nir),
+        "formula": lambda ds: (ds.swir16 / ds.nir),
         "description": "Ferrous Minerals Ratio, Segal 1982",
     },
     "IOR": {

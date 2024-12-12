@@ -15,8 +15,10 @@ import stac_geoparquet
 import xarray as xr
 
 from coastpy.eo.indices import calculate_indices
+from coastpy.eo.mask import apply_mask, geometry_mask, nodata_mask, numeric_mask
 from coastpy.stac.utils import read_snapshot
-from coastpy.utils.xarray import get_nodata, set_nodata
+
+# NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
 
 
 class ImageCollection:
@@ -33,7 +35,6 @@ class ImageCollection:
         self.catalog_url = catalog_url
         self.collection = collection
         self.catalog = pystac_client.Client.open(self.catalog_url)
-        self.clip = None
 
         # Configuration
         self.search_params = {}
@@ -44,8 +45,13 @@ class ImageCollection:
         self.load_params = {}
         self.stac_cfg = stac_cfg or {}
 
+        # Masking options
+        self.geometry_mask = None
+        self.nodata_mask = False
+        self.value_mask = None
+
         # Internal state
-        self.items = None
+        self.stac_items = None
         self.dataset = None
 
     def search(
@@ -80,10 +86,10 @@ class ImageCollection:
         # Perform the actual search
         logging.info(f"Executing search with params: {self.search_params}")
         search = self.catalog.search(**self.search_params)
-        self.items = list(search.items())
+        self.stac_items = list(search.items())
 
         # Check if items were found
-        if not self.items:
+        if not self.stac_items:
             msg = "No items found for the given search parameters."
             raise ValueError(msg)
 
@@ -91,7 +97,7 @@ class ImageCollection:
         if filter_function:
             try:
                 logging.info("Applying custom filter function.")
-                self.items = filter_function(self.items)
+                self.stac_items = filter_function(self.stac_items)
             except Exception as e:
                 msg = f"Error in filter_function: {e}"
                 raise RuntimeError(msg)  # noqa: B904
@@ -103,6 +109,7 @@ class ImageCollection:
         bands: list[str],
         percentile: int | None = None,
         spectral_indices: list[str] | None = None,
+        mask_nodata: bool = True,
         chunks: dict[str, int | str] | None = None,
         groupby: str = "solar_day",
         resampling: str | dict[str, str] | None = None,
@@ -117,7 +124,6 @@ class ImageCollection:
         like: xr.Dataset | None = None,
         patch_url: str | None = None,
         dst_crs: Any | None = None,
-        clip: bool | None = None,
     ) -> "ImageCollection":
         """
         Configure loading parameters.
@@ -140,7 +146,7 @@ class ImageCollection:
         self.spectral_indices = spectral_indices
         self.percentile = percentile
         self.dst_crs = dst_crs
-        self.clip = clip
+        self.mask_nodata = mask_nodata
 
         # ODC StaC load parameters
         self.load_params = {
@@ -161,42 +167,76 @@ class ImageCollection:
         }
         return self
 
+    def mask(
+        self,
+        geometry: odc.geo.geom.Geometry | None = None,
+        nodata: bool = True,
+        values: list[int] | None = None,
+    ) -> "ImageCollection":
+        """
+        Configure masking options.
+
+        Args:
+            geometry (odc.geo.geom.Geometry | None): Geometry to mask data within.
+            nodata (bool): Whether to apply a nodata mask.
+            values (List[float | int] | None): Specific values to mask.
+
+        Returns:
+            ImageCollection: Updated instance with masking options configured.
+        """
+        self.geometry_mask = geometry
+        self.nodata_mask = nodata
+        self.value_mask = values
+        return self
+
     def _load(self) -> xr.Dataset:
-        """
-        Internal method to load data using odc.stac.
-        """
-        if not self.items:
+        if not self.stac_items:
             msg = "No items found. Perform a search first."
             raise ValueError(msg)
 
         bbox = tuple(self.search_params["intersects"].bounds)
 
+        # Load the data
         ds = odc.stac.load(
-            self.items,
+            self.stac_items,
             bands=self.bands,
             bbox=bbox,
             **self.load_params,
         )
 
-        for band in self.bands:
-            nodata_value = get_nodata(ds[band])
-            ds[band] = ds[band].where(ds[band] != nodata_value)
-            ds[band] = set_nodata(ds[band], np.nan)
+        return ds
 
-        if self.dst_crs and (
-            pyproj.CRS.from_user_input(self.dst_crs).to_epsg() != ds.rio.crs.to_epsg()
-        ):
-            ds = ds.rio.reproject(self.dst_crs)
-            ds = ds.odc.reproject(self.dst_crs, resampling="bilinear", nodata=np.nan)
+    def _apply_masks(self, ds: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
+        # Apply pre-load masks
+        if self.geometry_mask:
+            crs = ds.rio.crs
+            if not crs:
+                msg = "Dataset must have a CRS to apply geometry mask."
+                raise ValueError(msg)
+            geometry = self.geometry_mask.to_crs(crs)
+            ds = geometry_mask(ds, geometry)
+            return ds
 
-            for band in self.bands:
-                ds[band] = set_nodata(ds[band], np.nan)
+        if self.nodata_mask:
+            mask = nodata_mask(ds)
+            ds = apply_mask(ds, mask)
+
+        if self.value_mask:
+            mask = numeric_mask(ds, self.value_mask)
+            ds = apply_mask(ds, mask)
 
         return ds
 
-    def add_spectral_indices(
-        self, indices: list[str], nodata: float | int | None = None
-    ) -> xr.Dataset:
+    def _reproject(
+        self, ds: xr.DataArray | xr.Dataset, dst_crs
+    ) -> xr.DataArray | xr.Dataset:
+        """
+        Reproject the dataset to a new CRS.
+        """
+        ds = ds.odc.reproject(dst_crs, resampling="bilinear", nodata=np.nan)
+        return ds
+
+    def add_spectral_indices(self, indices: list[str]) -> "ImageCollection":
         """
         Add spectral indices to the current dataset.
 
@@ -204,32 +244,51 @@ class ImageCollection:
             indices (List[str]): Spectral indices to calculate.
 
         Returns:
-            xr.Dataset: Updated dataset with spectral indices.
+            ImageCollection: Updated ImageCollection with spectral indices.
         """
-        if self.dataset is None:
-            msg = "No dataset loaded. Perform `execute` first."
-            raise ValueError(msg)
+        self.spectral_indices = indices
+        return self
 
-        self.dataset = calculate_indices(self.dataset, indices)
+    def _composite(
+        self,
+        ds: xr.DataArray | xr.Dataset,
+        percentile: int,
+        determination_times: list[str] | None = None,
+        stac_ids: list[str] | None = None,
+        cloud_cover: float | None = None,
+    ) -> xr.DataArray | xr.Dataset:
+        # Use median() if percentile is 50, otherwise quantile()
+        if percentile == 50:
+            composite = ds.median(dim="time", skipna=True, keep_attrs=True)
+            logging.info("Using median() for composite.")
+        else:
+            composite = ds.quantile(
+                percentile / 100, dim="time", skipna=True, keep_attrs=True
+            )
+            composite.attrs["determination_method"] = "percentile"
+            logging.info("Using quantile() for composite.")
 
-        # Set nodata value for the new spectral indices
-        if nodata is not None:
-            for index in indices:
-                self.dataset[index] = set_nodata(self.dataset[index], nodata)
+        composite.attrs["composite:determination_method"] = "percentile"
+        composite.attrs["composite:percentile"] = percentile
 
-        return self.dataset
+        if determination_times is not None:
+            composite.attrs["composite:determination_datetimes"] = determination_times
 
-    def composite(
-        self, percentile: int = 50, nodata: float | int | None = None
-    ) -> xr.Dataset:
+        if stac_ids is not None:
+            composite.attrs["composite:stac_ids"] = stac_ids
+
+        if cloud_cover is not None:
+            composite.attrs["composite:cloud_cover"] = cloud_cover
+
+        return composite
+
+    def composite(self, percentile: int = 50) -> "ImageCollection":
         """
         Apply a composite operation to the dataset based on the given percentile.
 
         Args:
             percentile (int): Percentile to calculate (e.g., 50 for median).
                             Values range between 0 and 100.
-            nodata (float | int | None): Value to assign for nodata pixels in the resulting composite.
-
         Returns:
             xr.Dataset: Composited dataset.
         """
@@ -243,51 +302,59 @@ class ImageCollection:
 
         logging.info(f"Applying {percentile}th percentile composite.")
 
-        # Use median() if percentile is 50, otherwise quantile()
-        if percentile == 50:
-            composite = self.dataset.median(dim="time", skipna=True, keep_attrs=True)
-            logging.info("Using median() for composite.")
-        else:
-            composite = self.dataset.quantile(
-                percentile / 100, dim="time", skipna=True, keep_attrs=True
-            )
-            logging.info("Using quantile() for composite.")
+        self.percentile = percentile
+        return self
 
-        # Set nodata values for each band if provided
-        if nodata is not None:
-
-            def apply_nodata(da):
-                return set_nodata(da, nodata)
-
-            composite = composite.map(apply_nodata)
-
-        self.dataset = composite
-        return self.dataset
-
-    def execute(self) -> xr.Dataset:
-        """
-        Trigger the search and load process and return the dataset.
-        """
-        # Perform search if not already done
-        if self.items is None:
-            logging.info(f"Executing search with params: {self.search_params}")
+    def execute(self) -> xr.DataArray | xr.Dataset:
+        if self.stac_items is None:
             search = self.catalog.search(**self.search_params)
-            self.items = list(search.items())
+            self.stac_items = list(search.items())
 
-        # Perform load if not already done
         if self.dataset is None:
-            logging.info("Loading dataset...")
             self.dataset = self._load()
 
+        if self.geometry_mask or self.nodata_mask or self.value_mask:
+            self.dataset = self._apply_masks(self.dataset)
+
+        if self.dst_crs and (
+            pyproj.CRS.from_user_input(self.dst_crs).to_epsg()
+            != self.dataset.rio.crs.to_epsg()
+        ):
+            self.dataset = self._reproject(self.dataset, self.dst_crs)
+
         if self.percentile:
-            logging.info("Compositing dataset...")
-            self.dataset = self.composite(percentile=self.percentile, nodata=np.nan)
+            determination_times = (
+                self.dataset.time.to_series().apply(lambda x: x.isoformat()).unique()
+            )
+
+            stac_ids = [i.id for i in self.stac_items]
+
+            cloud_cover = float(
+                np.mean(
+                    [float(i.properties["eo:cloud_cover"]) for i in self.stac_items]
+                )
+            )
+
+            self.dataset = self._composite(
+                ds=self.dataset,
+                percentile=self.percentile,
+                determination_times=determination_times,
+                stac_ids=stac_ids,
+                cloud_cover=cloud_cover,
+            )
 
         if self.spectral_indices:
-            logging.info(f"Calculating spectral indices: {self.spectral_indices}")
-            self.dataset = self.add_spectral_indices(
-                self.spectral_indices, nodata=np.nan
-            )
+            if isinstance(self.dataset, xr.DataArray):
+                try:
+                    ds = self.dataset.to_dataset("band")
+                    self.dataset = ds
+                except Exception as e:
+                    msg = "Cannot convert DataArray to Dataset: {e}"
+                    raise ValueError(msg) from e
+                msg = "Spectral indices not implemented for DataArray."
+                raise NotImplementedError(msg)
+
+            self.dataset = calculate_indices(self.dataset, self.spectral_indices)
 
         return self.dataset
 
@@ -411,7 +478,7 @@ class TileCollection:
             pyproj.CRS.from_user_input(self.dst_crs).to_epsg() != ds.rio.crs.to_epsg()
         ):
             ds = ds.rio.reproject(self.dst_crs)
-            ds = ds.odc.reproject(self.dst_crs, resampling="cubic", nodata=np.nan)
+            ds = ds.odc.reproject(self.dst_crs, resampling="cubic")
 
         return ds
 
@@ -532,84 +599,101 @@ class CopernicusDEMCollection(TileCollection):
 
 
 if __name__ == "__main__":
+    import logging
+    import os
+    from typing import Any, Literal
 
-    def filter_and_sort_stac_items(
-        items: list[pystac.Item],
-        max_items: int,
-        group_by: str,
-        sort_by: str,
-    ) -> list[pystac.Item]:
-        """
-        Filter and sort STAC items by grouping and ranking within each group.
-
-        Args:
-            items (list[pystac.Item]): List of STAC items to process.
-            max_items (int): Maximum number of items to return per group.
-            group_by (str): Property to group by (e.g., 's2:mgrs_tile').
-            sort_by (str): Property to sort by within each group (e.g., 'eo:cloud_cover').
-
-        Returns:
-            list[pystac.Item]: Filtered and sorted list of STAC items.
-        """
-        try:
-            # Convert STAC items to a DataFrame
-            df = (
-                stac_geoparquet.arrow.parse_stac_items_to_arrow(items)
-                .read_all()
-                .to_pandas()
-            )
-
-            # Group by the specified property and sort within groups
-            df = (
-                df.groupby(group_by, group_keys=False)
-                .apply(lambda group: group.sort_values(sort_by).head(max_items))
-                .reset_index(drop=True)
-            )
-
-            # Reconstruct the filtered list of items from indices
-            return [items[idx] for idx in df.index]
-
-        except Exception as err:
-            logging.error(f"Error filtering and sorting items: {err}")
-            return []
-
+    import dotenv
+    import fsspec
+    import geopandas as gpd
+    import odc
+    import odc.geo.geom
+    import odc.stac
     import planetary_computer as pc
+    import pystac
     import shapely
+    import stac_geoparquet
+    import xarray as xr
+    from odc.stac import configure_rio
 
-    west, south, east, north = (
-        -1.4987754821777346,
-        46.328320550966765,
-        -1.446976661682129,
-        46.352022707044455,
-    )
+    # from coastpy.eo.collection import S2Collection
+    from coastpy.eo.filter import filter_and_sort_stac_items
+    from coastpy.stac.utils import read_snapshot
+    from coastpy.utils.config import configure_instance
+
+    configure_rio(cloud_defaults=True)
+    instance_type = configure_instance()
+
+    dotenv.load_dotenv()
+    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+    storage_options = {"account_name": "coclico", "sas_token": sas_token}
+
+    west, south, east, north = (4.796, 53.108, 5.229, 53.272)
+
     roi = gpd.GeoDataFrame(
         geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
     )
 
+    def get_coastal_zone(coastal_grid, region_of_interest):
+        df = gpd.sjoin(coastal_grid, region_of_interest).drop(columns=["index_right"])
+        coastal_zone = df.union_all()
+        return odc.geo.geom.Geometry(coastal_zone, crs=df.crs)
+
     def filter_function(items):
-        return filter_and_sort_stac_items(
+        r = filter_and_sort_stac_items(
             items, max_items=10, group_by="s2:mgrs_tile", sort_by="eo:cloud_cover"
         )
+        return r
+
+    def read_coastal_grid(
+        zoom: Literal[5, 6, 7, 8, 9, 10],
+        buffer_size: Literal["500m", "1000m", "2000m", "5000m", "10000m", "15000m"],
+        storage_options,
+    ):
+        """
+        Load the coastal zone data layer for a specific buffer size.
+        """
+        coclico_catalog = pystac.Catalog.from_file(
+            "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
+        )
+        coastal_zone_collection = coclico_catalog.get_child("coastal-grid")
+        if coastal_zone_collection is None:
+            msg = "Coastal zone collection not found"
+            raise ValueError(msg)
+        item = coastal_zone_collection.get_item(f"coastal_grid_z{zoom}_{buffer_size}")
+        if item is None:
+            msg = f"Coastal zone item for zoom {zoom} with {buffer_size} not found"
+            raise ValueError(msg)
+        href = item.assets["data"].href
+        with fsspec.open(href, mode="rb", **storage_options) as f:
+            coastal_zone = gpd.read_parquet(f)
+        return coastal_zone
+
+    coastal_grid = read_coastal_grid(
+        zoom=10, buffer_size="5000m", storage_options=storage_options
+    )
+
+    coastal_zone = get_coastal_zone(coastal_grid, roi)
 
     s2 = (
         S2Collection()
         .search(
             roi,
-            datetime_range="2023-01-01/2023-12-31",
+            datetime_range="2022-01-01/2023-12-31",
             query={"eo:cloud_cover": {"lt": 20}},
             filter_function=filter_function,
         )
         .load(
             bands=["blue", "green", "red", "nir", "swir16"],
             percentile=50,
-            spectral_indices=["NDWI", "NDVI"],
-            chunks={"x": 256, "y": 256},
+            spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
+            mask_nodata=True,
+            chunks={},
             patch_url=pc.sign,
         )
+        .mask(geometry=coastal_zone, nodata=True)
         .execute()
     )
 
+    print("Done")
     s2 = s2.compute()
-    deltadtm = DeltaDTMCollection().search(roi).load().execute()
-    cop_dem = CopernicusDEMCollection().search(roi).load().execute()
-    print("done")

@@ -116,3 +116,33 @@ def test_apply_mask(example_data):
     nodata = nodata_mask(example_data)
     masked = apply_mask(example_data, nodata)
     xr.testing.assert_equal(masked, expected_masked)
+
+
+# TODO: ALMOST WORKS
+# def test_geometry_mask():
+#     """Test geometry_mask to extract a 3x3 subarray."""
+#     # Create GeoBox and DataArray
+#     geobox = GeoBox((10, 10), affine=Affine(0.2, 0.0, 4.0, 0.0, -0.2, 54.0), crs="EPSG:4326")
+#     data = xr_zeros(geobox, dtype="float32")
+
+#     # Populate known values
+#     data.values[1:4, 1:4] = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+
+#     # Define the polygon geometry
+#     polygon = geom.polygon(
+#         [(4.3, 53.7), (4.9, 53.7), (4.9, 53.1), (4.3, 53.1), (4.3, 53.7)],
+#         crs="EPSG:4326",
+#     )
+
+#     # Apply the geometry_mask with all_touched=True
+#     masked_data = geometry_mask(data, polygon, invert=False, all_touched=True)
+
+#     # Define the expected result
+#     expected_values = np.full(data.shape, np.nan, dtype=data.dtype)  # Default to NaN
+#     expected_values[1:4, 1:4] = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]  # Expected region
+
+#     expected = data.copy()
+#     expected.values = expected_values
+
+#     # Assert the masked data matches the expected result
+#     xr.testing.assert_equal(masked_data, expected)

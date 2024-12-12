@@ -170,6 +170,7 @@ dependencies:
   - rio-tiler
   - rioxarray
   - spatialpandas
+  - spyndex
   - stac-vrt
   - stackstac
   - stactools

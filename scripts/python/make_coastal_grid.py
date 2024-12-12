@@ -165,32 +165,6 @@ def load_data():
         raise
 
 
-def parse_file_paths(files_to_process):
-    """
-    Parse file paths to extract zoom levels and buffer sizes.
-
-    Args:
-        files_to_process (set): Set of file paths to process.
-
-    Returns:
-        dict: A dictionary grouped by zoom levels, where each key is a zoom level
-              and the value is a list of buffer sizes.
-    """
-    pattern = re.compile(r"coastal_grid_z(\d+)_(\d+m)\.parquet")
-    zoom_to_buffers = defaultdict(list)
-
-    for file_path in files_to_process:
-        file_name = file_path.split("/")[-1]  # Extract the file name
-        match = pattern.match(file_name)
-        if match:
-            zoom, buffer_size = match.groups()
-            zoom_to_buffers[int(zoom)].append(buffer_size)
-        else:
-            logger.error(f"Failed to parse file name {file_name}. Skipping.")
-
-    return zoom_to_buffers
-
-
 VALID_BUFFER_SIZES = ["500m", "1000m", "2000m", "5000m", "10000m", "15000m"]
 COLUMN_ORDER = [
     "coastal_grid:id",
