@@ -5,7 +5,9 @@ import json
 import logging
 import os
 import random
+import re
 import uuid
+from collections import defaultdict
 from functools import partial
 from typing import Literal
 
@@ -17,6 +19,22 @@ import pystac
 from coastpy.geo.quadtiles import make_mercantiles
 from coastpy.geo.quadtiles_utils import add_geo_columns
 from coastpy.io.utils import name_bounds
+
+# Configure logging for your specific module
+logger = logging.getLogger(__name__)  # Replace __name__ with your module name
+
+
+def configure_logging(verbosity: int):
+    """Set logging level based on verbosity."""
+    level = logging.DEBUG if verbosity else logging.INFO
+    logger.setLevel(level)
+    handler = logging.StreamHandler()
+    handler.setLevel(level)
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 
 def short_id(seed: str, length: int = 3) -> str:
@@ -34,28 +52,6 @@ def add_proc_id(geometry, crs):
     return f"{bounds_name}-{deterministic_suffix}"
 
 
-def load_data(
-    uri: str, storage_options=None, to_crs: str | None = None
-) -> gpd.GeoDataFrame:
-    """
-    Load a geospatial dataset and optionally transform its CRS.
-
-    Args:
-        uri (str): URI of the dataset.
-        storage_options (dict, optional): Storage options for fsspec.
-        to_crs (str, optional): CRS to transform the dataset.
-
-    Returns:
-        GeoDataFrame: The loaded dataset.
-    """
-    with fsspec.open(uri, "rb", **(storage_options or {})) as f:
-        df = gpd.read_parquet(f)
-    if to_crs:
-        df = df.to_crs(to_crs)
-    logging.info(f"Loaded {uri} with {len(df)} features.")
-    return df
-
-
 def clip_and_filter(grid, coastal_zone):
     """
     Clip the grid tiles by the coastal zone.
@@ -66,12 +62,12 @@ def clip_and_filter(grid, coastal_zone):
         .drop_duplicates(subset="coastal_grid:quadkey")
         .drop(columns=["index_right"])
     )
-    logging.info(f"Filtered grid tiles: {len(filtered_tiles)} features.")
+    logger.info(f"Filtered grid tiles: {len(filtered_tiles)} features.")
 
     # Clip the tiles by the coastal zone
     clipped_tiles = gpd.overlay(filtered_tiles, coastal_zone, how="intersection")
     clipped_tiles = clipped_tiles.explode(index_parts=False).reset_index(drop=True)
-    logging.info(f"Clipped tiles: {len(clipped_tiles)} features.")
+    logger.info(f"Clipped tiles: {len(clipped_tiles)} features.")
     return clipped_tiles
 
 
@@ -132,6 +128,69 @@ def read_coastal_zone(
     return coastal_zone
 
 
+def load_data():
+    """Load static resources like countries and MGRS datasets."""
+    try:
+        logging.info("Loading static resources...")
+
+        # Check if the countries file exists before reading
+        countries_url = "https://coclico.blob.core.windows.net/public/countries.parquet"
+        if not fsspec.filesystem("https").exists(countries_url):
+            raise FileNotFoundError(f"Countries file not found: {countries_url}")
+
+        with fsspec.open(countries_url, "rb") as f:
+            countries = gpd.read_parquet(f)
+        logging.info("Loaded countries dataset.")
+
+        mgrs_url = "https://coclico.blob.core.windows.net/tiles/S2A_OPER_GIP_TILPAR_MPC.parquet"
+        if not fsspec.filesystem("https").exists(mgrs_url):
+            raise FileNotFoundError(f"MGRS file not found: {mgrs_url}")
+
+        with fsspec.open(mgrs_url, "rb") as f:
+            mgrs = gpd.read_parquet(f).to_crs(4326)
+        logging.info("Loaded MGRS dataset.")
+
+        utm_grid_url = "https://coclico.blob.core.windows.net/public/utm_grid.parquet"
+        if not fsspec.filesystem("https").exists(utm_grid_url):
+            raise FileNotFoundError(f"UTM Grid file not found: {utm_grid_url}")
+
+        with fsspec.open(utm_grid_url, "rb") as f:
+            utm_grid = gpd.read_parquet(f, columns=["geometry", "epsg"])
+        utm_grid = utm_grid.dissolve("epsg").reset_index()
+
+        return countries, mgrs, utm_grid
+
+    except Exception as e:
+        logging.error(f"Failed to load static resources: {e}")
+        raise
+
+
+def parse_file_paths(files_to_process):
+    """
+    Parse file paths to extract zoom levels and buffer sizes.
+
+    Args:
+        files_to_process (set): Set of file paths to process.
+
+    Returns:
+        dict: A dictionary grouped by zoom levels, where each key is a zoom level
+              and the value is a list of buffer sizes.
+    """
+    pattern = re.compile(r"coastal_grid_z(\d+)_(\d+m)\.parquet")
+    zoom_to_buffers = defaultdict(list)
+
+    for file_path in files_to_process:
+        file_name = file_path.split("/")[-1]  # Extract the file name
+        match = pattern.match(file_name)
+        if match:
+            zoom, buffer_size = match.groups()
+            zoom_to_buffers[int(zoom)].append(buffer_size)
+        else:
+            logger.error(f"Failed to parse file name {file_name}. Skipping.")
+
+    return zoom_to_buffers
+
+
 VALID_BUFFER_SIZES = ["500m", "1000m", "2000m", "5000m", "10000m", "15000m"]
 COLUMN_ORDER = [
     "coastal_grid:id",
@@ -149,84 +208,105 @@ def main(
     buffer_sizes: Literal["500m", "1000m", "2000m", "5000m", "10000m", "15000m"],
     zooms: list[int],
     release,
-    force=False,
+    verbose: bool = False,
 ):
     """
     Main function to process coastal grids for given buffer sizes and zoom levels.
     """
+    configure_logging(verbose)
+
     dotenv.load_dotenv()
     sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
     storage_options = {"account_name": "coclico", "sas_token": sas_token}
 
-    for buffer_size, zoom in itertools.product(buffer_sizes, zooms):
-        # Validate zoom and buffer_size
-        if buffer_size not in VALID_BUFFER_SIZES:
-            msg = f"Invalid buffer size: {buffer_size}"
-            raise ValueError(msg)
-        if not (1 <= zoom <= 18):
-            msg = f"Zoom level must be between 1 and 18. Got: {zoom}"
-            raise ValueError(msg)
+    # Load static resources
+    countries, mgrs, utm_grid = load_data()
 
-        print(f"Processing buffer size: {buffer_size}, zoom level: {zoom}")
+    # Retrieve all existing files in the release directory
+    release_path = f"az://coastal-grid/release/{release}"
+    fs = fsspec.filesystem("az", **storage_options)
+    existing_files = {
+        f"az://{file}" for file in fs.glob(f"{release_path}/coastal_grid_z*_*.parquet")
+    }
+    logger.info(f"Found {len(existing_files)} existing files.")
 
-        # Construct storage path
-        storage_urlpath = f"az://coastal-grid/release/{release}/coastal_grid_z{zoom}_{buffer_size}.parquet"
+    # Generate expected file paths
+    expected_files = {
+        f"{release_path}/coastal_grid_z{zoom}_{buffer_size}.parquet"
+        for buffer_size, zoom in itertools.product(buffer_sizes, zooms)
+    }
 
-        if not force:
-            try:
-                with fsspec.open(storage_urlpath, mode="rb", **storage_options) as f:
-                    logging.info(f"File already exists: {storage_urlpath}")
-                    continue
-            except FileNotFoundError:
-                pass
+    # Filter files to process
+    files_to_process = expected_files - existing_files
+    logger.info(f"{len(files_to_process)} files to process.")
 
-        # Load datasets
-        coastal_zone = read_coastal_zone(buffer_size)  # type: ignore
-        with fsspec.open(
-            "https://coclico.blob.core.windows.net/public/countries.parquet", "rb"
-        ) as f:
-            countries = gpd.read_parquet(f)
-        with fsspec.open(
-            "https://coclico.blob.core.windows.net/tiles/S2A_OPER_GIP_TILPAR_MPC.parquet",
-            "rb",
-        ) as f:
-            mgrs = gpd.read_parquet(f).to_crs(4326)
+    # Parse file paths to group by buffer size and zoom levels
+    pattern = re.compile(r"coastal_grid_z(\d+)_(\d+m)\.parquet")
+    buffer_to_zooms = defaultdict(list)
 
-        grid = make_mercantiles(zoom).rename(
-            columns={"quadkey": "coastal_grid:quadkey"}
-        )
+    for file_path in files_to_process:
+        file_name = file_path.split("/")[-1]
+        match = pattern.match(file_name)
+        if match:
+            zoom, buffer_size = match.groups()
+            buffer_to_zooms[buffer_size].append(int(zoom))
+        else:
+            logger.error(f"Failed to parse file name {file_name}. Skipping.")
 
-        # Clip and filter
-        tiles = clip_and_filter(grid, coastal_zone)
-
-        # Add geographical columns and unique IDs
-        tiles = add_geo_columns(tiles, geo_columns=["bbox"]).rename(
-            columns={"bbox": "coastal_grid:bbox"}
-        )
-        tiles = tiles.sort_values("coastal_grid:quadkey")
-        add_proc_id_partial = partial(add_proc_id, crs=tiles.crs)
-        tiles["coastal_grid:id"] = tiles.geometry.map(add_proc_id_partial)
-
-        def add_utm_epsg(geometry, crs):
-            return (
-                gpd.GeoDataFrame(geometry=[geometry], crs=crs)
-                .estimate_utm_crs()
-                .to_epsg()
+    # Process each buffer size
+    for buffer_size, zoom_levels in buffer_to_zooms.items():
+        logger.info(f"Processing buffer size: {buffer_size}")
+        try:
+            # Load the coastal zone data once for the buffer size
+            coastal_zone = read_coastal_zone(buffer_size)
+        except Exception as e:
+            logger.error(
+                f"Failed to read coastal zone for buffer size {buffer_size}: {e}"
             )
+            continue
 
-        add_utm_epsg_partial = partial(add_utm_epsg, crs=tiles.crs)
-        tiles["coastal_grid:utm_epsg"] = tiles.geometry.map(add_utm_epsg_partial)
+        # Process each zoom level for the current buffer size
+        for zoom in zoom_levels:
+            logger.info(f"Processing zoom level: {zoom}")
+            try:
+                # Generate grid and process tiles
+                grid = make_mercantiles(zoom).rename(
+                    columns={"quadkey": "coastal_grid:quadkey"}
+                )
+                tiles = clip_and_filter(grid, coastal_zone)
+                tiles = add_geo_columns(tiles, geo_columns=["bbox"]).rename(
+                    columns={"bbox": "coastal_grid:bbox"}
+                )
+                tiles = tiles.sort_values("coastal_grid:quadkey")
 
-        # Aggregate tiles with country and continent data
-        tiles = add_divisions(tiles, countries)
-        tiles = add_mgrs(tiles, mgrs)
-        tiles = tiles[COLUMN_ORDER]
+                # Add unique IDs and UTM EPSG codes
+                tiles["coastal_grid:id"] = tiles.geometry.map(
+                    partial(add_proc_id, crs=tiles.crs)
+                )
+                points = tiles.representative_point().to_frame("geometry")
+                utm_epsg = gpd.sjoin(points, utm_grid).drop(columns=["index_right"])[
+                    "epsg"
+                ]
+                tiles["coastal_grid:utm_epsg"] = utm_epsg
 
-        # Save the processed tiles
-        with fsspec.open(storage_urlpath, mode="wb", **storage_options) as f:
-            tiles.to_parquet(f)
+                # Aggregate and add additional columns
+                tiles = add_divisions(tiles, countries)
+                tiles = add_mgrs(tiles, mgrs)
+                tiles = tiles[COLUMN_ORDER]
 
-        logging.info(f"Saved: {storage_urlpath}")
+                # Save the processed tiles
+                output_path = (
+                    f"{release_path}/coastal_grid_z{zoom}_{buffer_size}.parquet"
+                )
+                with fsspec.open(output_path, mode="wb", **storage_options) as f:
+                    tiles.to_parquet(f)
+
+                logger.info(f"Saved: {output_path}")
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to process zoom level {zoom} for buffer size {buffer_size}: {e}"
+                )
 
 
 if __name__ == "__main__":
@@ -266,10 +346,8 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--force",
-        action="store_true",  # Automatically sets `force=True` if the flag is present
-        help="Force compute all even if the coastal grid file already exists.",
+        "--verbose", action="store_true", help="Enable verbose logging for this module"
     )
     args = parser.parse_args()
 
-    main(args.buffer_size, args.zoom, args.release, args.force)
+    main(args.buffer_size, args.zoom, args.release, args.verbose)
