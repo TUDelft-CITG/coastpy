@@ -402,6 +402,7 @@ class ImageCollection:
             raise
 
     # def _composite(
+
     #     self,
     #     ds: xr.DataArray | xr.Dataset,
     #     percentile: int,
