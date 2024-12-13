@@ -7,8 +7,10 @@ import geopandas as gpd
 import numpy as np
 import odc.geo.geom
 import odc.stac
+import pandas as pd
 import pyproj
 import pystac
+import pystac.item
 import pystac_client
 import rioxarray  # noqa
 import stac_geoparquet
@@ -17,6 +19,7 @@ import xarray as xr
 from coastpy.eo.indices import calculate_indices
 from coastpy.eo.mask import apply_mask, geometry_mask, nodata_mask, numeric_mask
 from coastpy.stac.utils import read_snapshot
+from coastpy.utils.xarray import combine_by_first
 
 # NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
 
@@ -124,6 +127,7 @@ class ImageCollection:
         like: xr.Dataset | None = None,
         patch_url: str | None = None,
         dst_crs: Any | None = None,
+        anchor: str | None = None,
     ) -> "ImageCollection":
         """
         Configure loading parameters.
@@ -164,6 +168,7 @@ class ImageCollection:
             "geobox": geobox,
             "like": like,
             "patch_url": patch_url,
+            "anchor": anchor,
         }
         return self
 
@@ -196,6 +201,10 @@ class ImageCollection:
 
         bbox = tuple(self.search_params["intersects"].bounds)
 
+        if self.percentile:
+            # NOTE: When compositing, we load all items to use our custom composite method
+            self.load_params["groupby"] = "id"
+
         # Load the data
         ds = odc.stac.load(
             self.stac_items,
@@ -203,6 +212,32 @@ class ImageCollection:
             bbox=bbox,
             **self.load_params,
         )
+
+        if ds.sizes["time"] == len(self.stac_items):
+            ds = self._add_metadata_from_stac(self.stac_items, ds)
+
+        return ds
+
+    @classmethod
+    def _add_metadata_from_stac(
+        cls, items: list[pystac.Item], ds: xr.Dataset
+    ) -> xr.Dataset:
+        """
+        Attach metadata from STAC items to the dataset as coordinates.
+        """
+        if len(items) != ds.sizes["time"]:
+            raise ValueError("Mismatch between STAC items and dataset time dimension.")
+
+        mgrs_tiles = [i.properties["s2:mgrs_tile"] for i in items]
+        cloud_cover = [i.properties["eo:cloud_cover"] for i in items]
+        rel_orbits = [i.properties["sat:relative_orbit"] for i in items]
+        stac_ids = [i.id for i in items]
+
+        # Assign metadata as coordinates
+        ds = ds.assign_coords({"stac_id": ("time", stac_ids)})
+        ds = ds.assign_coords({"s2:mgrs_tile": ("time", mgrs_tiles)})
+        ds = ds.assign_coords({"eo:cloud_cover": ("time", cloud_cover)})
+        ds = ds.assign_coords({"sat:relative_orbit": ("time", rel_orbits)})
 
         return ds
 
@@ -253,34 +288,151 @@ class ImageCollection:
         self,
         ds: xr.DataArray | xr.Dataset,
         percentile: int,
-        determination_times: list[str] | None = None,
-        stac_ids: list[str] | None = None,
-        cloud_cover: float | None = None,
+        max_items: int = 10,
     ) -> xr.DataArray | xr.Dataset:
-        # Use median() if percentile is 50, otherwise quantile()
-        if percentile == 50:
-            composite = ds.median(dim="time", skipna=True, keep_attrs=True)
-            logging.info("Using median() for composite.")
-        else:
-            composite = ds.quantile(
-                percentile / 100, dim="time", skipna=True, keep_attrs=True
+        """
+        Generate a composite dataset using median or percentile methods,
+        respecting metadata and sampling constraints.
+
+        Args:
+            ds (xr.DataArray | xr.Dataset): The input dataset.
+            percentile (int): Percentile value (50 for median).
+            max_items (int): Maximum number of samples per group.
+
+        Returns:
+            xr.DataArray | xr.Dataset: Composite dataset.
+        """
+        try:
+            # Step 1: Create a combined group key
+            ds = ds.assign(
+                group_key=(
+                    xr.apply_ufunc(
+                        lambda tile, orbit: tile + "_" + str(orbit),
+                        ds["s2:mgrs_tile"],
+                        ds["sat:relative_orbit"],
+                        vectorize=True,
+                    )
+                )
             )
-            composite.attrs["determination_method"] = "percentile"
-            logging.info("Using quantile() for composite.")
 
-        composite.attrs["composite:determination_method"] = "percentile"
-        composite.attrs["composite:percentile"] = percentile
+            # Step 2: Sort by cloud coverage
+            ds_sorted = ds.sortby("eo:cloud_cover")
 
-        if determination_times is not None:
-            composite.attrs["composite:determination_datetimes"] = determination_times
+            # Step 3: Group by the combined key
+            grouped = ds_sorted.groupby("group_key")
 
-        if stac_ids is not None:
-            composite.attrs["composite:stac_ids"] = stac_ids
+            # Step 4: Sample and compute the composite
+            def sample_and_aggregate(group):
+                # Limit to max_items observations
+                sample_size = min(group.sizes["time"], max_items)
+                sampled = group.isel(time=slice(0, sample_size))
+                # Compute median or percentile
+                if percentile == 50:
+                    return sampled.median(dim="time", skipna=True, keep_attrs=True)
+                else:
+                    return sampled.quantile(
+                        percentile / 100, dim="time", skipna=True, keep_attrs=True
+                    )
 
-        if cloud_cover is not None:
-            composite.attrs["composite:cloud_cover"] = cloud_cover
+            composite = grouped.map(sample_and_aggregate)
+            datasets = [
+                composite.isel(group_key=i) for i in range(composite.sizes["group_key"])
+            ]
+            collapsed = combine_by_first(datasets)
 
-        return composite
+            # Step 5: Compute and add metadata
+            def compute_metadata(grouped):
+                group_metadata = []
+                for _, group in grouped:
+                    # Convert times to Pandas Timestamps
+                    datetimes = group.time.to_series().sort_values()
+                    min_datetime = datetimes.min().isoformat()
+                    max_datetime = datetimes.max().isoformat()
+                    avg_interval = datetimes.diff().mean()
+                    n_obs = len(datetimes)
+
+                    group_metadata.append(
+                        {
+                            "min_datetime": min_datetime,
+                            "max_datetime": max_datetime,
+                            "avg_interval": avg_interval,
+                            "n_obs": n_obs,
+                        }
+                    )
+                return group_metadata
+
+            # Compute group-level metadata
+            group_metadata = compute_metadata(grouped)
+
+            # Aggregate global-level metadata
+            min_datetime = min(item["min_datetime"] for item in group_metadata)
+            max_datetime = max(item["max_datetime"] for item in group_metadata)
+            avg_intervals = [item["avg_interval"] for item in group_metadata]
+            avg_interval = f"{pd.Series(avg_intervals).mean().days} days"  # type: ignore
+            avg_obs = np.mean([item["n_obs"] for item in group_metadata])
+
+            # Update dataset attributes
+            collapsed.attrs.update(
+                {
+                    "composite:determination_method": "median"
+                    if percentile == 50
+                    else "percentile",
+                    "composite:percentile": percentile,
+                    "composite:groups": ds_sorted.group_key.to_series().unique(),
+                    "composite:avg_obs": avg_obs,
+                    "composite:stac_ids": ds_sorted.stac_id.values,
+                    "composite:min_datetime": min_datetime,
+                    "composite:max_datetime": max_datetime,
+                    "composite:avg_interval": avg_interval,
+                    "composite:avg_cloud_cover": ds_sorted["eo:cloud_cover"]
+                    .mean()
+                    .item(),
+                    "composite:summary": (
+                        f"Composite dataset created by grouping on ['s2:mgrs_tile', 'sat:relative_orbit'], using a "
+                        f"{'median' if percentile == 50 else f'{percentile}th percentile'} method, "
+                        f"sorted by 'eo:cloud_cover' with max_items={max_items} per group."
+                    ),
+                }
+            )
+
+            return collapsed
+
+        except Exception as e:
+            logging.error(f"Error during composite creation: {e}")
+            raise
+
+    # def _composite(
+    #     self,
+    #     ds: xr.DataArray | xr.Dataset,
+    #     percentile: int,
+    #     determination_times: list[str] | None = None,
+    #     stac_ids: list[str] | None = None,
+    #     cloud_cover: float | None = None,
+    # ) -> xr.DataArray | xr.Dataset:
+    #     # Use median() if percentile is 50, otherwise quantile()
+    #     if percentile == 50:
+    #         composite = ds.median(dim="time", skipna=True, keep_attrs=True)
+    #         logging.info("Using median() for composite.")
+    #     else:
+    #         composite = ds.quantile(
+    #             percentile / 100, dim="time", skipna=True, keep_attrs=True
+    #         )
+    #         composite.attrs["determination_method"] = "percentile"
+    #         logging.info("Using quantile() for composite.")
+
+    #     composite.attrs["composite:determination_method"] = "percentile"
+    #     composite.attrs["composite:percentile"] = percentile
+
+    #     if determination_times is not None:
+    #         composite.attrs["composite:determination_datetimes"] = determination_times
+
+    #     if stac_ids is not None:
+    #         composite.attrs["composite:stac_ids"] = stac_ids
+
+    #     if cloud_cover is not None:
+    #         composite.attrs["composite:cloud_cover"] = cloud_cover
+
+    #     return composite
 
     def composite(self, percentile: int = 50) -> "ImageCollection":
         """
@@ -323,24 +475,9 @@ class ImageCollection:
             self.dataset = self._reproject(self.dataset, self.dst_crs)
 
         if self.percentile:
-            determination_times = (
-                self.dataset.time.to_series().apply(lambda x: x.isoformat()).unique()
-            )
-
-            stac_ids = [i.id for i in self.stac_items]
-
-            cloud_cover = float(
-                np.mean(
-                    [float(i.properties["eo:cloud_cover"]) for i in self.stac_items]
-                )
-            )
-
             self.dataset = self._composite(
                 ds=self.dataset,
                 percentile=self.percentile,
-                determination_times=determination_times,
-                stac_ids=stac_ids,
-                cloud_cover=cloud_cover,
             )
 
         if self.spectral_indices:
@@ -640,10 +777,12 @@ if __name__ == "__main__":
         return odc.geo.geom.Geometry(coastal_zone, crs=df.crs)
 
     def filter_function(items):
-        r = filter_and_sort_stac_items(
-            items, max_items=10, group_by="s2:mgrs_tile", sort_by="eo:cloud_cover"
+        return filter_and_sort_stac_items(
+            items,
+            max_items=10,
+            group_by=["s2:mgrs_tile", "sat:relative_orbit"],
+            sort_by="eo:cloud_cover",
         )
-        return r
 
     def read_coastal_grid(
         zoom: Literal[5, 6, 7, 8, 9, 10],
@@ -684,16 +823,20 @@ if __name__ == "__main__":
             filter_function=filter_function,
         )
         .load(
-            bands=["blue", "green", "red", "nir", "swir16"],
+            bands=["blue"],
+            # bands=["blue", "green", "red", "nir", "swir16"],
             percentile=50,
-            spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
+            # spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
             mask_nodata=True,
             chunks={},
             patch_url=pc.sign,
+            groupby="id",
+            resampling={"swir16": "bilinear"},
         )
         .mask(geometry=coastal_zone, nodata=True)
         .execute()
     )
 
-    print("Done")
     s2 = s2.compute()
+
+    print("Done")

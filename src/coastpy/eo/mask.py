@@ -167,6 +167,8 @@ def geometry_mask(
         return data.map(lambda da: geometry_mask(da, geometry, invert, all_touched))
 
     if isinstance(data, xr.DataArray):
+        # NOTE: consider using crop?
+        # return data.odc.crop(geometry, apply_mask=True)
         return data.odc.mask(geometry, invert=invert, all_touched=all_touched)
 
     msg = f"Unsupported input type: {type(data)}"

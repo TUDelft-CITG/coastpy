@@ -453,3 +453,33 @@ def apply_mask(da: xr.DataArray, values: list[int]) -> xr.DataArray:
         xr.DataArray: The input DataArray with pixels matching the values set to NaN.
     """
     return da.where(~da.isin(values))
+
+
+def combine_by_first(
+    datasets: list[xr.Dataset | xr.DataArray],
+) -> xr.Dataset | xr.DataArray:
+    """
+    Combine multiple xarray datasets or data arrays, ignoring NaN values.
+
+    Args:
+        datasets (list[xr.Dataset | xr.DataArray]): List of datasets/data arrays to combine.
+
+    Returns:
+        xr.Dataset | xr.DataArray: Combined dataset or data array.
+    """
+    if not datasets:
+        msg = "The input list of datasets is empty."
+        raise ValueError(msg)
+
+    # Ensure all inputs are of the same type
+    first = datasets[0]
+    if not all(isinstance(ds, type(first)) for ds in datasets):
+        msg = "All datasets must be of the same type (either Dataset or DataArray)."
+        raise TypeError(msg)
+
+    # Combine using combine_first in a loop
+    combined = datasets[0]
+    for ds in datasets[1:]:
+        combined = combined.combine_first(ds)  # type: ignore
+
+    return combined
