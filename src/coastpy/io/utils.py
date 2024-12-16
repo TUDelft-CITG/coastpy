@@ -68,6 +68,8 @@ class PathParser:
     account_name: str | None = None
     cloud_protocol: str = ""
     base_dir: str | pathlib.Path = ""
+    band: str | None = None
+
     _base_https_url: str = ""
     _base_cloud_uri: str = ""
 
@@ -87,7 +89,7 @@ class PathParser:
         self.scheme = parsed.scheme
         self.name = parsed.path.split("/")[-1]
         self.suffix = f".{self.name.split('.')[-1]}"
-        self.stac_item_id = self.name.split(".")[0]
+        self.stac_item_id = self._extract_stac_item_id(self.name)
 
         if not self.base_dir:
             self.base_dir = self.DEFAULT_BASE_DIR
@@ -136,6 +138,20 @@ class PathParser:
         self.https_url = f"{self._base_https_url}/{self.path}"
         self.cloud_uri = f"{self.cloud_protocol}://{self.container}/{self.path}"
 
+    def _extract_stac_item_id(self, filename: str) -> str:
+        """
+        Extracts the stac_item_id from a filename, optionally removing a band prefix.
+
+        Args:
+            filename (str): The filename to process.
+
+        Returns:
+            str: The extracted stac_item_id.
+        """
+        if self.band and filename.startswith(self.band + "_"):
+            return filename[len(self.band) + 1 :]  # Remove band prefix
+        return filename.split(".")[0]  # Default behavio
+
     def _parse_path(self):
         path = pathlib.Path(self.urlpath)
 
@@ -156,7 +172,7 @@ class PathParser:
         self.path = "/".join(parts[1:])
         self.name = path.name
         self.suffix = f".{path.suffix}"
-        self.stac_item_id = path.stem
+        self.stac_item_id = self._extract_stac_item_id(path.stem)
 
         if self.cloud_protocol == "az":
             if not self.account_name:

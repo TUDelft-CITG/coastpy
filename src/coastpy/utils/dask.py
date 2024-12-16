@@ -160,3 +160,15 @@ def silence_shapely_warnings() -> None:
 
     for warning in warnings_to_ignore:
         warnings.filterwarnings("ignore", message=warning)
+
+
+def silence_numpy_warnings() -> None:
+    """Suppress specific warnings commonly encountered in NumPy operations."""
+    import warnings
+
+    warnings_to_ignore: list[str] = [
+        "All-NaN slice encountered",
+    ]
+
+    for warning in warnings_to_ignore:
+        warnings.filterwarnings("ignore", message=warning)

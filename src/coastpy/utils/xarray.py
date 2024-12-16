@@ -66,7 +66,7 @@ def get_nodata(
 
 def set_nodata(
     da: xr.DataArray | xr.Dataset,
-    nodata_value: float | int | None,
+    nodata: float | int | None,
     band: str | None = None,
     target: Literal["nodata", "_FillValue"] = "nodata",
 ) -> xr.DataArray | xr.Dataset:
@@ -79,7 +79,7 @@ def set_nodata(
 
     Args:
         da (xr.DataArray | xr.Dataset): Input Xarray object to modify.
-        nodata_value (float | int | None): The nodata value to set. Use `None` to clear.
+        nodata (float | int | None): The nodata value to set. Use `None` to clear.
         band (str, optional): Band name to modify if input is a Dataset.
         target (str, optional): Target attribute to set, either 'nodata' (default) or '_FillValue'.
 
@@ -92,24 +92,26 @@ def set_nodata(
 
     # Handle Dataset case
     if isinstance(da, xr.Dataset):
-        if band is None:
-            msg = "For Dataset input, 'band' must be specified."
-            raise ValueError(msg)
-        if band not in da:
-            msg = f"Band '{band}' not found in the Dataset."
-            raise ValueError(msg)
-        da = da[band]
+        if band is not None:
+            if band not in da:
+                msg = f"Band '{band}' not found in the Dataset."
+                raise ValueError(msg)
+            da[band] = set_nodata(da[band], nodata, target=target)
+        else:
+            for var in da.data_vars:
+                da[var] = set_nodata(da[var], nodata, target=target)
+        return da
 
-    # Set the specified attribute
-    if nodata_value is not None:
-        da.attrs[target] = nodata_value
+    # Set the specified attribute for DataArray
+    if nodata is not None:
+        da.attrs[target] = nodata
     else:
         da.attrs.pop(target, None)  # Remove the attribute if nodata_value is None
 
     # Always attempt to set rioxarray nodata
     try:
-        if nodata_value is not None:
-            da.rio.write_nodata(nodata_value, inplace=True)
+        if nodata is not None:
+            da.rio.write_nodata(nodata, inplace=True)
         else:
             da.rio.update_attrs({"nodata": None}, inplace=True)
     except AttributeError:
@@ -117,6 +119,58 @@ def set_nodata(
         pass
 
     return da
+
+
+def scale(ds: xr.Dataset, scale_factor: int = 10000, nodata: int = -9999) -> xr.Dataset:
+    """
+    Scale a xarray.Dataset to integer format for storage efficiency.
+
+    Args:
+        ds (xr.Dataset): The dataset to scale.
+        scale_factor (int): Factor to scale the data (default: 10000).
+        nodata (int): Nodata value to apply.
+
+    Returns:
+        xr.Dataset: Scaled, converted, and nodata-adjusted dataset.
+    """
+
+    def _mask(var, nodata_val):
+        """Generate a mask for invalid values (NaN, infinities, old nodata)."""
+        return var.isnull() | var.isin([np.inf, -np.inf]) | (var == nodata_val)
+
+    ds = ds.copy()  # Operate on a copy
+
+    for name, var in ds.data_vars.items():
+        # Identify old nodata value or default to NaN
+        old_nodata = get_nodata(var) or np.nan
+
+        # Create a mask for invalid values and old nodata
+        mask = _mask(var, old_nodata)
+
+        # Scale the values
+        var = (var.where(~mask) * scale_factor).round()  # noqa: PLW2901
+
+        # Replace invalid values with the new nodata value
+        var = var.where(~mask, nodata)  # noqa: PLW2901
+
+        # # Set new nodata value in metadata and rio attributes
+        var = set_nodata(var, nodata)  # noqa: PLW2901
+
+        # # Apply scaling and cast to integer
+        var = var.astype("int16")  # noqa: PLW2901
+
+        # Update metadata with scale factor and data type
+        var.attrs.update(
+            {
+                "raster:scale": 1 / scale_factor,
+                "data_type": "int16",
+            }
+        )
+
+        # Assign back to the dataset
+        ds[name] = var
+
+    return ds
 
 
 def make_template(data: xr.DataArray) -> xr.DataArray:
