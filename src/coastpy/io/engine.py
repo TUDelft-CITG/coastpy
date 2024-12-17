@@ -3,6 +3,7 @@ from typing import Literal
 
 import duckdb
 import geopandas as gpd
+import pandas as pd
 import pystac
 import shapely
 from shapely.wkb import loads as wkb_loads
@@ -59,21 +60,32 @@ class BaseQueryEngine:
             return sas_token if sas_token else ""
         return ""
 
-    def execute_query(self, query: str) -> gpd.GeoDataFrame:
+    def execute_query(self, query: str) -> gpd.GeoDataFrame | pd.DataFrame:
         """
-        Executes a SQL query and returns the result as a GeoDataFrame.
+        Executes a SQL query and returns the result as a GeoDataFrame if geometries exist.
 
         Args:
             query (str): The SQL query to execute.
 
         Returns:
-            gpd.GeoDataFrame: The query result as a GeoDataFrame.
+            gpd.GeoDataFrame | pd.DataFrame: GeoDataFrame if a geometry column exists, otherwise a regular DataFrame.
         """
         df = self.con.execute(query).fetchdf()
-        if not df.empty:
-            df["geometry"] = df.geometry.map(lambda b: wkb_loads(bytes(b)))
-            return gpd.GeoDataFrame(df, crs="EPSG:4326")
-        return gpd.GeoDataFrame()
+
+        if df.empty:
+            return pd.DataFrame()
+
+        if "geometry" in df.columns:
+            # Safely convert WKB to Shapely geometries, handling nulls
+            df["geometry"] = df["geometry"].apply(
+                lambda x: wkb_loads(bytes(x)) if pd.notnull(x) else None  # type: ignore
+            )
+
+            # Convert to GeoDataFrame with a default CRS (EPSG:4326) because of bbox search
+            gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+            return gdf
+
+        return df
 
 
 class STACQueryEngine(BaseQueryEngine):
@@ -138,16 +150,21 @@ class STACQueryEngine(BaseQueryEngine):
         # Join the hrefs into a single string
         hrefs_str = ", ".join(f'"{href}"' for href in signed_hrefs)
 
-        # Construct and execute the query
-        columns_str = ", ".join(self.columns)
+        columns_str = ", ".join(
+            col
+            if col != "geometry"
+            else "ST_AsWKB(ST_Transform(geometry, 'EPSG:4326', 'EPSG:4326')) AS geometry"
+            for col in self.columns
+        )
+
         query = f"""
-        SELECT {columns_str}
-        FROM read_parquet([{hrefs_str}])
-        WHERE
-            bbox.xmin <= {maxx} AND
-            bbox.ymin <= {maxy} AND
-            bbox.xmax >= {minx} AND
-            bbox.ymax >= {miny};
+            SELECT {columns_str}
+            FROM read_parquet([{hrefs_str}])
+            WHERE
+                bbox.xmin <= {maxx} AND
+                bbox.ymin <= {maxy} AND
+                bbox.xmax >= {minx} AND
+                bbox.ymax >= {miny};
         """
         return self.execute_query(query)
 
