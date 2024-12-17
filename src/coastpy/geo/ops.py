@@ -410,7 +410,9 @@ def overlay_by_grid(df: gpd.GeoDataFrame, grid: gpd.GeoDataFrame) -> gpd.GeoData
     ).explode(column="geometry", index_parts=False)
 
 
-def generate_offset_line(line: LineString, offset: float) -> LineString:
+def generate_offset_line(
+    line: LineString, offset: float
+) -> LineString | MultiLineString:
     """
     Generate an offset line from the original line at a specified distance using offset_curve method.
 
@@ -538,7 +540,7 @@ def crosses_antimeridian(df: gpd.GeoDataFrame) -> pd.Series:
 
         # Check if the difference is greater than 180 degrees (indicating a crossing)
         crosses = np.abs(lon_diff) > 180
-        return np.any(crosses)
+        return bool(np.any(crosses))
 
     # Apply the vectorized check across all geometries
     return coords.apply(crosses)
@@ -710,3 +712,93 @@ def add_geometry_lengths(
     df = pd.merge(df.drop(columns=[geometry_length_col]), total_lengths, on=group_col)
 
     return df
+
+
+def calculate_sinuosity(geometry: LineString) -> float | None:
+    """
+    Calculate the sinuosity of a shoreline geometry. Sinuosity is defined as the ratio
+    of the actual shoreline length to the straight-line distance between its endpoints.
+
+    Args:
+        geometry (LineString): The shoreline geometry as a Shapely LineString.
+
+    Returns:
+        Optional[float]: The sinuosity value, or None if the input is invalid
+                         (e.g., insufficient points, zero-length geometry).
+    """
+    if (
+        not isinstance(geometry, LineString)
+        or geometry.is_empty
+        or len(geometry.coords) < 2
+    ):
+        # Invalid geometry or insufficient points
+        return None
+
+    # Actual shoreline length
+    length = geometry.length
+
+    # Straight-line distance between the first and last points
+    start, end = geometry.coords[0], geometry.coords[-1]
+    straight_dist = LineString([start, end]).length
+
+    if straight_dist == 0:
+        # Undefined sinuosity for zero straight-line distance
+        return None
+
+    # Calculate sinuosity
+    sinuosity = length / straight_dist
+    return sinuosity
+
+
+def calculate_self_intersection_density(linestring: LineString) -> float | None:
+    """
+    Calculate the density of self-intersections for a shoreline, normalized by its length.
+
+    Args:
+        linestring (LineString): The shoreline geometry.
+
+    Returns:
+        float: Self-intersection density (normalized by length), or None if invalid.
+    """
+    if (
+        not isinstance(linestring, LineString)
+        or linestring.is_empty
+        or len(linestring.coords) < 2
+    ):
+        return None
+
+    # Count the number of self-intersections
+    intersection_count = len(linestring.intersection(linestring).geoms) - 1  # type: ignore
+
+    # Compute the shoreline length
+    length = linestring.length
+
+    if length < 1e-6:  # Avoid division by zero for very short lengths
+        return None
+
+    # Calculate the intersection density
+    intersection_density = intersection_count / length
+    return intersection_density
+
+
+def calculate_fractal_dimension(linestring: LineString) -> float | None:
+    """
+    Calculate the fractal dimension of a LineString.
+
+    Args:
+        linestring (LineString): shoreline geometry.
+
+    Returns:
+        float: Fractal dimension of the LineString.
+    """
+    if not isinstance(linestring, LineString) or len(linestring.coords) < 2:
+        return None
+
+    length = linestring.length
+    bbox = linestring.bounds
+    diagonal = ((bbox[2] - bbox[0]) ** 2 + (bbox[3] - bbox[1]) ** 2) ** 0.5
+
+    if diagonal == 0:
+        return None
+
+    return np.log(length) / np.log(diagonal)

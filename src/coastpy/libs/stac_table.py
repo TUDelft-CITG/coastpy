@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyproj
+import pystac.utils
 import shapely.geometry
 from pystac.asset import Asset
 from pystac.extensions import projection
@@ -50,7 +51,7 @@ def generate(
     infer_geometry: bool = False,
     infer_datetime: str = "no",
     datetime_column: str | None = None,
-    data_created: datetime.datetime | None = None,
+    datetime: datetime.datetime | None = None,
     metadata_created: datetime.datetime | None = None,
     count_rows: bool = True,
     asset_href: str | None = None,
@@ -179,7 +180,7 @@ def generate(
         item.properties.update(**extra_proj, **proj)
 
     if infer_datetime == InferDatetimeOptions.no:
-        if data_created is None:
+        if datetime is None:
             msg = "Must specify 'datetime_data' when 'infer_datetime == no'."
             raise ValueError(msg)
         if datetime_column is not None:
@@ -189,21 +190,23 @@ def generate(
         if datetime_column is None:
             msg = "Must specify 'datetime_column' when 'infer_datetime != no'."
             raise ValueError(msg)
-        if data_created is not None:
+        if datetime is not None:
             msg = "Leave 'datetime_data' empty when inferring datetime."
             raise ValueError(msg)
 
     if metadata_created is not None:
-        item.common_metadata.created = metadata_created
+        item.common_metadata.created = pd.Timestamp(metadata_created).to_pydatetime()
+    else:
+        item.common_metadata.created = pystac.utils.now_in_utc()
 
-    if data_created is not None:
-        item.datetime = data_created
+    if datetime is not None:
+        item.datetime = datetime
 
     if infer_datetime == InferDatetimeOptions.midpoint:
         values = dask.compute(data[datetime_column].min(), data[datetime_column].max())  # type: ignore
         item.datetime = pd.Timestamp(pd.Series(values).mean()).to_pydatetime()
 
-    if infer_datetime == InferDatetimeOptions.unique and data_created is not None:
+    if infer_datetime == InferDatetimeOptions.unique and datetime is not None:
         values = data[datetime_column].unique().compute()  # type: ignore
         n = len(values)
         if n > 1:
@@ -216,6 +219,8 @@ def generate(
         values = np.array(pd.Series(values).dt.to_pydatetime())
         item.common_metadata.start_datetime = values[0]
         item.common_metadata.end_datetime = values[1]
+        # NOTE: consider if its good practice to set datetime to midpoint when range is set
+        item.datetime = pd.Timestamp(pd.Series(values).mean()).to_pydatetime()
 
     if count_rows:
         item.properties["table:row_count"] = sum(x.count_rows() for x in ds.fragments)

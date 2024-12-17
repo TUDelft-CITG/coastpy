@@ -274,7 +274,7 @@ def create_item(
         infer_datetime=stac_table.InferDatetimeOptions.no,
         datetime_column=None,
         metadata_created=DATETIME_STAC_CREATED,
-        data_created=DATETIME_DATA_CREATED,
+        datetime=DATETIME_DATA_CREATED,
         count_rows=True,
         asset_key="data",
         asset_href=pp.to_cloud_uri(),

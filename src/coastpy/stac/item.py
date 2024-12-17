@@ -4,6 +4,7 @@ from typing import Any
 
 import pandas as pd
 import pystac
+import pystac.utils
 import rasterio.warp
 import xarray as xr
 from pystac.extensions.projection import ProjectionExtension
@@ -129,6 +130,7 @@ def create_cog_item(
         del properties[dt]
     properties["composite:stac_ids"] = list(properties["composite:stac_ids"])
     properties["composite:groups"] = list(properties["composite:groups"])
+    properties["created"] = pystac.utils.now_to_rfc3339_str()
 
     # Create the STAC item
     item = pystac.Item(
@@ -140,7 +142,6 @@ def create_cog_item(
         start_datetime=start_datetime,
         end_datetime=end_datetime,
     )
-    print(item.validate())
 
     # Add projection metadata
     proj = ProjectionExtension.ext(item, add_if_missing=True)
