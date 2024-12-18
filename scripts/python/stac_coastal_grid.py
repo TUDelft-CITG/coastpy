@@ -353,11 +353,14 @@ if __name__ == "__main__":
     items_as_json = [i.to_dict() for i in items]
     item_extents = stac_geoparquet.to_geodataframe(items_as_json)
 
-    with fsspec.open(GEOPARQUET_STAC_ITEMS_HREF, mode="wb", **storage_options) as f:
+    snapshot_pp = PathParser(
+        GEOPARQUET_STAC_ITEMS_HREF, account_name=STORAGE_ACCOUNT_NAME
+    )
+    with fsspec.open(snapshot_pp.to_cloud_uri(), mode="wb", **storage_options) as f:
         item_extents.to_parquet(f)
 
     gpq_items_asset = pystac.Asset(
-        GEOPARQUET_STAC_ITEMS_HREF,
+        snapshot_pp.to_https_url(),
         title="GeoParquet STAC items",
         description="Snapshot of the collection's STAC items exported to GeoParquet format.",
         media_type=PARQUET_MEDIA_TYPE,
