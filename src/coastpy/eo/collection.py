@@ -18,11 +18,21 @@ import stac_geoparquet
 import xarray as xr
 
 from coastpy.eo.indices import calculate_indices
-from coastpy.eo.mask import apply_mask, geometry_mask, nodata_mask, numeric_mask
+from coastpy.eo.mask import (
+    SceneClassification,
+    apply_mask,
+    geometry_mask,
+    nodata_mask,
+    numeric_mask,
+    scl_mask,
+)
 from coastpy.stac.utils import read_snapshot
 from coastpy.utils.xarray import combine_by_first
 
 # NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
+# Create a logger for this module
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class ImageCollection:
@@ -96,6 +106,21 @@ class ImageCollection:
         if not self.stac_items:
             msg = "No items found for the given search parameters."
             raise ValueError(msg)
+
+        # Log the number of STAC items found
+        logger.info(f"Number of STAC items found: {len(self.stac_items)}")
+
+        # Log the number of unique MGRS grid tiles
+        unique_mgrs_tiles = len(
+            {item.properties["s2:mgrs_tile"] for item in self.stac_items}
+        )
+        logger.info(f"Number of unique MGRS grid tiles: {unique_mgrs_tiles}")
+
+        # Log the number of unique relative orbits
+        unique_relative_orbits = len(
+            {item.properties["sat:relative_orbit"] for item in self.stac_items}
+        )
+        logger.info(f"Number of unique relative orbits: {unique_relative_orbits}")
 
         # Apply the filter function if provided
         # move to composite
@@ -488,6 +513,24 @@ class ImageCollection:
             try:
                 logging.info("Applying custom filter function.")
                 self.stac_items = filter_function(self.stac_items)
+
+                # Log the number of STAC items found
+                logger.info(f"Number of STAC items remaining: {len(self.stac_items)}")
+
+                # Log the number of unique MGRS grid tiles
+                unique_mgrs_tiles = len(
+                    {item.properties["s2:mgrs_tile"] for item in self.stac_items}
+                )
+                logger.info(f"Number of unique MGRS grid tiles: {unique_mgrs_tiles}")
+
+                # Log the number of unique relative orbits
+                unique_relative_orbits = len(
+                    {item.properties["sat:relative_orbit"] for item in self.stac_items}
+                )
+                logger.info(
+                    f"Number of unique relative orbits: {unique_relative_orbits}"
+                )
+
             except Exception as e:
                 msg = f"Error in filter_function: {e}"
                 raise RuntimeError(msg) from e
@@ -550,6 +593,55 @@ class S2Collection(ImageCollection):
         }
 
         super().__init__(catalog_url, collection, stac_cfg)
+
+    def mask(
+        self,
+        geometry: odc.geo.geom.Geometry | None = None,
+        nodata: bool = True,
+        values: list[int] | None = None,
+        scl_classes: list[str | SceneClassification | int] | None = None,
+    ) -> "S2Collection":
+        """
+        Mask the dataset based on geometry, nodata, specific values, or the SCL band.
+
+        Args:
+            geometry (odc.geo.geom.Geometry | None, optional): Geometry to mask data within. Defaults to None.
+            nodata (bool, optional): Whether to apply a nodata mask. Defaults to True.
+            values (list[int] | None, optional): Specific values to mask. Defaults to None.
+            scl_classes (list[SceneClassification | int] | None, optional): List of SCL class names or numeric values to mask. Defaults to None.
+
+        Returns:
+            S2Collection: Updated instance with masking options configured.
+
+        Valid SCL classes:
+            - NO_DATA
+            - SATURATED_DEFECTIVE
+            - DARK_AREA_PIXELS
+            - CLOUD_SHADOWS
+            - VEGETATION
+            - BARE_SOILS
+            - WATER
+            - CLOUDS_LOW_PROBABILITY
+            - CLOUDS_MEDIUM_PROBABILITY
+            - CLOUDS_HIGH_PROBABILITY
+            - CIRRUS
+            - SNOW_ICE
+        """
+        super().mask(geometry, nodata, values)
+        self.scl_classes = scl_classes
+        return self
+
+    def _apply_masks(self, ds: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
+        """
+        Apply masks to the dataset.
+        """
+        ds = super()._apply_masks(ds)
+
+        if self.scl_classes:
+            mask = scl_mask(ds, self.scl_classes)
+            ds = apply_mask(ds, mask)
+
+        return ds
 
 
 class TileCollection:
