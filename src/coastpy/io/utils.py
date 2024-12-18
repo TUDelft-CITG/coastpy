@@ -424,8 +424,8 @@ def name_data(
     # Generate random hex part
     random_hex = ""
     if include_random_hex:
-        random_hex = uuid.uuid4().hex[:12]
-        parts.append(f"part-{random_hex}")
+        random_hex = uuid.uuid4().hex[:3]
+        parts.append(f"{random_hex}")
 
     if not parts:
         msg = "No valid parts were generated for the filename."
