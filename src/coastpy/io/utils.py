@@ -639,3 +639,13 @@ def rm_from_storage(
     if verbose:
         logger.removeHandler(handler)
         handler.close()
+
+
+if __name__ == "__main__":
+    az_href = "az://my-container/my-folder/my-file.tif"
+    az_https = (
+        "https://my-account.blob.core.windows.net/my-container/my-folder/my-file.tif"
+    )
+
+    pp = PathParser(az_href)
+    print("done")

@@ -7,6 +7,8 @@ import pandas as pd
 import xarray as xr
 from odc.geo.cog import save_cog_with_dask, to_cog
 
+from coastpy.utils.xarray import get_nodata, set_nodata
+
 
 def write_block(
     block: xr.DataArray,
@@ -17,18 +19,18 @@ def write_block(
     blocksize: int = 512,
     overwrite: bool = True,
     use_dask: bool = True,
-    overview_resampling: str | None = None,
+    overview_resampling: str = "nearest",
     overview_levels: list[int] | None = None,
     tags: dict[str, str] | None = None,
-    intermediate_compression: bool | str | dict[str, Any] = False,
-    predictor: int | bool = 3,
+    predictor: int = 3,
     stats: bool = True,
     client: Any = None,
     extra_rio_opts: dict[str, Any] | None = None,
+    extra_dask_opts: dict[str, Any] | None = None,
 ) -> int:
     """
-    Save an xarray.DataArray as a Cloud Optimized GeoTIFF (COG), handling both
-    in-memory and Dask-backed data.
+    Save an xarray.DataArray as a Cloud Optimized GeoTIFF (COG) using either
+    in-memory or distributed workflows.
 
     Args:
         block (xr.DataArray): Data to save.
@@ -38,15 +40,17 @@ def write_block(
         compression (str): Compression method for the GeoTIFF. Defaults to "DEFLATE".
         blocksize (int): Tile size for the COG. Defaults to 512.
         overwrite (bool): Whether to overwrite existing files.
-        use_dask (bool): Use Dask for saving.
-        overview_resampling (Optional[str]): Resampling method for overviews.
-        overview_levels (Optional[list[int]]): Shrink factors for overviews.
+        use_dask (bool): Use Dask for saving. Defaults to True.
+        overview_resampling (str): Resampling method for overviews. Defaults to "nearest".
+        overview_levels (Optional[list[int]]): Shrink factors for overviews. Defaults to [2, 4, 8, 16, 32].
         tags (Optional[Dict[str, str]]): Metadata tags for the output file.
-        intermediate_compression (Union[bool, str, Dict]): Intermediate compression settings.
-        predictor (Optional[int]): Compression predictor for floating-point data.
-        stats (bool): Compute stats for GIS compatibility.
+        predictor (int): Compression predictor for floating-point data. Defaults to 3.
+        stats (bool): Compute stats for GIS compatibility. Defaults to True.
         client (Any): Dask client for distributed workflows.
+        use_windowed_writes (bool): Enable windowed writes for large images. Defaults to False.
+        intermediate_compression (Union[bool, str, Dict]): Intermediate compression settings.
         extra_rio_opts (Optional[Dict]): Additional `rasterio` options.
+        extra_dask_opts (Optional[Dict]): Additional Dask-specific options.
 
     Returns:
         int: Number of bytes written.
@@ -54,15 +58,20 @@ def write_block(
     Raises:
         ValueError: If CRS is missing or invalid.
     """
-    # Ensure CRS is set
+    # Validate CRS
     if not block.rio.crs:
         raise ValueError("CRS is missing. Set a valid CRS using `rio.write_crs`.")
 
+    # Default overview levels
     if overview_levels is None:
         overview_levels = [2, 4, 8, 16, 32]
 
-    # Ensure nodata is properly defined
-    block = block.rio.write_nodata(nodata or float("nan"))
+    # Set nodata value
+    if nodata is None:
+        nodata = get_nodata(block)
+        nodata = nodata or float("nan")
+    block = set_nodata(block, nodata)
+    block = block.rio.write_nodata(nodata)
 
     # Determine storage backend
     storage_options = storage_options or {}
@@ -71,29 +80,35 @@ def write_block(
         raise ValueError("Too many paths specified.")
     path = paths[0]
 
-    # Check if the file exists and overwrite is False
+    # Check if file exists
     if not overwrite and fs.exists(path):
         logging.info(f"File already exists at {path} and overwrite is disabled.")
         return fs.info(path)["size"]
 
-    # Use in-memory writing if not using Dask
+    # Save data
     if not use_dask or not block.chunks:
+        if extra_rio_opts is None:
+            extra_rio_opts = {}
+
+        if "compress" not in extra_rio_opts:
+            extra_rio_opts["compress"] = compression
+
         cog_bytes = to_cog(
             block,
             blocksize=blocksize,
-            compression=compression,
-            nodata=nodata,
             overview_resampling=overview_resampling,
             overview_levels=overview_levels,
-            intermediate_compression=intermediate_compression,
             tags=tags,
+            nodata=nodata,
+            # NOTE: these options are not yet supported by write_block
+            # intermediate_compression=intermediate_compression,
+            # use_windowed_writes=use_windowed_writes,
             **(extra_rio_opts or {}),
         )
-        # Write bytes to target storage
         with fs.open(path, "wb") as f:
             f.write(cog_bytes)
     else:
-        # Use Dask for large datasets
+        logging.info("Saving using `save_cog_with_dask` (distributed).")
         save_cog_with_dask(
             block,
             dst=path,
@@ -104,8 +119,7 @@ def write_block(
             overview_levels=overview_levels,
             stats=stats,
             client=client,
-            bigtiff=True,
-            **(extra_rio_opts or {}),
+            **(extra_dask_opts or {}),
         )
 
     # Return file size

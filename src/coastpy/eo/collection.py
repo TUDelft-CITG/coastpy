@@ -3,6 +3,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+import dask
 import geopandas as gpd
 import numpy as np
 import odc.geo.geobox
@@ -26,8 +27,10 @@ from coastpy.eo.mask import (
     numeric_mask,
     scl_mask,
 )
+from coastpy.io.cloud import write_block
 from coastpy.stac.utils import read_snapshot
-from coastpy.utils.xarray import combine_by_first
+from coastpy.utils.dask import DaskClientManager
+from coastpy.utils.xarray import combine_by_first, scale, to_array_with_attrs
 
 # NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
 # Create a logger for this module
@@ -458,14 +461,20 @@ class ImageCollection:
             # Update global attributes for composite metadata
             collapsed.attrs.update(
                 {
-                    "eo:cloud_cover": ds_sorted["eo:cloud_cover"].mean().item(),
+                    "eo:cloud_cover": str(
+                        int(ds_sorted["eo:cloud_cover"].mean().item())
+                    ),
                     "composite:determination_method": "median"
                     if percentile == 50
                     else "percentile",
-                    "composite:percentile": percentile,
-                    "composite:groups": list(ds_sorted.group_key.to_series().unique()),
-                    "composite:avg_obs": avg_obs,
-                    "composite:stac_ids": list(ds_sorted.stac_id.values),
+                    "composite:percentile": str(int(percentile)),
+                    "composite:groups": str(
+                        list(ds_sorted.group_key.to_series().unique())
+                    ),
+                    "composite:avg_obs": str(round(float(avg_obs), 2)),
+                    "composite:stac_ids": str(
+                        [str(i) for i in ds_sorted.stac_id.values]
+                    ),
                     "composite:avg_interval": avg_interval,
                     "composite:summary": (
                         f"Composite dataset created by grouping on ['s2:mgrs_tile', 'sat:relative_orbit'], using a "
@@ -538,7 +547,7 @@ class ImageCollection:
         self.percentile = percentile
         return self
 
-    def execute(self) -> xr.DataArray | xr.Dataset:
+    def execute(self, compute=False) -> xr.DataArray | xr.Dataset:
         if self.stac_items is None:
             search = self.catalog.search(**self.search_params)
             self.stac_items = list(search.items())
@@ -567,6 +576,9 @@ class ImageCollection:
                 raise NotImplementedError(msg)
 
             self.dataset = calculate_indices(self.dataset, self.spectral_indices)
+
+        if compute:
+            self.dataset = self.dataset.compute()
 
         return self.dataset
 
@@ -861,6 +873,7 @@ class CopernicusDEMCollection(TileCollection):
 if __name__ == "__main__":
     import logging
     import os
+    import time
     from typing import Any, Literal
 
     import dotenv
@@ -888,16 +901,9 @@ if __name__ == "__main__":
     sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
     storage_options = {"account_name": "coclico", "sas_token": sas_token}
 
-    west, south, east, north = (4.796, 53.108, 5.229, 53.272)
+    RESAMPLING = "cubic"
 
-    roi = gpd.GeoDataFrame(
-        geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
-    )
-
-    def get_coastal_zone(coastal_grid, region_of_interest):
-        df = gpd.sjoin(coastal_grid, region_of_interest).drop(columns=["index_right"])
-        coastal_zone = df.union_all()
-        return odc.geo.geom.Geometry(coastal_zone, crs=df.crs)
+    start_time = time.time()
 
     def filter_function(items):
         return filter_and_sort_stac_items(
@@ -931,36 +937,120 @@ if __name__ == "__main__":
             coastal_zone = gpd.read_parquet(f)
         return coastal_zone
 
+    import json
+
+    def extract_tags_from_composite(data: xr.Dataset | xr.DataArray) -> dict:
+        """
+        Extract tags from an Xarray Dataset.
+
+        This function filters attributes from the dataset that match specific prefixes,
+        replaces colons in the attribute names with underscores, and converts values
+        to strings or JSON-encoded strings if they are lists or dictionaries.
+
+        Args:
+            ds (xr.Dataset): The input Xarray Dataset.
+
+        Returns:
+            dict: A dictionary of tags with cleaned keys and stringified values.
+        """
+        attrs = data.attrs.copy()
+        tags = {
+            k.replace(":", "_"): json.dumps(v) if isinstance(v, list | dict) else str(v)
+            for k, v in attrs.items()
+            if k.startswith(("composite:", "eo:"))
+        }
+        return tags
+
+    def process(region_of_interest, coastal_zone, crs):
+        """
+        Process Sentinel-2 data into a composite for a given region of interest.
+        """
+
+        geobox = odc.geo.geobox.GeoBox.from_geopolygon(
+            coastal_zone.to_crs(crs), resolution=10
+        )
+
+        s2 = (
+            S2Collection()
+            .search(
+                region_of_interest,
+                datetime_range="2023-01-01/2024-01-01",
+                query={"eo:cloud_cover": {"lt": 20}},
+                # filter_function = lambda items: [sorted(items, key=lambda x: x.datetime, reverse=True)[0]] # latest pic
+            )
+            .load(
+                bands=["blue", "green", "red", "nir", "swir16", "swir22", "SCL"],
+                spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
+                chunks={},
+                patch_url=pc.sign,
+                resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
+                geobox=geobox,
+            )
+            .mask(
+                geometry=coastal_zone,
+                nodata=True,
+                scl_classes=["NO_DATA", "DARK_AREA_PIXELS", "CLOUDS_HIGH_PROBABILITY"],
+            )
+            .composite(percentile=50, filter_function=filter_function)
+            .execute(compute=True)
+        )
+        return s2
+
+    west, south, east, north = (-1.449, 43.733, -1.398, 43.758)
+
+    region_of_interest = gpd.GeoDataFrame(
+        geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
+    )
+
     coastal_grid = read_coastal_grid(
         zoom=10, buffer_size="5000m", storage_options=storage_options
     )
 
-    coastal_zone = get_coastal_zone(coastal_grid, roi)
-
-    s2 = (
-        S2Collection()
-        .search(
-            roi,
-            datetime_range="2022-01-01/2023-12-31",
-            query={"eo:cloud_cover": {"lt": 20}},
-        )
-        .load(
-            # bands=["blue"],
-            bands=["blue", "green", "red", "nir", "swir16"],
-            # percentile=50,
-            spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
-            # mask_nodata=True,
-            # chunks={},
-            patch_url=pc.sign,
-            groupby="id",
-            resampling={"swir16": "bilinear"},
-            crs=32631,
-        )
-        .mask(geometry=coastal_zone, nodata=True)
-        .composite(percentile=50, filter_function=filter_function)
-        .execute()
+    coastal_grid_roi = gpd.sjoin(coastal_grid, region_of_interest).drop(
+        columns=["index_right"]
     )
 
-    s2 = s2.compute()
+    client = DaskClientManager().create_client(
+        instance_type, threads_per_worker=1, n_workers=1
+    )
 
+    tasks = []
+    for i in range(len(coastal_grid_roi)):
+        region_of_interest = coastal_grid_roi.iloc[[i]]
+        coastal_zone = odc.geo.geom.Geometry(
+            region_of_interest.geometry.item(), crs=region_of_interest.crs
+        )
+        crs = region_of_interest["coastal_grid:utm_epsg"].item()
+        t = dask.delayed(process)(region_of_interest, coastal_zone, crs)
+        tasks.append(t)
+
+    import pathlib
+
+    from coastpy.io.utils import name_data
+    from coastpy.utils.xarray import combine_by_first
+
+    r = dask.compute(*tasks, scheduler=client)
+    xx = combine_by_first(r)
+    xx = xx.squeeze()
+    xx = scale(xx, scale_factor=10000, nodata=-9999)
+
+    outdir = pathlib.Path.home() / "data" / "tmp" / "typology" / "composite"
+    outpath = name_data(
+        xx,
+        prefix=str(outdir),
+        include_random_hex=False,
+        filename_prefix=RESAMPLING,
+    )
+
+    tags = extract_tags_from_composite(xx)
+    pathlib.Path(outpath).parent.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(xx, xr.Dataset):
+        xx = to_array_with_attrs(xx)
+
+    # xx = xx.to_array("band")
+    write_block(xx, outpath, tags)
+
+    end_time = time.time()
+    print(f"elapsed_time: {end_time - start_time}")
     print("Done")
