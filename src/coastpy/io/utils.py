@@ -68,8 +68,7 @@ class PathParser:
     account_name: str | None = None
     cloud_protocol: str = ""
     base_dir: str | pathlib.Path = ""
-    band: str | None = None
-
+    band: str = ""
     _base_https_url: str = ""
     _base_cloud_uri: str = ""
 
@@ -206,23 +205,40 @@ class PathParser:
             base_dir = self.base_dir
         return pathlib.Path(base_dir) / self.container / self.path
 
+    def _construct_url(self, base_url: str) -> str:
+        """
+        Helper to construct the URL or URI dynamically with the band if set.
+
+        Args:
+            base_url (str): Base URL or URI.
+
+        Returns:
+            str: The constructed URL or URI.
+        """
+        if self.band:
+            band_prefix = f"{self.band}-" if self.band else ""
+            file_name = f"{band_prefix}{self.name}"
+        else:
+            file_name = self.name
+        return f"{base_url}/{self.path.rsplit('/', 1)[0]}/{file_name}"
+
     def to_https_url(self) -> str:
         """
         Convert the parsed path to an HTTPS URL.
 
         Returns:
-            str: The corresponding HTTPS URL.
+            str: The corresponding HTTPS URL, modified by the band if set.
         """
-        return self.https_url
+        return self._construct_url(self._base_https_url)
 
     def to_cloud_uri(self) -> str:
         """
         Convert the parsed path to a cloud storage URI.
 
         Returns:
-            str: The corresponding cloud storage URI.
+            str: The corresponding cloud storage URI, modified by the band if set.
         """
-        return self.cloud_uri
+        return self._construct_url(self.cloud_protocol + "://" + self.container)
 
 
 def name_block(
@@ -647,5 +663,6 @@ if __name__ == "__main__":
         "https://my-account.blob.core.windows.net/my-container/my-folder/my-file.tif"
     )
 
-    pp = PathParser(az_href)
+    pp = PathParser(az_href, account_name="coclico")
+
     print("done")

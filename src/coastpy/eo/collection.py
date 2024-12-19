@@ -1035,12 +1035,16 @@ if __name__ == "__main__":
     xx = scale(xx, scale_factor=10000, nodata=-9999)
 
     outdir = pathlib.Path.home() / "data" / "tmp" / "typology" / "composite"
+    #     coastal_grid["coastal_grid:id"].iloc[0].upper()
+    # 'N82W091-8B0'
     outpath = name_data(
         xx,
         prefix=str(outdir),
         include_random_hex=False,
+        # NOTE: band name
         filename_prefix=RESAMPLING,
     )
+    # pp
 
     tags = extract_tags_from_composite(xx)
     pathlib.Path(outpath).parent.mkdir(parents=True, exist_ok=True)
