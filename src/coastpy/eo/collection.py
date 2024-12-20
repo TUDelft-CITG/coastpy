@@ -28,9 +28,10 @@ from coastpy.eo.mask import (
     scl_mask,
 )
 from coastpy.io.cloud import write_block
+from coastpy.io.utils import PathParser, name_data
 from coastpy.stac.utils import read_snapshot
 from coastpy.utils.dask import DaskClientManager
-from coastpy.utils.xarray import combine_by_first, scale, to_array_with_attrs
+from coastpy.utils.xarray import combine_by_first, scale
 
 # NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
 # Create a logger for this module
@@ -397,6 +398,10 @@ class ImageCollection:
                     )
                 )
             )
+
+            # Remove SCL band if present (composite method for categorical data not implemented)
+            if "SCL" in ds:
+                ds = ds.drop_vars("SCL")
 
             # Step 2: Sort by cloud coverage
             ds_sorted = ds.sortby("eo:cloud_cover")
@@ -891,8 +896,10 @@ if __name__ == "__main__":
 
     # from coastpy.eo.collection import S2Collection
     from coastpy.eo.filter import filter_and_sort_stac_items
+    from coastpy.io.utils import name_data
     from coastpy.stac.utils import read_snapshot
     from coastpy.utils.config import configure_instance
+    from coastpy.utils.xarray import combine_by_first
 
     configure_rio(cloud_defaults=True)
     instance_type = configure_instance()
@@ -959,9 +966,18 @@ if __name__ == "__main__":
             for k, v in attrs.items()
             if k.startswith(("composite:", "eo:"))
         }
+
+        def _to_isoformat(x):
+            return pd.Timestamp(x).isoformat() + "Z"
+
+        coords = ["start_datetime", "end_datetime"]
+        for coord in coords:
+            if coord in data.coords:
+                tags[coord] = _to_isoformat(data.coords[coord].values.item())
+
         return tags
 
-    def process(region_of_interest, coastal_zone, crs):
+    def get_s2(region_of_interest, coastal_zone, crs):
         """
         Process Sentinel-2 data into a composite for a given region of interest.
         """
@@ -989,14 +1005,36 @@ if __name__ == "__main__":
             .mask(
                 geometry=coastal_zone,
                 nodata=True,
-                scl_classes=["NO_DATA", "DARK_AREA_PIXELS", "CLOUDS_HIGH_PROBABILITY"],
+                scl_classes=["NO_DATA", "DARK_AREA_PIXELS", "CLOUDS_HIGH_PROBABILITY"],  # type: ignore
             )
             .composite(percentile=50, filter_function=filter_function)
-            .execute(compute=True)
+            .execute(compute=False)
         )
         return s2
 
-    west, south, east, north = (-1.449, 43.733, -1.398, 43.758)
+    def save(xx, outdir, storage_options):
+        xx = xx.squeeze()  # sqeeuzes the time dimension
+        xx = scale(xx, scale_factor=10000, nodata=-9999)
+
+        tags = extract_tags_from_composite(xx)
+
+        outpath = name_data(
+            xx,
+            prefix=str(outdir),
+            include_random_hex=False,
+        )
+
+        account_name = storage_options.get("account_name", "coclico")
+        pp = PathParser(outpath, account_name=account_name)
+
+        for var, band in xx.data_vars.items():
+            pp.band = var
+            pp.resolution = f"{int(band.rio.resolution()[0])}m"
+            outpath = pp.to_filepath()
+            outpath.parent.mkdir(parents=True, exist_ok=True)
+            write_block(band, str(outpath), tags=tags, use_dask=False)
+
+    west, south, east, north = (3.914, 52.510, 5.560, 53.173)
 
     region_of_interest = gpd.GeoDataFrame(
         geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
@@ -1011,50 +1049,34 @@ if __name__ == "__main__":
     )
 
     client = DaskClientManager().create_client(
-        instance_type, threads_per_worker=1, n_workers=1
+        instance_type, threads_per_worker=1, n_workers=5
     )
 
+    outdir = "az://tmp/typology/composite"
+
     tasks = []
+    print(f"Parsing {len(coastal_grid_roi)} coastal grid tiles")
     for i in range(len(coastal_grid_roi)):
         region_of_interest = coastal_grid_roi.iloc[[i]]
         coastal_zone = odc.geo.geom.Geometry(
             region_of_interest.geometry.item(), crs=region_of_interest.crs
         )
         crs = region_of_interest["coastal_grid:utm_epsg"].item()
-        t = dask.delayed(process)(region_of_interest, coastal_zone, crs)
+        t = dask.delayed(get_s2)(region_of_interest, coastal_zone, crs)
+        t = dask.delayed(save)(t, outdir, storage_options)
+
+        # TODO: another dask.delayed for writing to disk (workflow from below)
         tasks.append(t)
 
-    import pathlib
+    print(client.dashboard_link)
+    dask.compute(*tasks, scheduler=client)
 
-    from coastpy.io.utils import name_data
-    from coastpy.utils.xarray import combine_by_first
+    # xx = xx[0]
 
-    r = dask.compute(*tasks, scheduler=client)
-    xx = combine_by_first(r)
-    xx = xx.squeeze()
-    xx = scale(xx, scale_factor=10000, nodata=-9999)
-
-    outdir = pathlib.Path.home() / "data" / "tmp" / "typology" / "composite"
-    #     coastal_grid["coastal_grid:id"].iloc[0].upper()
-    # 'N82W091-8B0'
-    outpath = name_data(
-        xx,
-        prefix=str(outdir),
-        include_random_hex=False,
-        # NOTE: band name
-        filename_prefix=RESAMPLING,
-    )
-    # pp
-
-    tags = extract_tags_from_composite(xx)
-    pathlib.Path(outpath).parent.mkdir(parents=True, exist_ok=True)
-
-    if isinstance(xx, xr.Dataset):
-        xx = to_array_with_attrs(xx)
-
-    # xx = xx.to_array("band")
-    write_block(xx, outpath, tags)
+    # save(xx, outdir)
 
     end_time = time.time()
     print(f"elapsed_time: {end_time - start_time}")
     print("Done")
+
+    # r = dask.compute(*tasks, scheduler=client)
