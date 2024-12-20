@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name="create-env"
 #SBATCH --partition=compute-p1,compute-p2
-#SBATCH --time=04:00:00
+#SBATCH --time=08:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --account=research-ceg-he
@@ -32,9 +32,9 @@ conda activate "$ENV_NAME" || {
 }
 
 # Execute the Python script
-SCRIPT = "$HOME/dev/coastpy/scripts/python/make_coastal_grid.py"
+SCRIPT="$HOME/dev/coastpy/scripts/python/make_coastal_grid.py"
 echo "Running Python script: $SCRIPT"
-python "$SCRIPT" --zoom 5 6 7 8 9 --buffer_size 500m 1000m 2000m 5000m 10000m 15000m --release 2024-12-10 --force || {
+python "$SCRIPT" --zoom 11 --buffer_size 500m 1000m 2000m 5000m 10000m 15000m --release 2024-12-11 --verbose || {
     echo "Python script execution failed"
     exit 1
 }
