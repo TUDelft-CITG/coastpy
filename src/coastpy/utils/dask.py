@@ -1,4 +1,3 @@
-import logging
 from typing import Any
 
 import dask
@@ -75,77 +74,34 @@ class DaskClientManager:
         return Client(*args, **configs)
 
     def _create_slurm_client(self, *args: Any, **kwargs: Any) -> Client:
-        """Create a SLURM Dask client with potential overrides.
-
-        Args:
-            *args: Additional positional arguments for client creation.
-            **kwargs: Additional keyword arguments for client creation.
-
-        Returns:
-            Client: The Dask SLURM client.
-        """
-
-        try:
-            from dask_jobqueue import SLURMCluster
-        except ImportError as e:
-            msg = (
-                "dask_jobqueue is required to create a SLURM Dask client. "
-                "Please install it using `pip install dask-jobqueue`."
-            )
-            raise ImportError(msg) from e
+        """Create a SLURM Dask client for a 32GB RAM node."""
+        from dask_jobqueue import SLURMCluster
 
         slurm_configs = {
-            "cores": 10,  # Cores per worker
-            "processes": 10,  # Processes per worker
-            # "n_workers": 10,
-            "memory": "120GB",  # Memory per worker
-            # "local_directory": "/scratch/frcalkoen/tmp",
-            "walltime": "3:00:00",
-            "log_directory": "/scratch/frcalkoen/tmp",
+            "queue": "regular",  # SLURM queue/partition
+            "account": "myaccount",  # SLURM account
+            "cores": 1,  # 1 core per worker
+            "memory": "8GB",  # Memory allocated per worker
+            "processes": 1,  # Single process per worker
+            "walltime": "00:20:00",  # Maximum runtime per worker
+            "job_extra_directives": [
+                "--output=/scratch/${USER}/dask_logs/%x_%j.out",  # Log file
+                "--error=/scratch/${USER}/dask_logs/%x_%j.err",
+            ],
+            "local_directory": "/scratch/${USER}/dask_tmp",  # Worker temp storage
+            "log_directory": "/scratch/${USER}/dask_logs",  # Dask logs
         }
-        # Update default values with any overrides provided in kwargs
         slurm_configs.update(kwargs)
 
-        # Create the SLURM cluster
+        # Initialize SLURM cluster
         cluster = SLURMCluster(*args, **slurm_configs)
-        cluster.scale(jobs=2)
 
-        logging.info(f"{cluster.job_script()}")
+        # Scale cluster to 4 workers
+        cluster.scale(jobs=4)
 
-        # cluster.scale(jobs=5)
+        print(f"Cluster job script:\n{cluster.job_script()}")
 
-        # min_jobs = kwargs.pop(
-        #     "minimum_jobs", dask.config.get("jobqueue.adaptive.minimum", 1)
-        # )
-        # max_jobs = kwargs.pop(
-        #     "maximum_jobs", dask.config.get("jobqueue.adaptive.maximum", 30)
-        # )
-
-        # cluster.adapt(minimum_jobs=min_jobs, maximum_jobs=max_jobs)
         return Client(cluster)
-
-    # def _create_slurm_client(self, *args: Any, **kwargs: Any):
-    #     """Create a SLURM Dask client with potential overrides.
-
-    #     Args:
-    #         *args: Additional positional arguments for client creation.
-    #         **kwargs: Additional keyword arguments for client creation.
-
-    #     Returns:
-    #         Client: The Dask SLURM client.
-    #     """
-    #     from dask_jobqueue import SLURMCluster
-
-    #     min_jobs = kwargs.pop(
-    #         "minimum_jobs", dask.config.get("jobqueue.adaptive.minimum", 1)
-    #     )
-    #     max_jobs = kwargs.pop(
-    #         "maximum_jobs", dask.config.get("jobqueue.adaptive.maximum", 30)
-    #     )
-
-    #     cluster = SLURMCluster(*args, **kwargs)
-    #     cluster.adapt(minimum_jobs=min_jobs, maximum_jobs=max_jobs)
-    #     return cluster.get_client()
 
 
 def silence_shapely_warnings() -> None:

@@ -70,7 +70,7 @@ def write_block(
     if nodata is None:
         nodata = get_nodata(block)
         nodata = nodata or float("nan")
-    block = set_nodata(block, nodata)
+    block = set_nodata(block, nodata)  # type: ignore
     block = block.rio.write_nodata(nodata)
 
     # Determine storage backend

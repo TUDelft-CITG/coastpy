@@ -1,11 +1,9 @@
 import dataclasses
 import hashlib
-import json
 import logging
 import pathlib
 import uuid
 import warnings
-from datetime import datetime
 from posixpath import join as urljoin
 from typing import Any
 from urllib.parse import urlparse, urlsplit
@@ -517,110 +515,6 @@ def name_bounds_with_hash(bounds: tuple, crs: Any, precision: int = 3) -> str:
 def short_id(seed: str, length: int = 4) -> str:
     """Generate a short deterministic ID based on a seed."""
     return hashlib.md5(seed.encode()).hexdigest()[:length]
-
-
-def write_log_entry(
-    container: str,
-    name: str,
-    status: str,
-    storage_options: dict[str, str] | None = None,
-    prefix: str | None = None,
-    time: str | datetime | None = None,
-) -> None:
-    """
-    Adds a new entry to a JSON log file with a given name (can be URI), time, and status.
-    The log file is stored in the specified container and optionally prefixed with the given prefix.
-
-    Args:
-        container (str): The base path to the log container.
-        name (str): The name to log.
-        status (str): The status of the processing (e.g., 'success', 'failed').
-        storage_options (Optional[Dict[str, str]]): Authentication and configuration options for Azure storage.
-        prefix (Optional[str]): The prefix for the log file path.
-        time (Optional[Union[str, datetime]]): The time of logging. If None, the current time is used.
-    """
-    if storage_options is None:
-        storage_options = {}
-    # Generate a UUID for the log file name
-    log_id = uuid.uuid4().hex[:16]
-    log_filename = f"{log_id}.json"
-
-    # Construct the full path to the log file
-    log_path = (
-        f"{container}/{prefix}/{log_filename}"
-        if prefix
-        else f"{container}/{log_filename}"
-    )
-
-    # Ensure the time is in ISO format
-    if time is None:
-        time = datetime.now().isoformat()
-    else:
-        try:
-            if isinstance(time, str):
-                time = datetime.fromisoformat(time).isoformat()
-            elif isinstance(time, datetime):
-                time = time.isoformat()
-            else:
-                raise ValueError
-        except ValueError:
-            time = datetime.now().isoformat()
-
-    # Create the log entry
-    log_entry = {"name": name, "time": time, "status": status}
-
-    # Write the log entry to the specified path in JSON format
-    with fsspec.open(log_path, "w", **storage_options) as f:
-        json.dump(log_entry, f)
-
-
-def read_log_entries(
-    base_uri: str, storage_options: dict[str, str | None], prefix: str | None = None
-) -> pd.DataFrame:
-    """
-    Lists all JSON log files under a specified prefix, reads them into a DataFrame,
-    and sorts them by ascending time.
-
-    Args:
-        base_uri (str): The base URI to search for JSON log files.
-        storage_options (Dict[str, str]): Authentication and configuration options for Azure storage.
-        prefix (Optional[str]): A prefix to filter the log files.
-
-    Returns:
-        pd.DataFrame: A DataFrame of log entries sorted by ascending date.
-    """
-    protocol = base_uri.split("://")[0]
-    fs = fsspec.filesystem(protocol, **storage_options)
-
-    # Use glob to list all JSON files under the base URI with the optional prefix
-    search_pattern = f"{base_uri}/{prefix}/*.json" if prefix else f"{base_uri}/*.json"
-    json_files = fs.glob(search_pattern)
-
-    # Read JSON files into a list of dictionaries
-    logs: list[dict] = []
-    for f in json_files:
-        with fs.open(f, "r", **storage_options) as f2:
-            log_entry = json.load(f2)
-            logs.append(log_entry)
-
-    # If no log entries are found, return an empty DataFrame
-    if not logs:
-        return pd.DataFrame(columns=["name", "time", "status"])
-
-    # Create a DataFrame from the list of dictionaries
-    df = pd.DataFrame(logs)
-
-    # Ensure the time column is in datetime format, raise an error if parsing fails
-    try:
-        df["time"] = pd.to_datetime(df["time"], errors="raise")
-    except Exception as e:
-        msg = f"Error parsing datetime: {e}"
-        raise ValueError(msg)  # noqa: B904
-
-    # Sort DataFrame by time in ascending order
-    df = df.sort_values(by="time", ascending=True)
-
-    return df
 
 
 def rm_from_storage(

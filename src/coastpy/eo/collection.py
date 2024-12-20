@@ -1,4 +1,5 @@
 import abc
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -943,8 +944,6 @@ if __name__ == "__main__":
         with fsspec.open(href, mode="rb", **storage_options) as f:
             coastal_zone = gpd.read_parquet(f)
         return coastal_zone
-
-    import json
 
     def extract_tags_from_composite(data: xr.Dataset | xr.DataArray) -> dict:
         """

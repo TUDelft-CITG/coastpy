@@ -53,7 +53,7 @@ def get_nodata(
 
 
 def set_nodata(
-    da: xr.DataArray | xr.Dataset,
+    data: xr.DataArray | xr.Dataset,
     nodata: float | int | None,
     band: str | None = None,
     target: Literal["nodata", "_FillValue"] = "nodata",
@@ -85,36 +85,36 @@ def set_nodata(
             "The target parameter must be either 'nodata' or '_FillValue'."
         )
 
-    if isinstance(da, xr.Dataset):
+    if isinstance(data, xr.Dataset):
         if not band and not apply_to_all:
             raise ValueError(
                 "For Datasets, either 'band' or 'apply_to_all' must be specified."
             )
         if apply_to_all:
-            for var in da.data_vars:
-                da[var] = set_nodata(da[var], nodata, target=target)
+            for var in data.data_vars:
+                data[var] = set_nodata(data[var], nodata, target=target)
         elif band:
-            if band not in da:
+            if band not in data:
                 raise ValueError(f"Band '{band}' not found in the Dataset.")
-            da[band] = set_nodata(da[band], nodata, target=target)
-        return da
+            data[band] = set_nodata(data[band], nodata, target=target)
+        return data
 
     # DataArray case
     if nodata is not None:
-        da.attrs[target] = nodata
+        data.attrs[target] = nodata
     else:
-        da.attrs.pop(target, None)  # Remove the attribute if nodata is None
+        data.attrs.pop(target, None)  # Remove the attribute if nodata is None
 
     # Sync with rioxarray
     try:
         if nodata is not None:
-            da.rio.write_nodata(nodata, inplace=True)
+            data.rio.write_nodata(nodata, inplace=True)
         else:
-            da.rio.update_attrs({"nodata": None}, inplace=True)
+            data.rio.update_attrs({"nodata": None}, inplace=True)
     except AttributeError:
         pass  # rioxarray is not available or not in use
 
-    return da
+    return data
 
 
 def scale(
