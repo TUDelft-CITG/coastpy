@@ -96,8 +96,13 @@ def read_snapshot(collection, columns=None, add_href=True, storage_options=None)
 
     # Open the Parquet file and read the specified columns
     href = collection.assets["geoparquet-stac-items"].href
-    with fsspec.open(href, mode="rb", **storage_options) as f:
-        extents = gpd.read_parquet(f, columns=columns)
+
+    if href.startswith("https://"):
+        with fsspec.open(href, mode="rb") as f:
+            extents = gpd.read_parquet(f, columns=columns)
+    else:
+        with fsspec.open(href, mode="rb", **storage_options) as f:
+            extents = gpd.read_parquet(f, columns=columns)
 
     if add_href:
         if "assets" not in extents.columns:
