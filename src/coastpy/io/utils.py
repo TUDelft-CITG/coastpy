@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import json
 import logging
 import pathlib
@@ -69,6 +70,7 @@ class PathParser:
     cloud_protocol: str = ""
     base_dir: str | pathlib.Path = ""
     band: str = ""
+    resolution: str = ""
     _base_https_url: str = ""
     _base_cloud_uri: str = ""
 
@@ -133,9 +135,19 @@ class PathParser:
             elif self.scheme == "s3":
                 self._base_https_url = f"https://{self.container}.s3.amazonaws.com"
 
-        # Common attributes
-        self.https_url = f"{self._base_https_url}/{self.path}"
-        self.cloud_uri = f"{self.cloud_protocol}://{self.container}/{self.path}"
+    def _extract_stac_item_id(self, filename: str) -> str:
+        """
+        Extracts the stac_item_id from a filename, optionally removing a band prefix.
+
+        Args:
+            filename (str): The filename to process.
+
+        Returns:
+            str: The extracted stac_item_id.
+        """
+        if self.band and filename.startswith(self.band + "_"):
+            return filename[len(self.band) + 1 :]  # Remove band prefix
+        return filename.split(".")[0]  # Default behavio
 
     def _extract_stac_item_id(self, filename: str) -> str:
         """
@@ -164,9 +176,11 @@ class PathParser:
 
         path = path.relative_to(self.base_dir)
         parts = path.parts
+
         if len(parts) < 2:
             msg = "Local file paths must have at least two components."
             raise ValueError(msg)
+
         self.container = parts[0]
         self.path = "/".join(parts[1:])
         self.name = path.name
@@ -187,58 +201,62 @@ class PathParser:
         elif self.cloud_protocol == "s3":
             self._base_https_url = f"https://{self.container}.s3.amazonaws.com"
 
-        # Common attributes
-        self.https_url = f"{self._base_https_url}/{self.path}"
-        self.cloud_uri = f"{self.cloud_protocol}://{self.container}/{self.path}"
-
-    def to_filepath(self, base_dir: pathlib.Path | str | None = None) -> pathlib.Path:
-        """
-        Convert the parsed path to a local file path.
-
-        Args:
-            base_dir (pathlib.Path | str | None): Base directory for constructing the path.
-
-        Returns:
-            pathlib.Path: The constructed local file path.
-        """
+    def to_filepath(
+        self, base_dir: pathlib.Path | str | None = None, capitalize=False
+    ) -> pathlib.Path:
+        "Convert to local file path."
         if base_dir is None:
             base_dir = self.base_dir
-        return pathlib.Path(base_dir) / self.container / self.path
 
-    def _construct_url(self, base_url: str) -> str:
-        """
-        Helper to construct the URL or URI dynamically with the band if set.
-
-        Args:
-            base_url (str): Base URL or URI.
-
-        Returns:
-            str: The constructed URL or URI.
-        """
+        name_parts = [self.name.split(".")[0]]
         if self.band:
-            band_prefix = f"{self.band}-" if self.band else ""
-            file_name = f"{band_prefix}{self.name}"
-        else:
-            file_name = self.name
+            name_parts.append(self.band)
+        if self.resolution:
+            name_parts.append(self.resolution)
+        name_with_band_and_res = "_".join(name_parts)
+
+        if capitalize:
+            name_with_band_and_res = name_with_band_and_res.upper()
+
+        name_with_band_and_res += self.suffix
+
+        path_parts = self.path.rsplit("/", 1)
+        path_with_band_and_res = (
+            f"{path_parts[0]}/{name_with_band_and_res}"
+            if len(path_parts) > 1
+            else name_with_band_and_res
+        )
+
+        return pathlib.Path(base_dir) / self.container / path_with_band_and_res
+
+    def _construct_url(self, base_url: str, capitalize: bool = False) -> str:
+        "Construct URL or URI."
+        name_parts = [self.name.split(".")[0]]
+
+        if self.band:
+            name_parts.append(self.band)
+
+        if self.resolution:
+            name_parts.append(self.resolution)
+
+        file_name = "_".join(name_parts)
+
+        if capitalize:
+            file_name = file_name.upper()
+
+        file_name += self.suffix
+
         return f"{base_url}/{self.path.rsplit('/', 1)[0]}/{file_name}"
 
-    def to_https_url(self) -> str:
-        """
-        Convert the parsed path to an HTTPS URL.
+    def to_https_url(self, capitalize: bool = False) -> str:
+        "Convert to HTTPS URL."
+        return self._construct_url(self._base_https_url, capitalize=capitalize)
 
-        Returns:
-            str: The corresponding HTTPS URL, modified by the band if set.
-        """
-        return self._construct_url(self._base_https_url)
-
-    def to_cloud_uri(self) -> str:
-        """
-        Convert the parsed path to a cloud storage URI.
-
-        Returns:
-            str: The corresponding cloud storage URI, modified by the band if set.
-        """
-        return self._construct_url(self.cloud_protocol + "://" + self.container)
+    def to_cloud_uri(self, capitalize=False) -> str:
+        "Convert to cloud storage URI."
+        return self._construct_url(
+            self.cloud_protocol + "://" + self.container, capitalize=capitalize
+        )
 
 
 def name_block(
@@ -406,73 +424,99 @@ def name_data(
     prefix: str | None = None,
     filename_prefix: str | None = None,
     include_bounds: bool = True,
-    include_random_hex: bool = True,
+    include_random_hex: bool = False,
 ) -> str:
     """
-    Generates a unique filename for a dataset with optional geographic bounds and random hex string.
-    If neither bounds nor hex string are included, raises a ValueError.
+    Generate a unique filename for a dataset based on bounds and a deterministic hash.
 
     Args:
-        data: A DataFrame, GeoDataFrame, or xarray dataset/data array representing spatial or non-spatial data.
-        prefix: An optional prefix for the filename, typically used for higher-level grouping.
-        filename_prefix: An additional prefix for the filename, used for further categorization.
-        include_bounds: Flag to include geographic bounds in the filename for geospatial datasets.
-        include_random_hex: Flag to include a random hex string in the filename.
-        include_random_hex: The zoom level of the QuadKey prefix to include.
+        data: Spatial or non-spatial dataset (DataFrame, GeoDataFrame, or xarray).
+        prefix: Optional prefix for the filename.
+        filename_prefix: Additional prefix for further categorization.
+        include_bounds: Include geographic bounds in the filename.
+        include_random_hex: Include a random hex string (overridden by deterministic hash).
 
     Returns:
-        A string representing the uniquely generated filename based on the provided options.
+        str: A unique filename based on the provided options.
 
     Raises:
-        ValueError: If both include_bounds and include_random_hex are False, or if the data type is unsupported.
+        ValueError: If no valid parts are generated for the filename.
     """
     if not include_bounds and not include_random_hex:
-        msg = "At least one of include_bounds, include_random_hex or quadkey_prefix must be set."
+        msg = "At least one of include_bounds or include_random_hex must be set."
         raise ValueError(msg)
 
     parts = []
 
-    # Generate bounds part
+    # Generate bounds part with deterministic hash
     bounds_part = ""
-    if isinstance(data, pd.DataFrame | gpd.GeoDataFrame):
-        suffix = ".parquet"
-
     if include_bounds and isinstance(
         data, gpd.GeoDataFrame | xr.Dataset | xr.DataArray
     ):
         if isinstance(data, gpd.GeoDataFrame):
             bounds = data.total_bounds
             crs = data.crs.to_string()
-
         else:
-            suffix = ".tif"
             bounds = data.rio.bounds()
             crs = data.rio.crs.to_string()
 
-        bounds_part = name_bounds(tuple(bounds), crs)
+        bounds_part = name_bounds_with_hash(bounds, crs)  # type: ignore
         if bounds_part:
             parts.append(bounds_part)
 
-    # Generate random hex part
-    random_hex = ""
+    # Generate random hex part (optional, for fallback)
     if include_random_hex:
         random_hex = uuid.uuid4().hex[:3]
-        parts.append(f"{random_hex}")
+        parts.append(random_hex)
 
     if not parts:
         msg = "No valid parts were generated for the filename."
         raise ValueError(msg)
 
+    # Construct filename components
+    suffix = ".parquet" if isinstance(data, pd.DataFrame | gpd.GeoDataFrame) else ".tif"
     name_part = "_".join(parts) + suffix
-
-    # Constructing the final filename
     components = [comp for comp in [filename_prefix, name_part] if comp]
     filename = "_".join(components)
 
-    if prefix:
-        return f"{prefix}/{filename}"
+    return f"{prefix}/{filename}" if prefix else filename
 
-    return filename
+
+def name_bounds_with_hash(bounds: tuple, crs: Any, precision: int = 3) -> str:
+    """
+    Generate a deterministic hash-based name for bounding box coordinates.
+
+    Args:
+        bounds (tuple): Bounding box as (minx, miny, maxx, maxy).
+        crs (str): Coordinate reference system of the bounds.
+        precision (int): Decimal precision for the bounds.
+
+    Returns:
+        str: Formatted name, e.g., "n45e123-abc".
+    """
+    bounds_geometry = box(*bounds)
+    if crs != "EPSG:4326":
+        transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+        bounds_geometry = transform(transformer.transform, bounds_geometry)
+
+    minx, miny, maxx, maxy = bounds_geometry.bounds
+
+    # Format bounds with specified precision
+    formatted_bounds = f"{minx:.{precision}f}_{miny:.{precision}f}_{maxx:.{precision}f}_{maxy:.{precision}f}"
+
+    # Generate a deterministic short hash
+    hash_seed = formatted_bounds
+    hash_suffix = short_id(hash_seed, length=4)
+
+    lon_prefix = "e" if minx >= 0 else "w"
+    lat_prefix = "n" if miny >= 0 else "s"
+
+    return f"{lat_prefix}{abs(miny):02.0f}{lon_prefix}{abs(minx):03.0f}-{hash_suffix}"
+
+
+def short_id(seed: str, length: int = 4) -> str:
+    """Generate a short deterministic ID based on a seed."""
+    return hashlib.md5(seed.encode()).hexdigest()[:length]
 
 
 def write_log_entry(
