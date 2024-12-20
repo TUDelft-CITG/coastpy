@@ -13,62 +13,51 @@ def get_nodata(
     da: xr.DataArray | xr.Dataset, band: str | None = None
 ) -> float | int | None:
     """
-    Find the nodata value in an Xarray DataArray or Dataset.
-
-    This function checks for the nodata value in the following order:
-    1. `nodata` attribute.
-    2. `_FillValue` attribute.
-    3. `rio.nodata` (if using rioxarray).
+    Get the nodata value from an xarray DataArray or Dataset.
 
     Args:
-        da (xr.DataArray | xr.Dataset): Input Xarray object.
-        band (str, optional): Band name to check if input is a Dataset.
+        da (xr.DataArray | xr.Dataset): Input data.
+        band (str, optional): Band name if `da` is a Dataset.
 
     Returns:
-        float | None: The nodata value if found, otherwise None.
+        float | int | None: The nodata value if consistent, otherwise None.
+
+    Raises:
+        ValueError: If nodata values differ across Dataset variables.
     """
-    # Get the target DataArray
+
+    def _get_nodata(dataarray: xr.DataArray) -> float | int | None:
+        return (
+            dataarray.attrs.get("nodata")
+            or dataarray.attrs.get("_FillValue")
+            or getattr(dataarray.rio, "nodata", None)
+        )
+
     if isinstance(da, xr.Dataset):
-        if band is None:
-            msg = "For Dataset input, 'band' must be specified."
-            raise ValueError(msg)
-        if band not in da:
-            msg = f"Band '{band}' not found in the Dataset."
-            raise ValueError(msg)
-        da = da[band]
+        if band:
+            if band not in da:
+                raise ValueError(f"Band '{band}' not found in Dataset.")
+            return _get_nodata(da[band])
 
-    # Check for 'nodata' in attrs
-    nodata_value = da.attrs.get("nodata", None)
-    if nodata_value is not None:
-        return nodata_value
+        nodata_values = {_get_nodata(da[var]) for var in da.data_vars}
+        if len(nodata_values) == 1:
+            return nodata_values.pop()
+        if len(nodata_values) > 1:
+            raise ValueError(f"Inconsistent nodata values: {nodata_values}")
+        return None
 
-    # Check for '_FillValue' in attrs
-    nodata_value = da.attrs.get("_FillValue", None)
-    if nodata_value is not None:
-        return nodata_value
+    if isinstance(da, xr.DataArray):
+        return _get_nodata(da)
 
-    # Check for rioxarray nodata
-    try:
-        nodata_value = da.rio.nodata
-        if nodata_value is not None:
-            return nodata_value
-    except AttributeError:
-        # rioxarray is not available
-        pass
-
-    # Raise a warning if no nodata value is found
-    warnings.warn(  # noqa: B028
-        "No nodata value found in 'nodata', '_FillValue', or 'rio.nodata'.",
-        UserWarning,
-    )
-    return None
+    raise TypeError("Input must be an xarray DataArray or Dataset.")
 
 
 def set_nodata(
-    da: xr.DataArray | xr.Dataset,
-    nodata_value: float | int | None,
+    data: xr.DataArray | xr.Dataset,
+    nodata: float | int | None,
     band: str | None = None,
     target: Literal["nodata", "_FillValue"] = "nodata",
+    apply_to_all: bool = False,
 ) -> xr.DataArray | xr.Dataset:
     """
     Set the nodata value for an Xarray DataArray or Dataset.
@@ -79,44 +68,119 @@ def set_nodata(
 
     Args:
         da (xr.DataArray | xr.Dataset): Input Xarray object to modify.
-        nodata_value (float | int | None): The nodata value to set. Use `None` to clear.
+        nodata (float | int | None): The nodata value to set. Use `None` to clear.
         band (str, optional): Band name to modify if input is a Dataset.
         target (str, optional): Target attribute to set, either 'nodata' (default) or '_FillValue'.
+        apply_to_all (bool, optional): If True, apply the nodata value to all variables in a Dataset.
+                                       Defaults to False.
 
     Returns:
         xr.DataArray | xr.Dataset: The modified DataArray or Dataset.
+
+    Raises:
+        ValueError: If `band` and `apply_to_all` are both unset for a Dataset.
     """
     if target not in ["nodata", "_FillValue"]:
-        msg = "The target parameter must be either 'nodata' or '_FillValue'."
-        raise ValueError(msg)
+        raise ValueError(
+            "The target parameter must be either 'nodata' or '_FillValue'."
+        )
 
-    # Handle Dataset case
-    if isinstance(da, xr.Dataset):
-        if band is None:
-            msg = "For Dataset input, 'band' must be specified."
-            raise ValueError(msg)
-        if band not in da:
-            msg = f"Band '{band}' not found in the Dataset."
-            raise ValueError(msg)
-        da = da[band]
+    if isinstance(data, xr.Dataset):
+        if not band and not apply_to_all:
+            raise ValueError(
+                "For Datasets, either 'band' or 'apply_to_all' must be specified."
+            )
+        if apply_to_all:
+            for var in data.data_vars:
+                data[var] = set_nodata(data[var], nodata, target=target)
+        elif band:
+            if band not in data:
+                raise ValueError(f"Band '{band}' not found in the Dataset.")
+            data[band] = set_nodata(data[band], nodata, target=target)
+        return data
 
-    # Set the specified attribute
-    if nodata_value is not None:
-        da.attrs[target] = nodata_value
+    # DataArray case
+    if nodata is not None:
+        data.attrs[target] = nodata
     else:
-        da.attrs.pop(target, None)  # Remove the attribute if nodata_value is None
+        data.attrs.pop(target, None)  # Remove the attribute if nodata is None
 
-    # Always attempt to set rioxarray nodata
+    # Sync with rioxarray
     try:
-        if nodata_value is not None:
-            da.rio.write_nodata(nodata_value, inplace=True)
+        if nodata is not None:
+            data.rio.write_nodata(nodata, inplace=True)
         else:
-            da.rio.update_attrs({"nodata": None}, inplace=True)
+            data.rio.update_attrs({"nodata": None}, inplace=True)
     except AttributeError:
-        # rioxarray is not available or not in use
-        pass
+        pass  # rioxarray is not available or not in use
 
-    return da
+    return data
+
+
+def scale(
+    data: xr.Dataset | xr.DataArray, scale_factor, nodata: int, keep_attrs: bool = True
+) -> xr.Dataset | xr.DataArray:
+    """
+    Scale an xarray Dataset or DataArray to integer format for storage efficiency.
+
+    Args:
+        data (xr.Dataset | xr.DataArray): The dataset or data array to scale.
+        scale_factor (int): Factor to scale the data (default: 10000).
+        nodata (int): Nodata value to apply.
+        keep_attrs (bool, optional): Whether to retain attributes in the output. Defaults to True.
+
+    Returns:
+        xr.Dataset | xr.DataArray: Scaled, converted, and nodata-adjusted data.
+    """
+
+    def _mask(var, nodata_val):
+        """Generate a mask for invalid values (NaN, infinities, old nodata)."""
+        return var.isnull() | np.isinf(var) | (var == nodata_val)
+
+    def _scale_var(var, keep_attrs=keep_attrs):
+        """Scale a single variable."""
+        # Identify old nodata value or default to NaN
+
+        old_nodata = get_nodata(var) or float("nan")
+
+        # Create a mask for invalid values and old nodata
+        mask = _mask(var, old_nodata)
+
+        # Scale the values
+        scaled_var = (var.where(~mask) * scale_factor).round()
+
+        # Replace invalid values with the new nodata value
+        scaled_var = scaled_var.where(~mask, nodata)
+
+        # Set new nodata value in metadata and rio attributes
+        scaled_var = set_nodata(scaled_var, nodata)
+
+        if keep_attrs:
+            scaled_var.attrs.update(var.attrs)
+
+        scaled_var.attrs.update(
+            {
+                "raster:scale": 1 / scale_factor,
+                "data_type": "int16",
+            }
+        )
+
+        # Cast to integer type
+        return scaled_var.astype("int16")
+
+    if isinstance(data, xr.Dataset):
+        # Apply scaling to each variable in the dataset
+        data2 = data.map(_scale_var)
+        if keep_attrs:
+            data2.attrs.update(data.attrs)
+        return data2
+
+    if isinstance(data, xr.DataArray):
+        # Scale the data array
+        return _scale_var(data)
+
+    # Raise an error if the input type is unsupported
+    raise TypeError(f"Unsupported input type: {type(data)}")
 
 
 def make_template(data: xr.DataArray) -> xr.DataArray:
@@ -453,3 +517,63 @@ def apply_mask(da: xr.DataArray, values: list[int]) -> xr.DataArray:
         xr.DataArray: The input DataArray with pixels matching the values set to NaN.
     """
     return da.where(~da.isin(values))
+
+
+def combine_by_first(
+    datasets: list[xr.Dataset | xr.DataArray],
+) -> xr.Dataset | xr.DataArray:
+    """
+    Combine multiple xarray datasets or data arrays, ignoring NaN values.
+
+    Args:
+        datasets (list[xr.Dataset | xr.DataArray]): List of datasets/data arrays to combine.
+
+    Returns:
+        xr.Dataset | xr.DataArray: Combined dataset or data array.
+    """
+    if not datasets:
+        msg = "The input list of datasets is empty."
+        raise ValueError(msg)
+
+    # Ensure all inputs are of the same type
+    first = datasets[0]
+    if not all(isinstance(ds, type(first)) for ds in datasets):
+        msg = "All datasets must be of the same type (either Dataset or DataArray)."
+        raise TypeError(msg)
+
+    # Combine using combine_first in a loop
+    combined = datasets[0]
+    for ds in datasets[1:]:
+        combined = combined.combine_first(ds)  # type: ignore
+
+    return combined
+
+
+def to_array_with_attrs(
+    ds: xr.Dataset, dim: str = "band", name: str | None = None
+) -> xr.DataArray:
+    """
+    Convert an xarray Dataset to a DataArray while preserving both global and variable attributes,
+    including `rioxarray` metadata like `nodata`.
+
+    Args:
+        ds (xr.Dataset): Input Dataset with attributes to preserve.
+        dim (str): Name of the dimension for stacking (default: "band").
+        name (str, optional): Name for the resulting DataArray. Defaults to None.
+
+    Returns:
+        xr.DataArray: DataArray with preserved global and variable attributes.
+    """
+    # Preserve global attributes
+    attrs = ds.attrs.copy()
+    nodata = get_nodata(ds)
+
+    # Convert Dataset to DataArray
+    da = ds.to_array(dim=dim, name=name)
+
+    # Restore global attributes
+    da.attrs.update(attrs)
+
+    da = set_nodata(da, nodata)
+
+    return da  # type: ignore

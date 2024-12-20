@@ -1,24 +1,43 @@
 import abc
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
 
+import dask
 import geopandas as gpd
 import numpy as np
+import odc.geo.geobox
 import odc.geo.geom
 import odc.stac
+import pandas as pd
 import pyproj
 import pystac
+import pystac.item
 import pystac_client
 import rioxarray  # noqa
 import stac_geoparquet
 import xarray as xr
 
 from coastpy.eo.indices import calculate_indices
-from coastpy.eo.mask import apply_mask, geometry_mask, nodata_mask, numeric_mask
+from coastpy.eo.mask import (
+    SceneClassification,
+    apply_mask,
+    geometry_mask,
+    nodata_mask,
+    numeric_mask,
+    scl_mask,
+)
+from coastpy.io.cloud import write_block
+from coastpy.io.utils import PathParser, name_data
 from coastpy.stac.utils import read_snapshot
+from coastpy.utils.dask import DaskClientManager
+from coastpy.utils.xarray import combine_by_first, scale
 
 # NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
+# Create a logger for this module
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class ImageCollection:
@@ -38,11 +57,10 @@ class ImageCollection:
 
         # Configuration
         self.search_params = {}
+        self.load_params = {}
         self.bands = []
         self.spectral_indices = []
         self.percentile = None
-        self.dst_crs = None
-        self.load_params = {}
         self.stac_cfg = stac_cfg or {}
 
         # Masking options
@@ -51,6 +69,7 @@ class ImageCollection:
         self.value_mask = None
 
         # Internal state
+        self.geometry = None
         self.stac_items = None
         self.dataset = None
 
@@ -68,7 +87,7 @@ class ImageCollection:
             roi (gpd.GeoDataFrame): Region of interest.
             datetime_range (str): Temporal range in 'YYYY-MM-DD/YYYY-MM-DD'.
             query (dict, optional): Additional query parameters for search.
-            filter_function (Callable, optional): A function to filter/sort items.
+            filter(Callable, optional): A custom function to filter/sort items.
                 Accepts and returns a list of pystac.Items.
 
         Returns:
@@ -81,7 +100,7 @@ class ImageCollection:
             "datetime": datetime_range,
             "query": query,
         }
-        self.geometry = odc.geo.geom.Geometry(geom)
+        self.geometry = odc.geo.geom.Geometry(geom, crs=roi.crs)
 
         # Perform the actual search
         logging.info(f"Executing search with params: {self.search_params}")
@@ -93,7 +112,23 @@ class ImageCollection:
             msg = "No items found for the given search parameters."
             raise ValueError(msg)
 
+        # Log the number of STAC items found
+        logger.info(f"Number of STAC items found: {len(self.stac_items)}")
+
+        # Log the number of unique MGRS grid tiles
+        unique_mgrs_tiles = len(
+            {item.properties["s2:mgrs_tile"] for item in self.stac_items}
+        )
+        logger.info(f"Number of unique MGRS grid tiles: {unique_mgrs_tiles}")
+
+        # Log the number of unique relative orbits
+        unique_relative_orbits = len(
+            {item.properties["sat:relative_orbit"] for item in self.stac_items}
+        )
+        logger.info(f"Number of unique relative orbits: {unique_relative_orbits}")
+
         # Apply the filter function if provided
+        # move to composite
         if filter_function:
             try:
                 logging.info("Applying custom filter function.")
@@ -114,57 +149,83 @@ class ImageCollection:
         groupby: str = "solar_day",
         resampling: str | dict[str, str] | None = None,
         dtype: np.dtype | str | None = None,
-        crs: str | int | None = None,
+        crs: str | int = "utm",
         resolution: float | int | None = None,
         pool: int | None = None,
         preserve_original_order: bool = False,
         progress: bool | None = None,
         fail_on_error: bool = True,
-        geobox: dict | None = None,
+        geobox: odc.geo.geobox.GeoBox | None = None,
+        bbox: tuple[float, float, float, float] | None = None,
+        geopolygon: dict | None = None,
+        lon: tuple[float, float] | None = None,
+        lat: tuple[float, float] | None = None,
+        x: tuple[float, float] | None = None,
+        y: tuple[float, float] | None = None,
         like: xr.Dataset | None = None,
         patch_url: str | None = None,
-        dst_crs: Any | None = None,
+        stac_cfg: dict | None = None,
+        anchor: str | None = None,
     ) -> "ImageCollection":
         """
-        Configure loading parameters.
+        Configure parameters for loading data via odc.stac.load.
 
         Args:
-            bands (List[str]): Bands to load.
-            percentile (int | None): Percentile value for compositing (e.g., 50 for median).
-            spectral_indices (List[str]): Spectral indices to calculate.
-            Additional args: Parameters for odc.stac.load.
+            bands (list[str]): Bands to load (required).
+            percentile (int | None): Percentile for compositing (e.g., 50 for median).
+            spectral_indices (list[str] | None): List of spectral indices to compute.
+            mask_nodata (bool): Mask no-data values. Defaults to True.
+            resolution (float | int | None): Pixel resolution in CRS units. Defaults to 10.
+            crs (str | int): Coordinate reference system. Defaults to 'utm'.
+            geobox (GeoBox | None): Exact region, resolution, and CRS to load. Overrides other extent parameters.
+            bbox, geopolygon, lon, lat, x, y: Optional parameters to define extent.
+            Additional args: Parameters passed to odc.stac.load.
 
         Returns:
             ImageCollection: Updated instance.
-
         """
+        if not bands:
+            raise ValueError("Argument `bands` is required.")
+
         if percentile is not None and not (0 <= percentile <= 100):
-            msg = "Composite percentile must be between 0 and 100."
-            raise ValueError(msg)
+            raise ValueError("`percentile` must be between 0 and 100.")
 
         self.bands = bands
         self.spectral_indices = spectral_indices
         self.percentile = percentile
-        self.dst_crs = dst_crs
         self.mask_nodata = mask_nodata
 
-        # ODC StaC load parameters
+        # Geobox creation
+        if geobox is None and resolution and self.geometry is not None:
+            geobox = self._create_geobox(
+                geometry=self.geometry, resolution=resolution, crs=crs
+            )
+            resolution = None  # Let geobox handle resolution
+
+        # Assemble load parameters
         self.load_params = {
-            "chunks": chunks or {},
+            "chunks": chunks,
             "groupby": groupby,
             "resampling": resampling,
-            "stac_cfg": self.stac_cfg,
             "dtype": dtype,
-            "crs": crs,
             "resolution": resolution,
             "pool": pool,
             "preserve_original_order": preserve_original_order,
             "progress": progress,
             "fail_on_error": fail_on_error,
             "geobox": geobox,
+            "bbox": bbox,
+            "geopolygon": geopolygon,
+            "lon": lon,
+            "lat": lat,
+            "x": x,
+            "y": y,
             "like": like,
             "patch_url": patch_url,
+            "stac_cfg": self.stac_cfg or stac_cfg,
+            "anchor": anchor,
         }
+
         return self
 
     def mask(
@@ -190,19 +251,88 @@ class ImageCollection:
         return self
 
     def _load(self) -> xr.Dataset:
+        """
+        Load data using odc.stac.load.
+
+        Returns:
+            xr.Dataset: Loaded dataset.
+        """
         if not self.stac_items:
-            msg = "No items found. Perform a search first."
-            raise ValueError(msg)
+            raise ValueError("No STAC items found. Perform a search first.")
 
-        bbox = tuple(self.search_params["intersects"].bounds)
+        # Adjust groupby for percentile-based compositing
+        if self.percentile:
+            self.load_params["groupby"] = "id"
 
-        # Load the data
+        # Fallback to bbox if no spatial bounds are provided
+        if (
+            not self.load_params.get("geobox")
+            and not self.load_params.get("bbox")
+            and not self.load_params.get("geopolygon")
+            and not self.load_params.get("like")
+        ):
+            bbox = tuple(self.search_params["intersects"].bounds)
+            self.load_params["bbox"] = bbox
+
+        # Call odc.stac.load
         ds = odc.stac.load(
             self.stac_items,
             bands=self.bands,
-            bbox=bbox,
             **self.load_params,
         )
+
+        # Add metadata if time matches item count
+        if ds.sizes["time"] == len(self.stac_items):
+            ds = self._add_metadata_from_stac(self.stac_items, ds)
+
+        return ds
+
+    @classmethod
+    def _create_geobox(
+        cls, geometry: odc.geo.geom.Geometry, resolution=None, crs=None, shape=None
+    ):
+        """
+        Create a GeoBox from the given geometry.
+
+        Args:
+            geometry (odc.geo.geom.Geometry): Geometry of the region of interest.
+            resolution (float, tuple, or None): Pixel resolution (units of CRS). Defaults to None.
+            crs (str or int, optional): CRS of the GeoBox. Defaults to the geometry's CRS.
+            shape (tuple, optional): Shape (height, width) of the output GeoBox.
+
+        Returns:
+            GeoBox: Constructed GeoBox, or None if resolution is not provided.
+        """
+        if crs is None:
+            crs = geometry.crs  # Default to geometry CRS
+
+        if resolution is not None:
+            return odc.geo.geobox.GeoBox.from_geopolygon(
+                geometry, resolution=resolution, crs=crs, shape=shape
+            )
+
+        return None  # Let bbox or other parameters handle extent
+
+    @classmethod
+    def _add_metadata_from_stac(
+        cls, items: list[pystac.Item], ds: xr.Dataset
+    ) -> xr.Dataset:
+        """
+        Attach metadata from STAC items to the dataset as coordinates.
+        """
+        if len(items) != ds.sizes["time"]:
+            raise ValueError("Mismatch between STAC items and dataset time dimension.")
+
+        mgrs_tiles = [i.properties["s2:mgrs_tile"] for i in items]
+        cloud_cover = [i.properties["eo:cloud_cover"] for i in items]
+        rel_orbits = [i.properties["sat:relative_orbit"] for i in items]
+        stac_ids = [i.id for i in items]
+
+        # Assign metadata as coordinates
+        ds = ds.assign_coords({"stac_id": ("time", stac_ids)})
+        ds = ds.assign_coords({"s2:mgrs_tile": ("time", mgrs_tiles)})
+        ds = ds.assign_coords({"eo:cloud_cover": ("time", cloud_cover)})
+        ds = ds.assign_coords({"sat:relative_orbit": ("time", rel_orbits)})
 
         return ds
 
@@ -227,15 +357,6 @@ class ImageCollection:
 
         return ds
 
-    def _reproject(
-        self, ds: xr.DataArray | xr.Dataset, dst_crs
-    ) -> xr.DataArray | xr.Dataset:
-        """
-        Reproject the dataset to a new CRS.
-        """
-        ds = ds.odc.reproject(dst_crs, resampling="bilinear", nodata=np.nan)
-        return ds
-
     def add_spectral_indices(self, indices: list[str]) -> "ImageCollection":
         """
         Add spectral indices to the current dataset.
@@ -249,63 +370,190 @@ class ImageCollection:
         self.spectral_indices = indices
         return self
 
+    @classmethod
     def _composite(
-        self,
+        cls,
         ds: xr.DataArray | xr.Dataset,
         percentile: int,
-        determination_times: list[str] | None = None,
-        stac_ids: list[str] | None = None,
-        cloud_cover: float | None = None,
     ) -> xr.DataArray | xr.Dataset:
-        # Use median() if percentile is 50, otherwise quantile()
-        if percentile == 50:
-            composite = ds.median(dim="time", skipna=True, keep_attrs=True)
-            logging.info("Using median() for composite.")
-        else:
-            composite = ds.quantile(
-                percentile / 100, dim="time", skipna=True, keep_attrs=True
+        """
+        Generate a composite dataset using median or percentile methods,
+        respecting metadata and sampling constraints.
+
+        Args:
+            ds (xr.DataArray | xr.Dataset): The input dataset.
+            percentile (int): Percentile value (50 for median).
+
+        Returns:
+            xr.DataArray | xr.Dataset: Composite dataset with a time dimension.
+        """
+        try:
+            # Step 1: Create a combined group key
+            ds = ds.assign(
+                group_key=(
+                    xr.apply_ufunc(
+                        lambda tile, orbit: tile + "_" + str(orbit),
+                        ds["s2:mgrs_tile"],
+                        ds["sat:relative_orbit"],
+                        vectorize=True,
+                    )
+                )
             )
-            composite.attrs["determination_method"] = "percentile"
-            logging.info("Using quantile() for composite.")
 
-        composite.attrs["composite:determination_method"] = "percentile"
-        composite.attrs["composite:percentile"] = percentile
+            # Remove SCL band if present (composite method for categorical data not implemented)
+            if "SCL" in ds:
+                ds = ds.drop_vars("SCL")
 
-        if determination_times is not None:
-            composite.attrs["composite:determination_datetimes"] = determination_times
+            # Step 2: Sort by cloud coverage
+            ds_sorted = ds.sortby("eo:cloud_cover")
 
-        if stac_ids is not None:
-            composite.attrs["composite:stac_ids"] = stac_ids
+            # Step 3: Group by the combined key
+            grouped = ds_sorted.groupby("group_key")
 
-        if cloud_cover is not None:
-            composite.attrs["composite:cloud_cover"] = cloud_cover
+            # Step 4: Sample and compute the composite
+            def sample_and_aggregate(group):
+                if percentile == 50:
+                    return group.median(dim="time", skipna=True, keep_attrs=True)
+                else:
+                    return group.quantile(
+                        percentile / 100, dim="time", skipna=True, keep_attrs=True
+                    )
 
-        return composite
+            composite = grouped.map(sample_and_aggregate)
+            datasets = [
+                composite.isel(group_key=i) for i in range(composite.sizes["group_key"])
+            ]
+            collapsed = combine_by_first(datasets)
 
-    def composite(self, percentile: int = 50) -> "ImageCollection":
+            # Step 5: Compute temporal metadata
+            def compute_metadata(grouped):
+                group_metadata = []
+                for _, group in grouped:
+                    datetimes = group.time.to_series().sort_values()
+                    start_datetime = datetimes.min().isoformat()
+                    end_datetime = datetimes.max().isoformat()
+                    avg_interval = datetimes.diff().mean()
+                    n_obs = len(datetimes)
+
+                    group_metadata.append(
+                        {
+                            "start_datetime": start_datetime,
+                            "end_datetime": end_datetime,
+                            "avg_interval": avg_interval,
+                            "n_obs": n_obs,
+                        }
+                    )
+                return group_metadata
+
+            group_metadata = compute_metadata(grouped)
+
+            # Aggregate global metadata
+            start_datetime = min(item["start_datetime"] for item in group_metadata)
+            end_datetime = max(item["end_datetime"] for item in group_metadata)
+            avg_intervals = [item["avg_interval"] for item in group_metadata]
+            avg_interval = f"{pd.Series(avg_intervals).mean().days} days"  # type: ignore
+            avg_obs = np.mean([item["n_obs"] for item in group_metadata])
+
+            # Add the `time` dimension and metadata
+            collapsed = collapsed.expand_dims(time=[pd.Timestamp(start_datetime)])
+            collapsed = collapsed.assign_coords(
+                {
+                    "time": ("time", [pd.Timestamp(start_datetime)]),
+                    "start_datetime": ("time", [pd.Timestamp(start_datetime)]),
+                    "end_datetime": ("time", [pd.Timestamp(end_datetime)]),
+                }
+            )
+
+            # Update global attributes for composite metadata
+            collapsed.attrs.update(
+                {
+                    "eo:cloud_cover": str(
+                        int(ds_sorted["eo:cloud_cover"].mean().item())
+                    ),
+                    "composite:determination_method": "median"
+                    if percentile == 50
+                    else "percentile",
+                    "composite:percentile": str(int(percentile)),
+                    "composite:groups": str(
+                        list(ds_sorted.group_key.to_series().unique())
+                    ),
+                    "composite:avg_obs": str(round(float(avg_obs), 2)),
+                    "composite:stac_ids": str(
+                        [str(i) for i in ds_sorted.stac_id.values]
+                    ),
+                    "composite:avg_interval": avg_interval,
+                    "composite:summary": (
+                        f"Composite dataset created by grouping on ['s2:mgrs_tile', 'sat:relative_orbit'], using a "
+                        f"{'median' if percentile == 50 else f'{percentile}th percentile'} method, "
+                        f"sorted by 'eo:cloud_cover' with an average of {avg_obs} images per group."
+                    ),
+                }
+            )
+
+            return collapsed
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to generate composite: {e}") from e
+
+    def composite(
+        self,
+        percentile: int = 50,
+        filter_function: Callable[[list[pystac.Item]], list[pystac.Item]] | None = None,
+    ) -> "ImageCollection":
         """
         Apply a composite operation to the dataset based on the given percentile.
 
         Args:
             percentile (int): Percentile to calculate (e.g., 50 for median).
                             Values range between 0 and 100.
-        Returns:
-            xr.Dataset: Composited dataset.
-        """
-        if self.dataset is None:
-            msg = "No dataset loaded. Perform `execute` first."
-            raise ValueError(msg)
+            filter_function (Callable, optional): A custom function to filter/sort items.
+                                                Accepts and returns a list of pystac.Items.
 
+        Returns:
+            ImageCollection: Composited dataset.
+
+        Raises:
+            ValueError: If percentile is not between 0 and 100 or if no STAC items are found.
+            RuntimeError: If an error occurs in the filter_function.
+        """
         if not (0 <= percentile <= 100):
             msg = "Percentile must be between 0 and 100."
             raise ValueError(msg)
-
         logging.info(f"Applying {percentile}th percentile composite.")
+
+        if not self.stac_items:
+            raise ValueError("No STAC items found. Perform a search first.")
+
+        if filter_function:
+            try:
+                logging.info("Applying custom filter function.")
+                self.stac_items = filter_function(self.stac_items)
+
+                # Log the number of STAC items found
+                logger.info(f"Number of STAC items remaining: {len(self.stac_items)}")
+
+                # Log the number of unique MGRS grid tiles
+                unique_mgrs_tiles = len(
+                    {item.properties["s2:mgrs_tile"] for item in self.stac_items}
+                )
+                logger.info(f"Number of unique MGRS grid tiles: {unique_mgrs_tiles}")
+
+                # Log the number of unique relative orbits
+                unique_relative_orbits = len(
+                    {item.properties["sat:relative_orbit"] for item in self.stac_items}
+                )
+                logger.info(
+                    f"Number of unique relative orbits: {unique_relative_orbits}"
+                )
+
+            except Exception as e:
+                msg = f"Error in filter_function: {e}"
+                raise RuntimeError(msg) from e
 
         self.percentile = percentile
         return self
 
-    def execute(self) -> xr.DataArray | xr.Dataset:
+    def execute(self, compute=False) -> xr.DataArray | xr.Dataset:
         if self.stac_items is None:
             search = self.catalog.search(**self.search_params)
             self.stac_items = list(search.items())
@@ -316,31 +564,10 @@ class ImageCollection:
         if self.geometry_mask or self.nodata_mask or self.value_mask:
             self.dataset = self._apply_masks(self.dataset)
 
-        if self.dst_crs and (
-            pyproj.CRS.from_user_input(self.dst_crs).to_epsg()
-            != self.dataset.rio.crs.to_epsg()
-        ):
-            self.dataset = self._reproject(self.dataset, self.dst_crs)
-
         if self.percentile:
-            determination_times = (
-                self.dataset.time.to_series().apply(lambda x: x.isoformat()).unique()
-            )
-
-            stac_ids = [i.id for i in self.stac_items]
-
-            cloud_cover = float(
-                np.mean(
-                    [float(i.properties["eo:cloud_cover"]) for i in self.stac_items]
-                )
-            )
-
             self.dataset = self._composite(
                 ds=self.dataset,
                 percentile=self.percentile,
-                determination_times=determination_times,
-                stac_ids=stac_ids,
-                cloud_cover=cloud_cover,
             )
 
         if self.spectral_indices:
@@ -355,6 +582,9 @@ class ImageCollection:
                 raise NotImplementedError(msg)
 
             self.dataset = calculate_indices(self.dataset, self.spectral_indices)
+
+        if compute:
+            self.dataset = self.dataset.compute()
 
         return self.dataset
 
@@ -382,6 +612,55 @@ class S2Collection(ImageCollection):
 
         super().__init__(catalog_url, collection, stac_cfg)
 
+    def mask(
+        self,
+        geometry: odc.geo.geom.Geometry | None = None,
+        nodata: bool = True,
+        values: list[int] | None = None,
+        scl_classes: list[str | SceneClassification | int] | None = None,
+    ) -> "S2Collection":
+        """
+        Mask the dataset based on geometry, nodata, specific values, or the SCL band.
+
+        Args:
+            geometry (odc.geo.geom.Geometry | None, optional): Geometry to mask data within. Defaults to None.
+            nodata (bool, optional): Whether to apply a nodata mask. Defaults to True.
+            values (list[int] | None, optional): Specific values to mask. Defaults to None.
+            scl_classes (list[SceneClassification | int] | None, optional): List of SCL class names or numeric values to mask. Defaults to None.
+
+        Returns:
+            S2Collection: Updated instance with masking options configured.
+
+        Valid SCL classes:
+            - NO_DATA
+            - SATURATED_DEFECTIVE
+            - DARK_AREA_PIXELS
+            - CLOUD_SHADOWS
+            - VEGETATION
+            - BARE_SOILS
+            - WATER
+            - CLOUDS_LOW_PROBABILITY
+            - CLOUDS_MEDIUM_PROBABILITY
+            - CLOUDS_HIGH_PROBABILITY
+            - CIRRUS
+            - SNOW_ICE
+        """
+        super().mask(geometry, nodata, values)
+        self.scl_classes = scl_classes
+        return self
+
+    def _apply_masks(self, ds: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
+        """
+        Apply masks to the dataset.
+        """
+        ds = super()._apply_masks(ds)
+
+        if self.scl_classes:
+            mask = scl_mask(ds, self.scl_classes)
+            ds = apply_mask(ds, mask)
+
+        return ds
+
 
 class TileCollection:
     """
@@ -401,7 +680,6 @@ class TileCollection:
         # Configuration
         self.search_params = {}
         self.bands = []
-        self.dst_crs = None
         self.load_params = {}
         self.stac_cfg = stac_cfg or {}
 
@@ -601,6 +879,7 @@ class CopernicusDEMCollection(TileCollection):
 if __name__ == "__main__":
     import logging
     import os
+    import time
     from typing import Any, Literal
 
     import dotenv
@@ -618,8 +897,10 @@ if __name__ == "__main__":
 
     # from coastpy.eo.collection import S2Collection
     from coastpy.eo.filter import filter_and_sort_stac_items
+    from coastpy.io.utils import name_data
     from coastpy.stac.utils import read_snapshot
     from coastpy.utils.config import configure_instance
+    from coastpy.utils.xarray import combine_by_first
 
     configure_rio(cloud_defaults=True)
     instance_type = configure_instance()
@@ -628,22 +909,17 @@ if __name__ == "__main__":
     sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
     storage_options = {"account_name": "coclico", "sas_token": sas_token}
 
-    west, south, east, north = (4.796, 53.108, 5.229, 53.272)
+    RESAMPLING = "cubic"
 
-    roi = gpd.GeoDataFrame(
-        geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
-    )
-
-    def get_coastal_zone(coastal_grid, region_of_interest):
-        df = gpd.sjoin(coastal_grid, region_of_interest).drop(columns=["index_right"])
-        coastal_zone = df.union_all()
-        return odc.geo.geom.Geometry(coastal_zone, crs=df.crs)
+    start_time = time.time()
 
     def filter_function(items):
-        r = filter_and_sort_stac_items(
-            items, max_items=10, group_by="s2:mgrs_tile", sort_by="eo:cloud_cover"
+        return filter_and_sort_stac_items(
+            items,
+            max_items=10,
+            group_by=["s2:mgrs_tile", "sat:relative_orbit"],
+            sort_by="eo:cloud_cover",
         )
-        return r
 
     def read_coastal_grid(
         zoom: Literal[5, 6, 7, 8, 9, 10],
@@ -669,31 +945,137 @@ if __name__ == "__main__":
             coastal_zone = gpd.read_parquet(f)
         return coastal_zone
 
+    def extract_tags_from_composite(data: xr.Dataset | xr.DataArray) -> dict:
+        """
+        Extract tags from an Xarray Dataset.
+
+        This function filters attributes from the dataset that match specific prefixes,
+        replaces colons in the attribute names with underscores, and converts values
+        to strings or JSON-encoded strings if they are lists or dictionaries.
+
+        Args:
+            ds (xr.Dataset): The input Xarray Dataset.
+
+        Returns:
+            dict: A dictionary of tags with cleaned keys and stringified values.
+        """
+        attrs = data.attrs.copy()
+        tags = {
+            k.replace(":", "_"): json.dumps(v) if isinstance(v, list | dict) else str(v)
+            for k, v in attrs.items()
+            if k.startswith(("composite:", "eo:"))
+        }
+
+        def _to_isoformat(x):
+            return pd.Timestamp(x).isoformat() + "Z"
+
+        coords = ["start_datetime", "end_datetime"]
+        for coord in coords:
+            if coord in data.coords:
+                tags[coord] = _to_isoformat(data.coords[coord].values.item())
+
+        return tags
+
+    def get_s2(region_of_interest, coastal_zone, crs):
+        """
+        Process Sentinel-2 data into a composite for a given region of interest.
+        """
+
+        geobox = odc.geo.geobox.GeoBox.from_geopolygon(
+            coastal_zone.to_crs(crs), resolution=10
+        )
+
+        s2 = (
+            S2Collection()
+            .search(
+                region_of_interest,
+                datetime_range="2023-01-01/2024-01-01",
+                query={"eo:cloud_cover": {"lt": 20}},
+                # filter_function = lambda items: [sorted(items, key=lambda x: x.datetime, reverse=True)[0]] # latest pic
+            )
+            .load(
+                bands=["blue", "green", "red", "nir", "swir16", "swir22", "SCL"],
+                spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
+                chunks={},
+                patch_url=pc.sign,
+                resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
+                geobox=geobox,
+            )
+            .mask(
+                geometry=coastal_zone,
+                nodata=True,
+                scl_classes=["NO_DATA", "DARK_AREA_PIXELS", "CLOUDS_HIGH_PROBABILITY"],  # type: ignore
+            )
+            .composite(percentile=50, filter_function=filter_function)
+            .execute(compute=False)
+        )
+        return s2
+
+    def save(xx, outdir, storage_options):
+        xx = xx.squeeze()  # sqeeuzes the time dimension
+        xx = scale(xx, scale_factor=10000, nodata=-9999)
+
+        tags = extract_tags_from_composite(xx)
+
+        outpath = name_data(
+            xx,
+            prefix=str(outdir),
+            include_random_hex=False,
+        )
+
+        account_name = storage_options.get("account_name", "coclico")
+        pp = PathParser(outpath, account_name=account_name)
+
+        for var, band in xx.data_vars.items():
+            pp.band = var
+            pp.resolution = f"{int(band.rio.resolution()[0])}m"
+            outpath = pp.to_filepath()
+            outpath.parent.mkdir(parents=True, exist_ok=True)
+            write_block(band, str(outpath), tags=tags, use_dask=False)
+
+    west, south, east, north = (3.914, 52.510, 5.560, 53.173)
+
+    region_of_interest = gpd.GeoDataFrame(
+        geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
+    )
+
     coastal_grid = read_coastal_grid(
         zoom=10, buffer_size="5000m", storage_options=storage_options
     )
 
-    coastal_zone = get_coastal_zone(coastal_grid, roi)
-
-    s2 = (
-        S2Collection()
-        .search(
-            roi,
-            datetime_range="2022-01-01/2023-12-31",
-            query={"eo:cloud_cover": {"lt": 20}},
-            filter_function=filter_function,
-        )
-        .load(
-            bands=["blue", "green", "red", "nir", "swir16"],
-            percentile=50,
-            spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
-            mask_nodata=True,
-            chunks={},
-            patch_url=pc.sign,
-        )
-        .mask(geometry=coastal_zone, nodata=True)
-        .execute()
+    coastal_grid_roi = gpd.sjoin(coastal_grid, region_of_interest).drop(
+        columns=["index_right"]
     )
 
+    client = DaskClientManager().create_client(
+        instance_type, threads_per_worker=1, n_workers=5
+    )
+
+    outdir = "az://tmp/typology/composite"
+
+    tasks = []
+    print(f"Parsing {len(coastal_grid_roi)} coastal grid tiles")
+    for i in range(len(coastal_grid_roi)):
+        region_of_interest = coastal_grid_roi.iloc[[i]]
+        coastal_zone = odc.geo.geom.Geometry(
+            region_of_interest.geometry.item(), crs=region_of_interest.crs
+        )
+        crs = region_of_interest["coastal_grid:utm_epsg"].item()
+        t = dask.delayed(get_s2)(region_of_interest, coastal_zone, crs)
+        t = dask.delayed(save)(t, outdir, storage_options)
+
+        # TODO: another dask.delayed for writing to disk (workflow from below)
+        tasks.append(t)
+
+    print(client.dashboard_link)
+    dask.compute(*tasks, scheduler=client)
+
+    # xx = xx[0]
+
+    # save(xx, outdir)
+
+    end_time = time.time()
+    print(f"elapsed_time: {end_time - start_time}")
     print("Done")
-    s2 = s2.compute()
+
+    # r = dask.compute(*tasks, scheduler=client)

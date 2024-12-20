@@ -76,7 +76,7 @@ extend-ignore = [
   "E402",   # Module level import not at top of file
   "PT004",  # Incorrect check, usefixtures is the correct way to do this
   "RUF012", # Would require a lot of ClassVar's
-  "EM102",
+  "EM",     # Error messages are not always clear
 ]
 
 exclude = []

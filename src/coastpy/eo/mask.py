@@ -167,6 +167,8 @@ def geometry_mask(
         return data.map(lambda da: geometry_mask(da, geometry, invert, all_touched))
 
     if isinstance(data, xr.DataArray):
+        # NOTE: consider using crop?
+        # return data.odc.crop(geometry, apply_mask=True)
         return data.odc.mask(geometry, invert=invert, all_touched=all_touched)
 
     msg = f"Unsupported input type: {type(data)}"
@@ -174,24 +176,24 @@ def geometry_mask(
 
 
 def scl_mask(
-    scl_layer: xr.DataArray,
-    to_mask: list[str | int],
+    data: xr.DataArray | xr.Dataset,
+    to_mask: list[str | int | SceneClassification],
 ) -> xr.DataArray:
     """
     Generate a binary mask for Sentinel-2 Scene Classification (SCL) values or classes.
 
     Args:
-        scl_layer (xarray.Dataset or xarray.DataArray): SCL layer.
+        data (xarray.Dataset or xarray.DataArray): Input data that contians or is the Sentinel 2 SCL layer.
         to_mask (list[str | int]): List of class names or numeric values to mask.
 
     Returns:
         xarray.DataArray: Binary mask (`True` for specified SCL values, `False` otherwise).
     """
-    if isinstance(scl_layer, xr.Dataset):
-        if "SCL" not in scl_layer.data_vars:
+    if isinstance(data, xr.Dataset):
+        if "SCL" not in data.data_vars:
             msg = "Dataset must contain an 'SCL' variable."
             raise ValueError(msg)
-        scl_layer = scl_layer["SCL"]
+        data = data["SCL"]
 
     numeric_to_mask = []
     for item in to_mask:
@@ -206,7 +208,7 @@ def scl_mask(
             msg = f"Invalid type '{type(item)}' in `to_mask`. Must be str or int."
             raise ValueError(msg)
 
-    return numeric_mask(scl_layer, numeric_to_mask)  # type: ignore
+    return numeric_mask(data, numeric_to_mask)  # type: ignore
 
 
 if __name__ == "__main__":
