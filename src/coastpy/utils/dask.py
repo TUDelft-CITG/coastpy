@@ -84,12 +84,12 @@ class DaskClientManager:
             "memory": "8GB",  # Memory allocated per worker
             "processes": 1,  # Single process per worker
             "walltime": "00:20:00",  # Maximum runtime per worker
-            "job_extra_directives": [
-                "--output=/scratch/${USER}/dask_logs/%x_%j.out",  # Log file
-                "--error=/scratch/${USER}/dask_logs/%x_%j.err",
-            ],
-            "local_directory": "/scratch/${USER}/dask_tmp",  # Worker temp storage
-            "log_directory": "/scratch/${USER}/dask_logs",  # Dask logs
+            # "job_extra_directives": [
+            #     "--output=/scratch/${USER}/dask_logs/%x_%j.out",  # Log file
+            #     "--error=/scratch/${USER}/dask_logs/%x_%j.err",
+            # ],
+            # "local_directory": "/scratch/${USER}/dask_tmp",  # Worker temp storage
+            # "log_directory": "/scratch/${USER}/dask_logs",  # Dask logs
         }
         slurm_configs.update(kwargs)
 
