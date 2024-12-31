@@ -18,7 +18,7 @@ import pystac
 
 from coastpy.geo.quadtiles import make_mercantiles
 from coastpy.geo.quadtiles_utils import add_geo_columns
-from coastpy.io.utils import name_bounds
+from coastpy.io.utils import name_bounds, name_bounds_with_hash  # noqa
 
 # Configure logging for your specific module
 logger = logging.getLogger(__name__)  # Replace __name__ with your module name
@@ -44,12 +44,34 @@ def short_id(seed: str, length: int = 3) -> str:
     return uuid.UUID(int=random.getrandbits(128)).hex[:length]
 
 
-def add_proc_id(geometry, crs):
+def add_bounds(geometry, crs):
     """Create a unique deterministic proc_id for a geometry."""
-    bounds_name = name_bounds(geometry.bounds, crs)
+    # NOTE: leave here because this would also be an option
+    # bounds_name = name_bounds(geometry.bounds, crs)
+    # NOTE: leave here because this would also be an option
+    bounds_name = name_bounds_with_hash(geometry.bounds, crs)
+    # NOTE: leave here because this was the old approach of adding a deterministic suffix
     # Use geometry bounds as a stable input for the seed
-    deterministic_suffix = short_id(str(geometry.bounds))
-    return f"{bounds_name}-{deterministic_suffix}"
+    # deterministic_suffix = short_id(str(geometry.bounds))
+    # return f"{bounds_name}-{deterministic_suffix}"
+    return bounds_name
+
+
+# NOTE: leave here because this was the old approach of adding a grouped suffix
+def add_grouped_index(df, id_column="coastal_grid:id"):
+    """Enhance the ID column by appending a zero-padded group index."""
+    df["new_index"] = df.groupby(id_column).cumcount() + 1
+    df[id_column] = df[id_column] + "-" + df["new_index"].astype(str).str.zfill(3)
+    df = df.drop(columns=["new_index"])
+    return df
+
+
+def add_proc_id(df, crs, zoom):
+    """Add a unique deterministic proc_id to a DataFrame."""
+    df["coastal_grid:id"] = df["geometry"].map(partial(add_bounds, crs=crs))
+    # df = add_grouped_index(df)
+    df["coastal_grid:id"] = f"z{zoom}" + "-" + df["coastal_grid:id"]
+    return df
 
 
 def clip_and_filter(grid, coastal_zone):
@@ -251,12 +273,15 @@ def main(
                 tiles = add_geo_columns(tiles, geo_columns=["bbox"]).rename(
                     columns={"bbox": "coastal_grid:bbox"}
                 )
+
+                # # Add unique IDs and UTM EPSG codes
+                tiles = add_proc_id(tiles, tiles.crs, zoom)
+
+                if tiles["coastal_grid:id"].duplicated().any():
+                    raise ValueError("Duplicate IDs found in the tiles.")
+
                 tiles = tiles.sort_values("coastal_grid:quadkey")
 
-                # Add unique IDs and UTM EPSG codes
-                tiles["coastal_grid:id"] = tiles.geometry.map(
-                    partial(add_proc_id, crs=tiles.crs)
-                )
                 points = tiles.representative_point().to_frame("geometry")
                 utm_epsg = gpd.sjoin(points, utm_grid).drop(columns=["index_right"])[
                     "epsg"
