@@ -203,6 +203,7 @@ dependencies:
       - networkx
       - stac-geoparquet  # pypi has more recent releases
       - coloredlogs
+      - graphviz
       # - coastpy  # probably better to install in dev mode (pip install -e .)
     # - dea-tools
     # - stactools-geoparquet-items

@@ -8,6 +8,7 @@ from sysconfig import get_python_version
 class ComputeInstance(Enum):
     LOCAL = auto()
     SLURM = auto()
+    COILED = auto()
 
 
 def is_interactive() -> bool:
@@ -52,8 +53,10 @@ def get_proj_dir(proj_name) -> pathlib.Path:
 
 
 def detect_instance_type() -> ComputeInstance:
-    """Detect if running on a local machine or a remote SLURM cluster."""
-    if (
+    """Detect if running on a local machine, SLURM cluster, or Coiled."""
+    if "COILED_RUNTIME" in os.environ:
+        return ComputeInstance.COILED
+    elif (
         "SLURM_JOB_ID" in os.environ
         or "SLURM_NODELIST" in os.environ
         or "SLURM_JOB_NAME" in os.environ

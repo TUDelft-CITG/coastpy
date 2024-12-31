@@ -440,8 +440,8 @@ def name_data(
     Raises:
         ValueError: If no valid parts are generated for the filename.
     """
-    if not include_bounds and not include_random_hex:
-        msg = "At least one of include_bounds or include_random_hex must be set."
+    if not include_bounds and not include_random_hex and not filename_prefix:
+        msg = "At least one of include_bounds or include_random_hex or filename_prefix must be set."
         raise ValueError(msg)
 
     parts = []
@@ -480,7 +480,9 @@ def name_data(
     return f"{prefix}/{filename}" if prefix else filename
 
 
-def name_bounds_with_hash(bounds: tuple, crs: Any, precision: int = 3) -> str:
+def name_bounds_with_hash(
+    bounds: tuple, crs: Any, precision: int = 6, length: int = 6
+) -> str:
     """
     Generate a deterministic hash-based name for bounding box coordinates.
 
@@ -504,7 +506,7 @@ def name_bounds_with_hash(bounds: tuple, crs: Any, precision: int = 3) -> str:
 
     # Generate a deterministic short hash
     hash_seed = formatted_bounds
-    hash_suffix = short_id(hash_seed, length=4)
+    hash_suffix = short_id(hash_seed, length=length)
 
     lon_prefix = "e" if minx >= 0 else "w"
     lat_prefix = "n" if miny >= 0 else "s"
@@ -512,7 +514,7 @@ def name_bounds_with_hash(bounds: tuple, crs: Any, precision: int = 3) -> str:
     return f"{lat_prefix}{abs(miny):02.0f}{lon_prefix}{abs(minx):03.0f}-{hash_suffix}"
 
 
-def short_id(seed: str, length: int = 4) -> str:
+def short_id(seed: str, length: int = 6) -> str:
     """Generate a short deterministic ID based on a seed."""
     return hashlib.md5(seed.encode()).hexdigest()[:length]
 

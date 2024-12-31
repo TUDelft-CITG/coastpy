@@ -174,3 +174,5 @@ logs/*
 src/coastpy/_version.py
 
 .idea
+
+dbug/*

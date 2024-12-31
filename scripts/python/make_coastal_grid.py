@@ -49,7 +49,7 @@ def add_bounds(geometry, crs):
     # NOTE: leave here because this would also be an option
     # bounds_name = name_bounds(geometry.bounds, crs)
     # NOTE: leave here because this would also be an option
-    bounds_name = name_bounds_with_hash(geometry.bounds, crs)
+    bounds_name = name_bounds_with_hash(geometry.bounds, crs, precision=6, length=6)
     # NOTE: leave here because this was the old approach of adding a deterministic suffix
     # Use geometry bounds as a stable input for the seed
     # deterministic_suffix = short_id(str(geometry.bounds))
@@ -276,6 +276,8 @@ def main(
 
                 # # Add unique IDs and UTM EPSG codes
                 tiles = add_proc_id(tiles, tiles.crs, zoom)
+
+                tiles.to_parquet("/Users/calkoen/data/tmp/tiles.parquet")
 
                 if tiles["coastal_grid:id"].duplicated().any():
                     raise ValueError("Duplicate IDs found in the tiles.")

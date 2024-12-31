@@ -78,10 +78,8 @@ class DaskClientManager:
         from dask_jobqueue import SLURMCluster
 
         slurm_configs = {
-            "queue": "regular",  # SLURM queue/partition
-            "account": "myaccount",  # SLURM account
             "cores": 1,  # 1 core per worker
-            "memory": "8GB",  # Memory allocated per worker
+            # "memory": "8GB",  # Memory allocated per worker
             "processes": 1,  # Single process per worker
             "walltime": "00:20:00",  # Maximum runtime per worker
             # "job_extra_directives": [

@@ -399,6 +399,7 @@ class ImageCollection:
                     )
                 )
             )
+            target_chunks = {k: v for k, v in ds.chunks.items() if k != "time"}  # type: ignore
 
             # Remove SCL band if present (composite method for categorical data not implemented)
             if "SCL" in ds:
@@ -424,6 +425,8 @@ class ImageCollection:
                 composite.isel(group_key=i) for i in range(composite.sizes["group_key"])
             ]
             collapsed = combine_by_first(datasets)
+
+            collapsed = collapsed.chunk(target_chunks)
 
             # Step 5: Compute temporal metadata
             def compute_metadata(grouped):
