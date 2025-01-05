@@ -2,7 +2,7 @@ import abc
 import json
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 import dask
 import geopandas as gpd
@@ -32,7 +32,7 @@ from coastpy.io.cloud import write_block
 from coastpy.io.utils import PathParser, name_data
 from coastpy.stac.utils import read_snapshot
 from coastpy.utils.dask import DaskClientManager
-from coastpy.utils.xarray import combine_by_first, scale
+from coastpy.utils.xarray import combine_by_first, scale, unscale
 
 # NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
 # Create a logger for this module
@@ -59,8 +59,10 @@ class ImageCollection:
         self.search_params = {}
         self.load_params = {}
         self.bands = []
+        self.normalize = True
         self.spectral_indices = []
         self.percentile = None
+        self.composite_method = None
         self.stac_cfg = stac_cfg or {}
 
         # Masking options
@@ -145,6 +147,7 @@ class ImageCollection:
         percentile: int | None = None,
         spectral_indices: list[str] | None = None,
         mask_nodata: bool = True,
+        normalize: bool = True,
         chunks: dict[str, int | str] | None = None,
         groupby: str = "solar_day",
         resampling: str | dict[str, str] | None = None,
@@ -175,6 +178,7 @@ class ImageCollection:
             percentile (int | None): Percentile for compositing (e.g., 50 for median).
             spectral_indices (list[str] | None): List of spectral indices to compute.
             mask_nodata (bool): Mask no-data values. Defaults to True.
+            normalize (bool): Normalize data. Defaults to True.
             resolution (float | int | None): Pixel resolution in CRS units. Defaults to 10.
             crs (str | int): Coordinate reference system. Defaults to 'utm'.
             geobox (GeoBox | None): Exact region, resolution, and CRS to load. Overrides other extent parameters.
@@ -191,6 +195,7 @@ class ImageCollection:
             raise ValueError("`percentile` must be between 0 and 100.")
 
         self.bands = bands
+        self.normalize = normalize
         self.spectral_indices = spectral_indices
         self.percentile = percentile
         self.mask_nodata = mask_nodata
@@ -285,7 +290,10 @@ class ImageCollection:
         if ds.sizes["time"] == len(self.stac_items):
             ds = self._add_metadata_from_stac(self.stac_items, ds)
 
-        return ds
+        if self.normalize:
+            ds = unscale(ds, scale_factor=10000, variables_to_ignore=["SCL"])
+
+        return ds  # type: ignore
 
     @classmethod
     def _create_geobox(
@@ -371,7 +379,25 @@ class ImageCollection:
         return self
 
     @classmethod
-    def _composite(
+    def _extract_composite_metadata(cls, data: xr.Dataset | xr.DataArray) -> dict:
+        metadata = {}
+        datetimes = data.time.to_series().sort_values()
+        start_datetime = datetimes.min().isoformat()
+        end_datetime = datetimes.max().isoformat()
+        avg_interval = datetimes.diff().mean()
+        n_obs = len(datetimes)
+        metadata = {
+            "start_datetime": start_datetime,
+            "end_datetime": end_datetime,
+            "eo:cloud_cover": str(int(data["eo:cloud_cover"].mean().item())),
+            "composite:avg_interval": avg_interval,
+            "composite:n_obs": n_obs,
+            "composite:stac_ids": str([str(i) for i in data.stac_id.values]),
+        }
+        return metadata
+
+    @classmethod
+    def _grouped_composite(
         cls,
         ds: xr.DataArray | xr.Dataset,
         percentile: int,
@@ -412,7 +438,7 @@ class ImageCollection:
             grouped = ds_sorted.groupby("group_key")
 
             # Step 4: Sample and compute the composite
-            def sample_and_aggregate(group):
+            def aggregate(group):
                 if percentile == 50:
                     return group.median(dim="time", skipna=True, keep_attrs=True)
                 else:
@@ -420,7 +446,7 @@ class ImageCollection:
                         percentile / 100, dim="time", skipna=True, keep_attrs=True
                     )
 
-            composite = grouped.map(sample_and_aggregate)
+            composite = grouped.map(aggregate)
             datasets = [
                 composite.isel(group_key=i) for i in range(composite.sizes["group_key"])
             ]
@@ -428,34 +454,20 @@ class ImageCollection:
 
             # collapsed = collapsed.chunk(target_chunks)
 
-            # Step 5: Compute temporal metadata
-            def compute_metadata(grouped):
-                group_metadata = []
-                for _, group in grouped:
-                    datetimes = group.time.to_series().sort_values()
-                    start_datetime = datetimes.min().isoformat()
-                    end_datetime = datetimes.max().isoformat()
-                    avg_interval = datetimes.diff().mean()
-                    n_obs = len(datetimes)
+            group_metadata_list = []
+            for group, group_data in grouped:
+                metadata = cls._extract_composite_metadata(group_data)
+                metadata["group_key"] = group
+                group_metadata_list.append(metadata)
 
-                    group_metadata.append(
-                        {
-                            "start_datetime": start_datetime,
-                            "end_datetime": end_datetime,
-                            "avg_interval": avg_interval,
-                            "n_obs": n_obs,
-                        }
-                    )
-                return group_metadata
-
-            group_metadata = compute_metadata(grouped)
-
-            # Aggregate global metadata
-            start_datetime = min(item["start_datetime"] for item in group_metadata)
-            end_datetime = max(item["end_datetime"] for item in group_metadata)
-            avg_intervals = [item["avg_interval"] for item in group_metadata]
+            # Global metadata aggregation
+            start_datetime = min(item["start_datetime"] for item in group_metadata_list)
+            end_datetime = max(item["end_datetime"] for item in group_metadata_list)
+            avg_intervals = [
+                item["composite:avg_interval"] for item in group_metadata_list
+            ]
             avg_interval = f"{pd.Series(avg_intervals).mean().days} days"  # type: ignore
-            avg_obs = np.mean([item["n_obs"] for item in group_metadata])
+            avg_obs = np.mean([item["composite:n_obs"] for item in group_metadata_list])
 
             # Add the `time` dimension and metadata
             collapsed = collapsed.expand_dims(time=[pd.Timestamp(start_datetime)])
@@ -473,9 +485,9 @@ class ImageCollection:
                     "eo:cloud_cover": str(
                         int(ds_sorted["eo:cloud_cover"].mean().item())
                     ),
-                    "composite:determination_method": "median"
+                    "composite:determination_method": "CoastPy Grouped Median"
                     if percentile == 50
-                    else "percentile",
+                    else "grouped_percentile",
                     "composite:percentile": str(int(percentile)),
                     "composite:groups": str(
                         list(ds_sorted.group_key.to_series().unique())
@@ -498,8 +510,44 @@ class ImageCollection:
         except Exception as e:
             raise RuntimeError(f"Failed to generate composite: {e}") from e
 
+    @classmethod
+    def _simple_composite(
+        cls, ds: xr.DataArray | xr.Dataset
+    ) -> xr.DataArray | xr.Dataset:
+        """
+        Generate a simple median composite dataset.
+        """
+        try:
+            composite = ds.median(dim="time", skipna=True, keep_attrs=True)
+            metadata = cls._extract_composite_metadata(ds)
+
+            composite = composite.assign_coords(
+                {
+                    "time": ("time", [pd.Timestamp(metadata["start_datetime"])]),
+                    "start_datetime": (
+                        "time",
+                        [pd.Timestamp(metadata["start_datetime"])],
+                    ),
+                    "end_datetime": ("time", [pd.Timestamp(metadata["end_datetime"])]),
+                }
+            )
+            composite.attrs.update(metadata)
+            composite.attrs.update(
+                {
+                    "composite:determination_method": "CoastPy Simple Median",
+                    "composite:summary": (
+                        "Composite dataset created by taking the median value of each pixel "
+                        "across all time steps."
+                    ),
+                }
+            )
+            return composite
+        except Exception as e:
+            raise RuntimeError(f"Failed to generate simple composite: {e}") from e
+
     def composite(
         self,
+        method: Literal["simple", "grouped"] = "simple",
         percentile: int = 50,
         filter_function: Callable[[list[pystac.Item]], list[pystac.Item]] | None = None,
     ) -> "ImageCollection":
@@ -507,6 +555,7 @@ class ImageCollection:
         Apply a composite operation to the dataset based on the given percentile.
 
         Args:
+            composite_method (str): Composite method to apply. Options: 'simple', 'grouped'.
             percentile (int): Percentile to calculate (e.g., 50 for median).
                             Values range between 0 and 100.
             filter_function (Callable, optional): A custom function to filter/sort items.
@@ -553,6 +602,7 @@ class ImageCollection:
                 msg = f"Error in filter_function: {e}"
                 raise RuntimeError(msg) from e
 
+        self.composite_method = method
         self.percentile = percentile
         return self
 
@@ -567,11 +617,15 @@ class ImageCollection:
         if self.geometry_mask or self.nodata_mask or self.value_mask:
             self.dataset = self._apply_masks(self.dataset)
 
-        if self.percentile:
-            self.dataset = self._composite(
-                ds=self.dataset,
-                percentile=self.percentile,
-            )
+        if self.composite_method:
+            if self.composite_method == "simple":
+                self.dataset = self._simple_composite(self.dataset)
+            elif self.composite_method == "grouped" and self.percentile:
+                self.dataset = self._grouped_composite(self.dataset, self.percentile)
+            else:
+                raise ValueError(
+                    f"Unsupported composite method: {self.composite_method}"
+                )
 
         if self.spectral_indices:
             if isinstance(self.dataset, xr.DataArray):
@@ -584,7 +638,9 @@ class ImageCollection:
                 msg = "Spectral indices not implemented for DataArray."
                 raise NotImplementedError(msg)
 
-            self.dataset = calculate_indices(self.dataset, self.spectral_indices)
+            self.dataset = calculate_indices(
+                self.dataset, self.spectral_indices, normalize=False
+            )
 
         if compute:
             self.dataset = self.dataset.compute()

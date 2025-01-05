@@ -183,6 +183,110 @@ def scale(
     raise TypeError(f"Unsupported input type: {type(data)}")
 
 
+def unscale(
+    data: xr.Dataset | xr.DataArray,
+    scale_factor: float | None = None,
+    keep_attrs: bool = True,
+    variables_to_ignore: list[str] | None = None,
+) -> xr.Dataset | xr.DataArray:
+    """
+    Unscale an xarray Dataset or DataArray to its original range, ignoring specified variables.
+
+    Args:
+        data (xr.Dataset | xr.DataArray): The dataset or data array to unscale.
+        scale_factor (float, optional): Factor used to scale the data. If None, attempts to use
+                                        metadata attributes (e.g., `raster:scale`, `scale_factor`).
+        keep_attrs (bool, optional): Whether to retain attributes in the output. Defaults to True.
+        variables_to_ignore (list[str], optional): List of variable names to ignore during unscale.
+                                                   Defaults to ["SCL"].
+
+    Returns:
+        xr.Dataset | xr.DataArray: Unscaled data.
+    """
+    if variables_to_ignore is None:
+        variables_to_ignore = ["SCL"]
+
+    def _unscale_var(var: xr.DataArray) -> xr.DataArray:
+        """Unscale a single variable."""
+        # Retrieve scaling factors from metadata
+        sf = scale_factor or var.attrs.get("scale_factor", 1.0)
+        offset = var.attrs.get("add_offset", 0.0)
+
+        # Apply unscaling: reverse scale and offset
+        unscaled_var = (var - offset) / sf
+
+        # Retain attributes
+        if keep_attrs:
+            unscaled_var.attrs.update(var.attrs)
+
+        # Remove scaling-related attributes
+        for attr in ["raster:scale", "raster:offset", "scale_factor", "add_offset"]:
+            unscaled_var.attrs.pop(attr, None)
+
+        return unscaled_var
+
+    if isinstance(data, xr.Dataset):
+        unscaled_data = data.copy()
+        for var_name, var in data.data_vars.items():
+            if var_name not in variables_to_ignore:
+                unscaled_data[var_name] = _unscale_var(var)
+        if keep_attrs:
+            unscaled_data.attrs.update(data.attrs)
+        return unscaled_data
+
+    if isinstance(data, xr.DataArray):
+        return _unscale_var(data)
+
+    raise TypeError(f"Unsupported input type: {type(data)}")
+
+
+def is_scaled(data: xr.Dataset | xr.DataArray) -> bool:
+    """
+    Determine if the data is already scaled based on metadata.
+
+    Args:
+        data (xr.Dataset | xr.DataArray): The dataset or data array to check.
+
+    Returns:
+        bool: True if the data appears to be scaled, False otherwise.
+    """
+
+    def check_metadata(var: xr.DataArray) -> bool:
+        """Check scaling-related metadata for a single variable."""
+        attrs = var.attrs
+        return any(
+            key in attrs
+            for key in ["raster:scale", "raster:offset", "scale_factor", "add_offset"]
+        )
+
+    if isinstance(data, xr.Dataset):
+        # Check all variables in the dataset
+        for _, var in data.data_vars.items():
+            if check_metadata(var):
+                return True
+        # Issue a warning if scaling status cannot be determined
+        warnings.warn(
+            "Scaling status cannot be determined: No scaling-related metadata found in any variable. "
+            "Assuming data is not scaled.",
+            stacklevel=2,
+        )
+        return False
+
+    if isinstance(data, xr.DataArray):
+        # Check the single variable
+        if check_metadata(data):
+            return True
+        # Issue a warning if scaling status cannot be determined
+        warnings.warn(
+            "Scaling status cannot be determined: No scaling-related metadata found in the DataArray. "
+            "Assuming data is not scaled.",
+            stacklevel=2,
+        )
+        return False
+
+    raise TypeError(f"Unsupported input type: {type(data)}")
+
+
 def make_template(data: xr.DataArray) -> xr.DataArray:
     """
     Create a template DataArray with the same structure as `data` but filled with object data type.
