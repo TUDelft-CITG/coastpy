@@ -387,6 +387,7 @@ class ImageCollection:
         avg_interval = datetimes.diff().mean()
         n_obs = len(datetimes)
         metadata = {
+            "datetime": datetimes.mean().isoformat(),
             "start_datetime": start_datetime,
             "end_datetime": end_datetime,
             "eo:cloud_cover": str(int(data["eo:cloud_cover"].mean().item())),
@@ -461,6 +462,7 @@ class ImageCollection:
                 group_metadata_list.append(metadata)
 
             # Global metadata aggregation
+            datetime = min(item["datetime"] for item in group_metadata_list)
             start_datetime = min(item["start_datetime"] for item in group_metadata_list)
             end_datetime = max(item["end_datetime"] for item in group_metadata_list)
             avg_intervals = [
@@ -469,19 +471,12 @@ class ImageCollection:
             avg_interval = f"{pd.Series(avg_intervals).mean().days} days"  # type: ignore
             avg_obs = np.mean([item["composite:n_obs"] for item in group_metadata_list])
 
-            # Add the `time` dimension and metadata
-            collapsed = collapsed.expand_dims(time=[pd.Timestamp(start_datetime)])
-            collapsed = collapsed.assign_coords(
-                {
-                    "time": ("time", [pd.Timestamp(start_datetime)]),
-                    "start_datetime": ("time", [pd.Timestamp(start_datetime)]),
-                    "end_datetime": ("time", [pd.Timestamp(end_datetime)]),
-                }
-            )
-
             # Update global attributes for composite metadata
             collapsed.attrs.update(
                 {
+                    "datetime": datetime,
+                    "start_datetime": start_datetime,
+                    "end_datetime": end_datetime,
                     "eo:cloud_cover": str(
                         int(ds_sorted["eo:cloud_cover"].mean().item())
                     ),
@@ -521,16 +516,6 @@ class ImageCollection:
             composite = ds.median(dim="time", skipna=True, keep_attrs=True)
             metadata = cls._extract_composite_metadata(ds)
 
-            composite = composite.assign_coords(
-                {
-                    "time": ("time", [pd.Timestamp(metadata["start_datetime"])]),
-                    "start_datetime": (
-                        "time",
-                        [pd.Timestamp(metadata["start_datetime"])],
-                    ),
-                    "end_datetime": ("time", [pd.Timestamp(metadata["end_datetime"])]),
-                }
-            )
             composite.attrs.update(metadata)
             composite.attrs.update(
                 {
