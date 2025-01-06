@@ -387,7 +387,7 @@ class ImageCollection:
         avg_interval = datetimes.diff().mean()
         n_obs = len(datetimes)
         metadata = {
-            "datetime": datetimes.mean().isoformat(),
+            "datetime": start_datetime,
             "start_datetime": start_datetime,
             "end_datetime": end_datetime,
             "eo:cloud_cover": str(int(data["eo:cloud_cover"].mean().item())),
@@ -471,6 +471,14 @@ class ImageCollection:
             avg_interval = f"{pd.Series(avg_intervals).mean().days} days"  # type: ignore
             avg_obs = np.mean([item["composite:n_obs"] for item in group_metadata_list])
 
+            collapsed = collapsed.assign_coords(
+                {
+                    "time": datetime,
+                    "start_datetime": start_datetime,
+                    "end_datetime": end_datetime,
+                }
+            )
+
             # Update global attributes for composite metadata
             collapsed.attrs.update(
                 {
@@ -515,6 +523,14 @@ class ImageCollection:
         try:
             composite = ds.median(dim="time", skipna=True, keep_attrs=True)
             metadata = cls._extract_composite_metadata(ds)
+
+            composite = composite.assign_coords(
+                {
+                    "time": metadata["datetime"],
+                    "start_datetime": metadata["start_datetime"],
+                    "end_datetime": metadata["end_datetime"],
+                }
+            )
 
             composite.attrs.update(metadata)
             composite.attrs.update(
