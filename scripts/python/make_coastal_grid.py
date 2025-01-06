@@ -277,8 +277,6 @@ def main(
                 # # Add unique IDs and UTM EPSG codes
                 tiles = add_proc_id(tiles, tiles.crs, zoom)
 
-                tiles.to_parquet("/Users/calkoen/data/tmp/tiles.parquet")
-
                 if tiles["coastal_grid:id"].duplicated().any():
                     raise ValueError("Duplicate IDs found in the tiles.")
 
