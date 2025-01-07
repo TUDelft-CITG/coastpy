@@ -178,7 +178,7 @@ def create_cog_item(
         for var_name, var in dataset.data_vars.items():
             path_parser.band = var_name
             path_parser.resolution = f"{int(var.rio.resolution()[0])}m"
-            urlpath = path_parser.to_cloud_uri()
+            urlpath = path_parser.to_https_url()
 
             # Handle nodata
             var_nodata = nodata if nodata != "infer" else get_nodata(var)

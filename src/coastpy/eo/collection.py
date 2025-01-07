@@ -4,7 +4,6 @@ import logging
 from collections.abc import Callable
 from typing import Any, Literal
 
-import dask
 import geopandas as gpd
 import numpy as np
 import odc.geo.geobox
@@ -31,7 +30,6 @@ from coastpy.eo.mask import (
 from coastpy.io.cloud import write_block
 from coastpy.io.utils import PathParser, name_data
 from coastpy.stac.utils import read_snapshot
-from coastpy.utils.dask import DaskClientManager
 from coastpy.utils.xarray import combine_by_first, scale, unscale
 
 # NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
@@ -166,7 +164,7 @@ class ImageCollection:
         x: tuple[float, float] | None = None,
         y: tuple[float, float] | None = None,
         like: xr.Dataset | None = None,
-        patch_url: str | None = None,
+        patch_url: Callable | None = None,
         stac_cfg: dict | None = None,
         anchor: str | None = None,
     ) -> "ImageCollection":
@@ -722,6 +720,203 @@ class S2Collection(ImageCollection):
         return ds
 
 
+class S2CompositeCollection(ImageCollection):
+    """
+    A class to manage Sentinel-2 composite collections from a STAC-based catalog.
+    """
+
+    def __init__(
+        self,
+        catalog_url: str = "https://coclico.blob.core.windows.net/stac/v1/catalog.json",
+        collection: str = "s2-l2a-composite",
+        stac_cfg: dict | None = None,
+    ):
+        """
+        Initialize the S2CompositeCollection.
+
+        Args:
+            catalog_url (str): URL to the STAC catalog.
+            collection (str): Name of the collection in the catalog.
+            stac_cfg (dict, optional): Configuration for STAC handling. Defaults to None.
+        """
+        super().__init__(catalog_url, collection, stac_cfg)
+        self.percentile = None  # Disable percentile compositing for this collection.
+        self.composite_method = None  # Disable composite method for this collection.
+
+    def search(self, roi: gpd.GeoDataFrame) -> "S2CompositeCollection":
+        """
+        Search for S2 composite items based on a region of interest.
+
+        Args:
+            roi (gpd.GeoDataFrame): Region of interest.
+
+        Returns:
+            S2CompositeCollection: Updated instance with search results.
+        """
+        # Define the search parameters
+        self.search_params = {
+            "collections": self.collection,
+            "intersects": roi.to_crs(4326).geometry.item(),
+        }
+
+        # Access the STAC collection
+        col = self.catalog.get_collection(self.collection)
+        # Load spatial extents of the collection using `read_snapshot`
+        composite_extents = read_snapshot(
+            col,
+            columns=None,
+            storage_options=None,
+        )
+
+        # Perform spatial join with the region of interest
+        matched_items = gpd.sjoin(
+            composite_extents, roi.to_crs(composite_extents.crs)
+        ).drop(columns="index_right")
+        self.stac_items = list(stac_geoparquet.to_item_collection(matched_items))
+
+        # Check if items were found
+        if not self.stac_items:
+            raise ValueError("No items found for the given search parameters.")
+
+        return self
+
+    def load(
+        self,
+        bands: list[str],
+        spectral_indices: list[str] | None = None,
+        chunks: dict[str, int | str] | None = None,
+        resampling: str | dict[str, str] | None = None,
+        dtype: np.dtype | str | None = None,
+        crs: str | int = "utm",
+        resolution: float | int | None = None,
+        pool: int | None = None,
+        preserve_original_order: bool = False,
+        progress: bool | None = None,
+        fail_on_error: bool = True,
+        geobox: odc.geo.geobox.GeoBox | None = None,
+        bbox: tuple[float, float, float, float] | None = None,
+        geopolygon: dict | None = None,
+        lon: tuple[float, float] | None = None,
+        lat: tuple[float, float] | None = None,
+        x: tuple[float, float] | None = None,
+        y: tuple[float, float] | None = None,
+        like: xr.Dataset | None = None,
+        patch_url: Callable | None = None,
+        stac_cfg: dict | None = None,
+        anchor: str | None = None,
+    ) -> "S2CompositeCollection":
+        """
+        Configure parameters for loading data via odc.stac.load.
+
+        Args:
+            bands (list[str]): Bands to load (required).
+            chunks (dict, optional): Chunk size for dask. Defaults to None.
+            resampling (str | dict, optional): Resampling strategy. Defaults to None.
+            dtype (np.dtype | str, optional): Data type for the output. Defaults to None.
+            crs (str | int, optional): Coordinate reference system. Defaults to "utm".
+            resolution (float | int, optional): Pixel resolution in CRS units. Defaults to 10.
+            Additional args: Passed to odc.stac.load.
+
+        Returns:
+            S2CompositeCollection: Updated instance with loading parameters.
+        """
+        if not bands:
+            raise ValueError("Argument `bands` is required.")
+
+        self.bands = bands
+        self.spectral_indices = spectral_indices
+
+        # Geobox creation
+        if geobox is None and resolution and self.geometry is not None:
+            geobox = self._create_geobox(
+                geometry=self.geometry, resolution=resolution, crs=crs
+            )
+            resolution = None  # Let geobox handle resolution
+
+        # Assemble load parameters
+        self.load_params = {
+            "chunks": chunks,
+            "resampling": resampling,
+            "dtype": dtype,
+            "resolution": resolution,
+            "pool": pool,
+            "preserve_original_order": preserve_original_order,
+            "progress": progress,
+            "fail_on_error": fail_on_error,
+            "geobox": geobox,
+            "bbox": bbox,
+            "geopolygon": geopolygon,
+            "lon": lon,
+            "lat": lat,
+            "x": x,
+            "y": y,
+            "like": like,
+            "patch_url": patch_url,
+            "stac_cfg": self.stac_cfg or stac_cfg,
+            "anchor": anchor,
+        }
+
+        return self
+
+    def _load(self) -> xr.Dataset:
+        """
+        Load data using odc.stac.load.
+
+        Returns:
+            xr.Dataset: Loaded dataset.
+        """
+        if not self.stac_items:
+            raise ValueError("No STAC items found. Perform a search first.")
+
+        # Fallback to bbox if no spatial bounds are provided
+        if (
+            not self.load_params.get("geobox")
+            and not self.load_params.get("bbox")
+            and not self.load_params.get("geopolygon")
+            and not self.load_params.get("like")
+        ):
+            bbox = tuple(self.search_params["intersects"].bounds)
+            self.load_params["bbox"] = bbox
+
+        # Call odc.stac.load
+        ds = odc.stac.load(
+            self.stac_items,
+            bands=self.bands,
+            **self.load_params,
+        )
+
+        # # Add metadata if time matches item count
+        # if ds.sizes["time"] == len(self.stac_items):
+        #     ds = self._add_metadata_from_stac(self.stac_items, ds)
+
+        # if self.normalize:
+        #     ds = unscale(ds, scale_factor=10000, variables_to_ignore=["SCL"])
+
+        return ds  # type: ignore
+
+    # def execute(self, compute=False) -> xr.DataArray | xr.Dataset:
+    #     """
+    #     Execute the data loading process and return the dataset.
+
+    #     Args:
+    #         compute (bool): Whether to trigger computation for lazy datasets. Defaults to False.
+
+    #     Returns:
+    #         xr.DataArray | xr.Dataset: The loaded dataset.
+    #     """
+    #     if self.stac_items is None:
+    #         raise ValueError("No STAC items found. Perform a search first.")
+
+    #     if self.dataset is None:
+    #         self.dataset = self._load()
+
+    #     # Mask application is skipped as composite datasets are pre-processed
+    #     if compute:
+    #         self.dataset = self.dataset.compute()
+
+    #     return self.dataset
+
+
 class TileCollection:
     """
     A generic class to manage tile collections from a STAC-based catalog.
@@ -776,8 +971,9 @@ class TileCollection:
             Additional args: Parameters for odc.stac.load.
 
         Returns:
-            DeltaDTMCollection: Updated instance.
+            TileCollection: Updated instance.
         """
+
         self.dst_crs = dst_crs
 
         self.load_params = {
@@ -1099,43 +1295,63 @@ if __name__ == "__main__":
         geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
     )
 
-    coastal_grid = read_coastal_grid(
-        zoom=10, buffer_size="5000m", storage_options=storage_options
+    geobox = odc.geo.geobox.GeoBox.from_geopolygon(
+        region_of_interest.to_crs(region_of_interest.crs), resolution=10
     )
 
-    coastal_grid_roi = gpd.sjoin(coastal_grid, region_of_interest).drop(
-        columns=["index_right"]
-    )
-
-    client = DaskClientManager().create_client(
-        instance_type, threads_per_worker=1, n_workers=5
-    )
-
-    outdir = "az://tmp/typology/composite"
-
-    tasks = []
-    print(f"Parsing {len(coastal_grid_roi)} coastal grid tiles")
-    for i in range(len(coastal_grid_roi)):
-        region_of_interest = coastal_grid_roi.iloc[[i]]
-        coastal_zone = odc.geo.geom.Geometry(
-            region_of_interest.geometry.item(), crs=region_of_interest.crs
+    s2_composite = (
+        S2CompositeCollection()
+        .search(
+            region_of_interest,
         )
-        crs = region_of_interest["coastal_grid:utm_epsg"].item()
-        t = dask.delayed(get_s2)(region_of_interest, coastal_zone, crs)
-        t = dask.delayed(save)(t, outdir, storage_options)
+        .load(
+            bands=["blue", "green", "red", "nir", "swir16", "swir22"],
+            # spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
+            chunks={},
+            patch_url=lambda x: f"{x}?{sas_token}",
+            resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
+            # geobox=geobox,
+        )
+        .execute(compute=False)
+    )
 
-        # TODO: another dask.delayed for writing to disk (workflow from below)
-        tasks.append(t)
+    # coastal_grid = read_coastal_grid(
+    #     zoom=10, buffer_size="5000m", storage_options=storage_options
+    # )
 
-    print(client.dashboard_link)
-    dask.compute(*tasks, scheduler=client)
+    # coastal_grid_roi = gpd.sjoin(coastal_grid, region_of_interest).drop(
+    #     columns=["index_right"]
+    # )
 
-    # xx = xx[0]
+    # client = DaskClientManager().create_client(
+    #     instance_type, threads_per_worker=1, n_workers=5
+    # )
 
-    # save(xx, outdir)
+    # outdir = "az://tmp/typology/composite"
 
-    end_time = time.time()
-    print(f"elapsed_time: {end_time - start_time}")
-    print("Done")
+    # tasks = []
+    # print(f"Parsing {len(coastal_grid_roi)} coastal grid tiles")
+    # for i in range(len(coastal_grid_roi)):
+    #     region_of_interest = coastal_grid_roi.iloc[[i]]
+    #     coastal_zone = odc.geo.geom.Geometry(
+    #         region_of_interest.geometry.item(), crs=region_of_interest.crs
+    #     )
+    #     crs = region_of_interest["coastal_grid:utm_epsg"].item()
+    #     t = dask.delayed(get_s2)(region_of_interest, coastal_zone, crs)
+    #     t = dask.delayed(save)(t, outdir, storage_options)
 
-    # r = dask.compute(*tasks, scheduler=client)
+    #     # TODO: another dask.delayed for writing to disk (workflow from below)
+    #     tasks.append(t)
+
+    # print(client.dashboard_link)
+    # dask.compute(*tasks, scheduler=client)
+
+    # # xx = xx[0]
+
+    # # save(xx, outdir)
+
+    # end_time = time.time()
+    # print(f"elapsed_time: {end_time - start_time}")
+    # print("Done")
+
+    # # r = dask.compute(*tasks, scheduler=client)

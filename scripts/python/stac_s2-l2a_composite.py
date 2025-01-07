@@ -291,7 +291,7 @@ if __name__ == "__main__":
         ds = load_bands_to_dataset(band_paths, storage_options)
 
         # Create a STAC item for the combined dataset
-        urlpath = f"az://{CONTAINER_URI}/{tile_id}.tif"
+        urlpath = f"{CONTAINER_URI}/{tile_id}.tif"
         item = create_cog_item(
             ds,
             urlpath,
