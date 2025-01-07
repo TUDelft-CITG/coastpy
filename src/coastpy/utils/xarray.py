@@ -681,23 +681,3 @@ def to_array_with_attrs(
     da = set_nodata(da, nodata)
 
     return da  # type: ignore
-
-
-def add_band_name(
-    data: xr.Dataset | xr.DataArray,
-) -> xr.Dataset | xr.DataArray:
-    """
-    Add the variable name as an attribute under the key `band_name` to an xarray Dataset or DataArray.
-    """
-    if isinstance(data, xr.Dataset):
-        # Apply the function to each variable in the Dataset
-        return data.map(lambda da: add_band_name(da))
-
-    if isinstance(data, xr.DataArray):
-        # Add the name as an attribute under `band_name`
-        band_named = data.copy()
-        band_named.attrs["band_name"] = data.name
-        return band_named
-
-    msg = f"Unsupported input type: {type(data)}"
-    raise TypeError(msg)

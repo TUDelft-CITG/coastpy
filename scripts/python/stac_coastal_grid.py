@@ -28,7 +28,7 @@ STORAGE_ACCOUNT_NAME = "coclico"
 storage_options = {"account_name": STORAGE_ACCOUNT_NAME, "credential": sas_token}
 
 # Container and URI configuration
-VERSION = "2024-12-11"
+VERSION = "2025-01-01"
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
 DATETIME_DATA_CREATED = datetime.datetime(2023, 2, 9)
 CONTAINER_NAME = "coastal-grid"
