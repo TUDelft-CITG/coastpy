@@ -503,7 +503,12 @@ def name_data(
 
     # Add optional postfix
     if postfix:
-        parts.append(postfix)
+        if parts:
+            parts[-1] = f"{parts[-1]}-{postfix}"
+        elif filename_prefix:
+            filename_prefix = f"{filename_prefix}-{postfix}"
+        else:
+            parts.append(postfix)
 
     # Add time component
     if include_time:
