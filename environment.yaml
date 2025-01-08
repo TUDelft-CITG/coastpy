@@ -99,6 +99,7 @@ dependencies:
   - odc-stac
   - planetary-computer
   - pooch
+  - pystac
   - rasterio
   - rioxarray
   - stackstac
