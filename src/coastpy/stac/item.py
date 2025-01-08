@@ -1,102 +1,17 @@
 import warnings
-from datetime import datetime
 from typing import Any
-
-import pandas as pd
-import pystac
-import pystac.utils
-import rasterio.warp
-import xarray as xr
-from pystac.extensions.projection import ProjectionExtension
-from pystac.extensions.raster import DataType, RasterBand, RasterExtension
-from shapely.geometry import box, mapping
-
-from coastpy.io.utils import PathParser
-from coastpy.utils.xarray import get_nodata
-
-
-def _extract_datetimes(
-    ds: xr.Dataset | xr.DataArray,
-) -> dict[str, datetime | None]:
-    """
-    Extract datetime information (datetime, start_datetime, end_datetime) from an xarray Dataset or DataArray.
-
-    Args:
-        ds (Union[xr.Dataset, xr.DataArray]): Input xarray object.
-
-    Returns:
-        Dict[str, Optional[datetime]]: A dictionary containing 'datetime', 'start_datetime', and 'end_datetime'.
-    """
-
-    # Check for a time dimension
-    if "time" in ds.dims:
-        time_values = ds.coords["time"].values
-        if len(time_values) > 1:
-            return {
-                "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
-                "start_datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
-                "end_datetime": pd.Timestamp(time_values[-1]).to_pydatetime(),
-            }
-        else:
-            return {
-                "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
-                "start_datetime": None,
-                "end_datetime": None,
-            }
-
-    # Check for time or datetime coordinate
-    if "time" in ds.coords or "datetime" in ds.coords:
-        time_coord = ds.coords.get("time") or ds.coords.get("datetime")
-        if time_coord:
-            time_value = pd.Timestamp(time_coord.values).to_pydatetime()
-        return {"datetime": time_value, "start_datetime": None, "end_datetime": None}
-
-    # Check for datetime attributes in variables
-    start_times = []
-    end_times = []
-    for var in ds.data_vars.values():
-        if "start_datetime" in var.attrs:
-            start_times.append(
-                pd.Timestamp(var.attrs["start_datetime"]).to_pydatetime()
-            )
-        if "end_datetime" in var.attrs:
-            end_times.append(pd.Timestamp(var.attrs["end_datetime"]).to_pydatetime())
-
-    if start_times and end_times:
-        return {
-            "datetime": min(start_times),
-            "start_datetime": min(start_times),
-            "end_datetime": max(end_times),
-        }
-
-    if "start_datetime" in ds.attrs and "end_datetime" in ds.attrs:
-        return {
-            "datetime": pd.Timestamp(ds.attrs["start_datetime"]).to_pydatetime(),
-            "start_datetime": pd.Timestamp(ds.attrs["start_datetime"]).to_pydatetime(),
-            "end_datetime": pd.Timestamp(ds.attrs["end_datetime"]).to_pydatetime(),
-        }
-
-    # Check for 'datetime' in attributes
-    if "datetime" in ds.attrs:
-        return {
-            "datetime": pd.Timestamp(ds.attrs["datetime"]).to_pydatetime(),
-            "start_datetime": None,
-            "end_datetime": None,
-        }
-
-    # If no datetime information is found, raise an error
-    raise ValueError("Unable to determine datetime information from dataset.")
-
-
-from datetime import datetime
 
 import pystac
 import pystac.utils
 import rasterio
 import rasterio.warp
 import xarray as xr
+from pystac.extensions.projection import ProjectionExtension
+from pystac.extensions.raster import DataType, RasterBand, RasterExtension
+from shapely.geometry import box, mapping
 
-from coastpy.stac.item import _extract_datetimes
+from coastpy.io.utils import PathParser, extract_datetimes
+from coastpy.utils.xarray import get_nodata
 
 
 def create_cog_item(
@@ -138,8 +53,8 @@ def create_cog_item(
     stac_id = path_parser.stac_item_id
 
     # Extract datetime information
-    datetimes = _extract_datetimes(dataset)
-    datetime = datetimes["datetime"]
+    datetimes = extract_datetimes(dataset)
+    dt = datetimes["datetime"]
     start_datetime = datetimes.get("start_datetime")
     end_datetime = datetimes.get("end_datetime")
 
@@ -154,7 +69,7 @@ def create_cog_item(
         id=stac_id,
         geometry=geometry,
         bbox=bbox,
-        datetime=datetime,
+        datetime=dt,
         properties=properties,
         start_datetime=start_datetime,
         end_datetime=end_datetime,
