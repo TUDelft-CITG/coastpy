@@ -116,7 +116,14 @@ class STACQueryEngine(BaseQueryEngine):
         else:
             self.columns = columns
 
-    def get_data_within_bbox(self, minx: float, miny: float, maxx: float, maxy: float):
+    def get_data_within_bbox(
+        self,
+        minx: float,
+        miny: float,
+        maxx: float,
+        maxy: float,
+        sas_token: str | None = None,
+    ) -> gpd.GeoDataFrame:
         """
         Retrieve data within the specified bounding box.
 
@@ -136,13 +143,14 @@ class STACQueryEngine(BaseQueryEngine):
         overlapping_hrefs = gpd.sjoin(self.extents, bbox_gdf).href.tolist()
 
         # Sign each HREF with the SAS token if the storage backend is Azure
+        sas_token = self._get_token() if sas_token is None else sas_token
         if self.storage_backend == "azure":
             signed_hrefs = []
             for href in overlapping_hrefs:
                 signed_href = href.replace(
                     "az://", "https://coclico.blob.core.windows.net/"
                 )
-                signed_href = signed_href + "?" + self._get_token()
+                signed_href = signed_href + "?" + sas_token
                 signed_hrefs.append(signed_href)
         else:
             signed_hrefs = overlapping_hrefs
@@ -210,3 +218,31 @@ class HREFQueryEngine(BaseQueryEngine):
             bbox.ymax >= {miny};
         """
         return self.execute_query(query)
+
+
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    # Configure cloud and Dask settings
+    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+    storage_options = {"account_name": "coclico", "sas_token": sas_token}
+
+    coclico_catalog = pystac.Catalog.from_file(
+        "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
+    )
+    shorelines_col = coclico_catalog.get_child("shorelinemonitor-shorelines")
+
+    west, south, east, north = (4.730, 53.109, 5.305, 53.438)
+    roi = gpd.GeoDataFrame(
+        geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
+    )
+    sds_engine = STACQueryEngine(
+        stac_collection=shorelines_col,
+        storage_backend="azure",
+    )
+
+    r = sds_engine.get_data_within_bbox(west, south, east, north, sas_token=sas_token)
+
+    print("done `")

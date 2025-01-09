@@ -176,3 +176,6 @@ src/coastpy/_version.py
 .idea
 
 dbug/*
+
+tutorials/Untitled*.ipynb
+
