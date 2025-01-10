@@ -112,7 +112,12 @@ class STACQueryEngine(BaseQueryEngine):
         self.proj_epsg = self.extents["proj:epsg"].unique().item()
 
         if columns is None or not columns:
-            self.columns = ["*"]
+            # NOTE: before we used a wildcard, but that was tricky.. now we will rely on STAC? Also a bit
+            # tricky if the STAC is not complete..
+            # self.columns = ["*"]
+            self.columns = [
+                i["name"] for i in self.extents.assets.iloc[0]["data"]["table:columns"]
+            ]
         else:
             self.columns = columns
 
@@ -136,6 +141,13 @@ class STACQueryEngine(BaseQueryEngine):
         Returns:
             pd.DataFrame: The queried data.
         """
+
+        # Helper function to escape column names
+        def escape_column(col):
+            if col == "geometry":
+                return "ST_AsWKB(ST_Transform(geometry, 'EPSG:4326', 'EPSG:4326')) AS geometry"
+            return f'"{col}"'
+
         bbox = shapely.box(minx, miny, maxx, maxy)
         bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs="EPSG:4326")
 
@@ -158,12 +170,7 @@ class STACQueryEngine(BaseQueryEngine):
         # Join the hrefs into a single string
         hrefs_str = ", ".join(f'"{href}"' for href in signed_hrefs)
 
-        columns_str = ", ".join(
-            col
-            if col != "geometry"
-            else "ST_AsWKB(ST_Transform(geometry, 'EPSG:4326', 'EPSG:4326')) AS geometry"
-            for col in self.columns
-        )
+        columns_str = ", ".join(escape_column(col) for col in self.columns)
 
         query = f"""
             SELECT {columns_str}

@@ -278,10 +278,14 @@ class ImageCollection:
             self.load_params["bbox"] = bbox
 
         # Call odc.stac.load
+        # del self.load_params["chunks"]
+        # del self.load_params["dtype"]
         ds = odc.stac.load(
             self.stac_items,
             bands=self.bands,
             **self.load_params,
+            # chunks = {"time": "auto", "x": "auto", "y":"auto"},
+            # dtype="float32"
         )
 
         # Add metadata if time matches item count
@@ -660,8 +664,8 @@ class S2Collection(ImageCollection):
         stac_cfg = {
             "sentinel-2-l2a": {
                 "assets": {
-                    "*": {"data_type": None, "nodata": np.nan},
-                    "SCL": {"data_type": None, "nodata": np.nan},
+                    "*": {"data_type": "float32", "nodata": np.nan},
+                    "SCL": {"data_type": "float32", "nodata": np.nan},
                     "visual": {"data_type": None, "nodata": np.nan},
                 },
             },
@@ -784,7 +788,7 @@ class S2CompositeCollection(ImageCollection):
         self,
         bands: list[str],
         spectral_indices: list[str] | None = None,
-        chunks: dict[str, int | str] | None = None,
+        chunks: dict[str, int | str | Literal["auto"]] | None = None,
         resampling: str | dict[str, str] | None = None,
         dtype: np.dtype | str | None = None,
         crs: str | int = "utm",
@@ -879,6 +883,7 @@ class S2CompositeCollection(ImageCollection):
             self.load_params["bbox"] = bbox
 
         # Call odc.stac.load
+        # TODO: chunks = "auto"
         ds = odc.stac.load(
             self.stac_items,
             bands=self.bands,
@@ -1295,25 +1300,58 @@ if __name__ == "__main__":
         geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
     )
 
-    geobox = odc.geo.geobox.GeoBox.from_geopolygon(
-        region_of_interest.to_crs(region_of_interest.crs), resolution=10
+    coastal_zone = odc.geo.geom.Geometry(
+        region_of_interest.geometry.item(), crs=region_of_interest.crs
     )
 
-    s2_composite = (
-        S2CompositeCollection()
+    geobox = odc.geo.geobox.GeoBox.from_geopolygon(
+        coastal_zone,
+        resolution=10,
+    )
+
+    s2 = (
+        S2Collection()
         .search(
             region_of_interest,
+            datetime_range="2023-01-01/2024-01-01",
+            query={"eo:cloud_cover": {"lt": 20}},
+            # filter_function = lambda items: [sorted(items, key=lambda x: x.datetime, reverse=True)[0]] # latest pic
         )
         .load(
-            bands=["blue", "green", "red", "nir", "swir16", "swir22"],
-            # spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
-            chunks={},
-            patch_url=lambda x: f"{x}?{sas_token}",
+            bands=["blue", "green", "red", "nir", "swir16", "swir22", "SCL"],
+            spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
+            chunks={"time": "auto", "y": "auto", "x": "auto"},
+            patch_url=pc.sign,
             resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
-            # geobox=geobox,
+            geobox=geobox,
+            dtype="float32",
         )
+        .mask(
+            geometry=coastal_zone,
+            nodata=True,
+            scl_classes=["NO_DATA", "DARK_AREA_PIXELS", "CLOUDS_HIGH_PROBABILITY"],  # type: ignore
+        )
+        .composite(percentile=50, filter_function=filter_function)
         .execute(compute=False)
     )
+    print("Done")
+
+    # s2_composite = (
+    #     S2CompositeCollection()
+    #     .search(
+    #         region_of_interest,
+    #     )
+    #     .load(
+    #         bands=["blue", "green", "red", "nir", "swir16", "swir22"],
+    #         # spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
+    #         patch_url=lambda x: f"{x}?{sas_token}",
+    #         resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
+    #         geobox=geobox,
+    #         chunks={"x": "auto", "y": "auto"},
+    #         dtype="float32",
+    #     )
+    #     .execute(compute=False)
+    # )
 
     # coastal_grid = read_coastal_grid(
     #     zoom=10, buffer_size="5000m", storage_options=storage_options
