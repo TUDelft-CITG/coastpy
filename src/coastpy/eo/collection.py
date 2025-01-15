@@ -1,23 +1,30 @@
 import abc
-import json
 import logging
+import os
 from collections.abc import Callable
 from typing import Any, Literal
 
+import dotenv
 import geopandas as gpd
 import numpy as np
+import odc.geo
+import odc.geo.cog
 import odc.geo.geobox
 import odc.geo.geom
 import odc.stac
 import pandas as pd
+import planetary_computer as pc
 import pyproj
 import pystac
 import pystac.item
 import pystac_client
-import rioxarray  # noqa
+import rioxarray
+import shapely
 import stac_geoparquet
 import xarray as xr
+from odc.stac import configure_rio
 
+from coastpy.eo.filter import filter_and_sort_stac_items
 from coastpy.eo.indices import calculate_indices
 from coastpy.eo.mask import (
     SceneClassification,
@@ -27,10 +34,9 @@ from coastpy.eo.mask import (
     numeric_mask,
     scl_mask,
 )
-from coastpy.io.cloud import write_block
-from coastpy.io.utils import PathParser, name_data
+from coastpy.eo.utils import geobox_from_data_extent
 from coastpy.stac.utils import read_snapshot
-from coastpy.utils.xarray import combine_by_first, scale, unscale
+from coastpy.utils.xarray import combine_by_first, unscale
 
 # NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
 # Create a logger for this module
@@ -93,6 +99,8 @@ class ImageCollection:
         Returns:
             ImageCollection: Updated instance with items populated.
         """
+        self.region_of_interest = roi
+
         geom = roi.to_crs(4326).geometry.item()
         self.search_params = {
             "collections": self.collection,
@@ -100,7 +108,6 @@ class ImageCollection:
             "datetime": datetime_range,
             "query": query,
         }
-        self.geometry = odc.geo.geom.Geometry(geom, crs=roi.crs)
 
         # Perform the actual search
         logging.info(f"Executing search with params: {self.search_params}")
@@ -136,6 +143,13 @@ class ImageCollection:
             except Exception as e:
                 msg = f"Error in filter_function: {e}"
                 raise RuntimeError(msg)  # noqa: B904
+
+        items_as_json = [item.to_dict() for item in self.stac_items]
+        self.data_extent = (
+            stac_geoparquet.to_geodataframe(items_as_json, dtype_backend="pyarrow")
+            .dissolve("s2:mgrs_tile")[["geometry"]]
+            .dissolve()
+        )
 
         return self
 
@@ -199,9 +213,12 @@ class ImageCollection:
         self.mask_nodata = mask_nodata
 
         # Geobox creation
-        if geobox is None and resolution and self.geometry is not None:
-            geobox = self._create_geobox(
-                geometry=self.geometry, resolution=resolution, crs=crs
+        if geobox is None and resolution:
+            geobox = geobox_from_data_extent(
+                region=self.region_of_interest,
+                data_extent=self.data_extent,
+                crs=crs,
+                resolution=resolution,
             )
             resolution = None  # Let geobox handle resolution
 
@@ -296,32 +313,6 @@ class ImageCollection:
             ds = unscale(ds, scale_factor=10000, variables_to_ignore=["SCL"])
 
         return ds  # type: ignore
-
-    @classmethod
-    def _create_geobox(
-        cls, geometry: odc.geo.geom.Geometry, resolution=None, crs=None, shape=None
-    ):
-        """
-        Create a GeoBox from the given geometry.
-
-        Args:
-            geometry (odc.geo.geom.Geometry): Geometry of the region of interest.
-            resolution (float, tuple, or None): Pixel resolution (units of CRS). Defaults to None.
-            crs (str or int, optional): CRS of the GeoBox. Defaults to the geometry's CRS.
-            shape (tuple, optional): Shape (height, width) of the output GeoBox.
-
-        Returns:
-            GeoBox: Constructed GeoBox, or None if resolution is not provided.
-        """
-        if crs is None:
-            crs = geometry.crs  # Default to geometry CRS
-
-        if resolution is not None:
-            return odc.geo.geobox.GeoBox.from_geopolygon(
-                geometry, resolution=resolution, crs=crs, shape=shape
-            )
-
-        return None  # Let bbox or other parameters handle extent
 
     @classmethod
     def _add_metadata_from_stac(
@@ -831,9 +822,12 @@ class S2CompositeCollection(ImageCollection):
         self.spectral_indices = spectral_indices
 
         # Geobox creation
-        if geobox is None and resolution and self.geometry is not None:
-            geobox = self._create_geobox(
-                geometry=self.geometry, resolution=resolution, crs=crs
+        if geobox is None and resolution:
+            geobox = geobox_from_data_extent(
+                region=self.region_of_interest,
+                data_extent=self.data_extent,
+                crs=crs,
+                resolution=resolution,
             )
             resolution = None  # Let geobox handle resolution
 
@@ -1138,43 +1132,39 @@ class CopernicusDEMCollection(TileCollection):
 
 
 if __name__ == "__main__":
-    import logging
     import os
-    import time
-    from typing import Any, Literal
 
     import dotenv
-    import fsspec
     import geopandas as gpd
     import odc
+    import odc.geo
+    import odc.geo.cog
+    import odc.geo.geobox
     import odc.geo.geom
     import odc.stac
     import planetary_computer as pc
-    import pystac
+    import rioxarray  # noqa
     import shapely
-    import stac_geoparquet
-    import xarray as xr
     from odc.stac import configure_rio
 
-    # from coastpy.eo.collection import S2Collection
+    from coastpy.eo.collection import S2Collection
     from coastpy.eo.filter import filter_and_sort_stac_items
-    from coastpy.io.utils import name_data
-    from coastpy.stac.utils import read_snapshot
-    from coastpy.utils.config import configure_instance
-    from coastpy.utils.xarray import combine_by_first
+    from coastpy.utils.grid import make_coastal_mgrs_grid
+
+    # from coastpy.eo.collection import S2Collection
 
     configure_rio(cloud_defaults=True)
-    instance_type = configure_instance()
 
     dotenv.load_dotenv()
     sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
     storage_options = {"account_name": "coclico", "sas_token": sas_token}
 
     RESAMPLING = "cubic"
+    DATETIME_RANGE = "2023-01-01/2024-01-01"
+    BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
 
-    start_time = time.time()
-
-    def filter_function(items):
+    def filter_stac_items(items):
+        """Filter and sort STAC items."""
         return filter_and_sort_stac_items(
             items,
             max_items=10,
@@ -1182,214 +1172,55 @@ if __name__ == "__main__":
             sort_by="eo:cloud_cover",
         )
 
-    def read_coastal_grid(
-        zoom: Literal[5, 6, 7, 8, 9, 10],
-        buffer_size: Literal["500m", "1000m", "2000m", "5000m", "10000m", "15000m"],
-        storage_options,
-    ):
-        """
-        Load the coastal zone data layer for a specific buffer size.
-        """
-        coclico_catalog = pystac.Catalog.from_file(
-            "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
-        )
-        coastal_zone_collection = coclico_catalog.get_child("coastal-grid")
-        if coastal_zone_collection is None:
-            msg = "Coastal zone collection not found"
-            raise ValueError(msg)
-        item = coastal_zone_collection.get_item(f"coastal_grid_z{zoom}_{buffer_size}")
-        if item is None:
-            msg = f"Coastal zone item for zoom {zoom} with {buffer_size} not found"
-            raise ValueError(msg)
-        href = item.assets["data"].href
-        with fsspec.open(href, mode="rb", **storage_options) as f:
-            coastal_zone = gpd.read_parquet(f)
-        return coastal_zone
-
-    def extract_tags_from_composite(data: xr.Dataset | xr.DataArray) -> dict:
-        """
-        Extract tags from an Xarray Dataset.
-
-        This function filters attributes from the dataset that match specific prefixes,
-        replaces colons in the attribute names with underscores, and converts values
-        to strings or JSON-encoded strings if they are lists or dictionaries.
-
-        Args:
-            ds (xr.Dataset): The input Xarray Dataset.
-
-        Returns:
-            dict: A dictionary of tags with cleaned keys and stringified values.
-        """
-        attrs = data.attrs.copy()
-        tags = {
-            k.replace(":", "_"): json.dumps(v) if isinstance(v, list | dict) else str(v)
-            for k, v in attrs.items()
-            if k.startswith(("composite:", "eo:"))
-        }
-
-        def _to_isoformat(x):
-            return pd.Timestamp(x).isoformat() + "Z"
-
-        coords = ["start_datetime", "end_datetime"]
-        for coord in coords:
-            if coord in data.coords:
-                tags[coord] = _to_isoformat(data.coords[coord].values.item())
-
-        return tags
-
-    def get_s2(region_of_interest, coastal_zone, crs):
-        """
-        Process Sentinel-2 data into a composite for a given region of interest.
-        """
-
-        geobox = odc.geo.geobox.GeoBox.from_geopolygon(
-            coastal_zone.to_crs(crs), resolution=10
-        )
-
-        s2 = (
-            S2Collection()
-            .search(
-                region_of_interest,
-                datetime_range="2023-01-01/2024-01-01",
-                query={"eo:cloud_cover": {"lt": 20}},
-                # filter_function = lambda items: [sorted(items, key=lambda x: x.datetime, reverse=True)[0]] # latest pic
-            )
-            .load(
-                bands=["blue", "green", "red", "nir", "swir16", "swir22", "SCL"],
-                spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
-                chunks={},
-                patch_url=pc.sign,
-                resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
-                geobox=geobox,
-            )
-            .mask(
-                geometry=coastal_zone,
-                nodata=True,
-                scl_classes=["NO_DATA", "DARK_AREA_PIXELS", "CLOUDS_HIGH_PROBABILITY"],  # type: ignore
-            )
-            .composite(percentile=50, filter_function=filter_function)
-            .execute(compute=False)
-        )
-        return s2
-
-    def save(xx, outdir, storage_options):
-        xx = xx.squeeze()  # sqeeuzes the time dimension
-        xx = scale(xx, scale_factor=10000, nodata=-9999)
-
-        tags = extract_tags_from_composite(xx)
-
-        outpath = name_data(
-            xx,
-            prefix=str(outdir),
-            include_random_hex=False,
-        )
-
-        account_name = storage_options.get("account_name", "coclico")
-        pp = PathParser(outpath, account_name=account_name)
-
-        for var, band in xx.data_vars.items():
-            pp.band = var
-            pp.resolution = f"{int(band.rio.resolution()[0])}m"
-            outpath = pp.to_filepath()
-            outpath.parent.mkdir(parents=True, exist_ok=True)
-            write_block(band, str(outpath), tags=tags, use_dask=False)
-
-    west, south, east, north = (3.914, 52.510, 5.560, 53.173)
-
-    region_of_interest = gpd.GeoDataFrame(
+    west, south, east, north = (4.688, 52.979, 5.548, 53.308)
+    roi = gpd.GeoDataFrame(
         geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
     )
 
+    grid = make_coastal_mgrs_grid("5000m")
+    grid_roi = gpd.sjoin(grid, roi)
+    # NOTE: we just take the first row as an example. It is the Holland Coast.
+    region_of_interest = grid_roi.iloc[[0]]
+
+    utm_epsg = region_of_interest.utm_epsg.item()
     coastal_zone = odc.geo.geom.Geometry(
         region_of_interest.geometry.item(), crs=region_of_interest.crs
     )
-
     geobox = odc.geo.geobox.GeoBox.from_geopolygon(
-        coastal_zone,
-        resolution=10,
+        coastal_zone.to_crs(utm_epsg), resolution=10
     )
+    mgrs_tile = region_of_interest["s2:mgrs_tile"].item()
 
-    s2 = (
-        S2Collection()
-        .search(
-            region_of_interest,
-            datetime_range="2023-01-01/2024-01-01",
-            query={"eo:cloud_cover": {"lt": 20}},
-            # filter_function = lambda items: [sorted(items, key=lambda x: x.datetime, reverse=True)[0]] # latest pic
+    def process_sentinel(region, zone, mgrs_tile):
+        """Process Sentinel-2 data for a region."""
+        s2 = (
+            S2Collection()
+            .search(
+                region,
+                datetime_range=DATETIME_RANGE,
+                query={"eo:cloud_cover": {"lt": 20}, "s2:mgrs_tile": {"eq": mgrs_tile}},
+            )
+            .load(
+                bands=BANDS,
+                chunks={"time": "auto", "y": "auto", "x": "auto"},
+                patch_url=pc.sign,
+                resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
+                resolution=10,
+                dtype="float32",
+                crs="utm",
+            )
+            .mask(
+                geometry=zone,
+                nodata=True,
+                scl_classes=["NO_DATA", "DARK_AREA_PIXELS", "CLOUDS_HIGH_PROBABILITY"],
+            )
+            .composite(
+                method="simple", percentile=50, filter_function=filter_stac_items
+            )
+            .execute(compute=False)
         )
-        .load(
-            bands=["blue", "green", "red", "nir", "swir16", "swir22", "SCL"],
-            spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
-            chunks={"time": "auto", "y": "auto", "x": "auto"},
-            patch_url=pc.sign,
-            resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
-            geobox=geobox,
-            dtype="float32",
-        )
-        .mask(
-            geometry=coastal_zone,
-            nodata=True,
-            scl_classes=["NO_DATA", "DARK_AREA_PIXELS", "CLOUDS_HIGH_PROBABILITY"],  # type: ignore
-        )
-        .composite(percentile=50, filter_function=filter_function)
-        .execute(compute=False)
-    )
+        s2 = s2.chunk({"y": "auto", "x": "auto"})
+        return s2
+
+    s2 = process_sentinel(region_of_interest, coastal_zone, mgrs_tile)
     print("Done")
-
-    # s2_composite = (
-    #     S2CompositeCollection()
-    #     .search(
-    #         region_of_interest,
-    #     )
-    #     .load(
-    #         bands=["blue", "green", "red", "nir", "swir16", "swir22"],
-    #         # spectral_indices=["NDWI", "NDVI", "MNDWI", "NDMI"],
-    #         patch_url=lambda x: f"{x}?{sas_token}",
-    #         resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
-    #         geobox=geobox,
-    #         chunks={"x": "auto", "y": "auto"},
-    #         dtype="float32",
-    #     )
-    #     .execute(compute=False)
-    # )
-
-    # coastal_grid = read_coastal_grid(
-    #     zoom=10, buffer_size="5000m", storage_options=storage_options
-    # )
-
-    # coastal_grid_roi = gpd.sjoin(coastal_grid, region_of_interest).drop(
-    #     columns=["index_right"]
-    # )
-
-    # client = DaskClientManager().create_client(
-    #     instance_type, threads_per_worker=1, n_workers=5
-    # )
-
-    # outdir = "az://tmp/typology/composite"
-
-    # tasks = []
-    # print(f"Parsing {len(coastal_grid_roi)} coastal grid tiles")
-    # for i in range(len(coastal_grid_roi)):
-    #     region_of_interest = coastal_grid_roi.iloc[[i]]
-    #     coastal_zone = odc.geo.geom.Geometry(
-    #         region_of_interest.geometry.item(), crs=region_of_interest.crs
-    #     )
-    #     crs = region_of_interest["coastal_grid:utm_epsg"].item()
-    #     t = dask.delayed(get_s2)(region_of_interest, coastal_zone, crs)
-    #     t = dask.delayed(save)(t, outdir, storage_options)
-
-    #     # TODO: another dask.delayed for writing to disk (workflow from below)
-    #     tasks.append(t)
-
-    # print(client.dashboard_link)
-    # dask.compute(*tasks, scheduler=client)
-
-    # # xx = xx[0]
-
-    # # save(xx, outdir)
-
-    # end_time = time.time()
-    # print(f"elapsed_time: {end_time - start_time}")
-    # print("Done")
-
-    # # r = dask.compute(*tasks, scheduler=client)

@@ -77,6 +77,7 @@ dependencies:
   - ipyleaflet
   - ipympl
   - jupyter_bokeh
+  - lonboard
   - panel
   - param
   - selenium
@@ -93,7 +94,6 @@ dependencies:
   - pandas
   - pint
   - polars
-  - pyarrow
   - pyproj
   - pyyaml
   - scikit-image

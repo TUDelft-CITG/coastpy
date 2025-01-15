@@ -1,8 +1,12 @@
+import getpass
 import logging
 import os
 import pathlib
+import warnings
 from enum import Enum, auto
 from sysconfig import get_python_version
+
+from dotenv import load_dotenv
 
 
 class ComputeInstance(Enum):
@@ -89,3 +93,77 @@ def configure_instance() -> ComputeInstance:
     else:
         msg = "Unknown compute instance type."
         raise ValueError(msg)
+
+
+def fetch_sas_token(sas_token: str | None = None) -> str:
+    """
+    Retrieves the Azure Storage SAS token from a provided argument, .env file, or user input.
+
+    The function follows this order:
+    1. Validates the provided `sas_token` argument if given.
+    2. Attempts to load the `AZURE_STORAGE_SAS_TOKEN` from the `.env` file.
+    3. Prompts the user for manual input if the token is still not found.
+    4. Raises a ValueError if no valid token is provided.
+
+    Args:
+        sas_token (Optional[str]): Optional SAS token provided directly.
+
+    Returns:
+        str: A valid Azure Storage SAS token.
+
+    Raises:
+        ValueError: If the SAS token is not found or is invalid.
+    """
+
+    def _sanitize_token(token: str) -> str:
+        """Remove surrounding quotes and whitespace from the token."""
+        return token.strip().strip("'\"")
+
+    def _validate_token(token: str) -> bool:
+        """Ensure the token starts with 'sv='."""
+        return token.startswith("sv=")
+
+    # 1. Check the provided `sas_token` argument
+    if sas_token:
+        sas_token = _sanitize_token(sas_token)
+        if _validate_token(sas_token):
+            return sas_token
+        else:
+            warnings.warn(
+                "The provided SAS token is invalid. Falling back to .env lookup or manual input.",
+                stacklevel=2,
+            )
+
+    # 2. Load token from the `.env` file
+    load_dotenv(override=True)
+    env_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+
+    if env_token:
+        env_token = _sanitize_token(env_token)
+        if _validate_token(env_token):
+            return env_token
+        else:
+            warnings.warn(
+                "The SAS token found in the .env file is invalid. Please verify the token.",
+                stacklevel=2,
+            )
+
+    # 3. Prompt the user for secure input
+    warnings.warn(
+        "Azure Storage SAS token not found.\n"
+        "This dataset is available upon reasonable request.\n"
+        "Please contact the data providers to obtain an access token.",
+        stacklevel=2,
+    )
+
+    user_input = getpass.getpass("Please enter your Azure Storage SAS token: ").strip()
+    user_input = _sanitize_token(user_input)
+
+    if user_input and _validate_token(user_input):
+        return user_input
+
+    # 4. Raise an error if no valid token is provided
+    raise ValueError(
+        "No valid SAS token provided. Access denied.\n"
+        "Ensure your token starts with 'sv=' or contact the data providers for access."
+    )

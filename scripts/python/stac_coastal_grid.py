@@ -14,6 +14,7 @@ from pystac.extensions.scientific import Publication, ScientificExtension
 from pystac.extensions.version import VersionExtension
 from pystac.provider import ProviderRole
 from pystac.stac_io import DefaultStacIO
+from pystac.utils import now_in_utc
 
 from coastpy.io.utils import PathParser
 from coastpy.libs import stac_table
@@ -263,7 +264,7 @@ def create_item(
         datetime=DATETIME_DATA_CREATED,
         stac_extensions=[],
     )
-    template.common_metadata.created = DATETIME_STAC_CREATED
+    template.common_metadata.created = now_in_utc()
 
     item = stac_table.generate(
         uri=pp.to_cloud_uri(),

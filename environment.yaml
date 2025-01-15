@@ -45,6 +45,7 @@ dependencies:
   - ipyleaflet
   - ipympl
   - jupyter_bokeh
+  - lonboard
   - panel
   - param
 
@@ -57,7 +58,6 @@ dependencies:
   - numcodecs
   - numpy
   - pandas
-  - pyarrow
   - pyarrow
   - pyogrio
   - pyod

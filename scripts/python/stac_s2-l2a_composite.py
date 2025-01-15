@@ -50,11 +50,9 @@ ASSET_EXTRA_FIELDS = {
 
 # Configuration
 STORAGE_ACCOUNT_NAME = "coclico"
-CONTAINER_NAME = "tmp/typology/composite/release/slurm"
-# CONTAINER_NAME = "s2-l2a-composite"
-VERSION = "2025-01-07"
-# NOTE: !!! replace - with /
-CONTAINER_URI = f"az://{CONTAINER_NAME}-{VERSION}"
+CONTAINER_NAME = "s2-l2a-composite"
+VERSION = "2025-01-11"
+CONTAINER_URI = f"az://{CONTAINER_NAME}/release/{VERSION}"
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 LICENSE = "CC-BY-4.0"
@@ -105,7 +103,7 @@ ASSET_EXTRA_FIELDS = {
     ]
 }
 
-CITATION_TEXT = "Calkoen, Floris et al., 'In progress', " ""
+CITATION_TEXT = "Calkoen, Floris et al., 'In progress', "
 
 
 def add_citation_extension(collection: pystac.Collection) -> pystac.Collection:
@@ -198,7 +196,7 @@ def group_tif_files_by_tile(paths: list[str]) -> dict[str, dict[str, str]]:
     """
     # Define a regex pattern to extract tile ID and band
     tile_pattern = re.compile(
-        r"(?P<tile_id>\d{2}[A-Z]{3}-\d{2})_(?P<band>\w+)_\d{2}m\.tif$"
+        r"(?P<tile_id>\d{2}[A-Z]{3}-\d{2})_[0-9]{8}_[0-9]{8}_(?P<band>\w+)_\d{2}m\.tif$"
     )
 
     grouped_files = defaultdict(dict)
@@ -348,10 +346,3 @@ if __name__ == "__main__":
         dest_href=str(STAC_DIR),
         stac_io=stac_io,
     )
-
-    # Save and validate collection
-    collection.normalize_hrefs("./stac-output")
-    collection.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
-    collection.validate_all()
-
-    print("Composite Sentinel-2 STAC collection created successfully!")
