@@ -33,18 +33,19 @@ class FileLogger:
         log_path: str,
         ids: list[str],
         pattern: str,
-        storage_opts: dict | None = None,
+        storage_options: dict | None = None,
     ) -> None:
         self.log_path = log_path
         self.ids = ids
         self.pattern = pattern
-        self.storage_opts = storage_opts or {}
-        self.fs = fsspec.filesystem(log_path.split("://")[0], **self.storage_opts)
+        self.storage_options = storage_options or {}
+        self.fs = fsspec.filesystem(log_path.split("://")[0], **self.storage_options)
         self.log_df: pd.DataFrame
 
         if self.fs.exists(self.log_path):
             self.read()
             self._validate_ids()
+            self._preprocess()
         else:
             self._init_log()
 
@@ -53,6 +54,10 @@ class FileLogger:
         missing = set(self.ids) - set(self.log_df.index)  # type: ignore
         if missing:
             raise ValueError(f"Missing IDs in log: {missing}")
+
+    def _preprocess(self) -> None:
+        """Generic function with preprocessing steps."""
+        self.log_df = self.log_df[self.log_df.index.isin(self.ids)]
 
     def _init_log(self) -> None:
         """Initialize the log DataFrame with PENDING status."""
