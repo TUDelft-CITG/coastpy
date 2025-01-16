@@ -77,6 +77,7 @@ dependencies:
   - ipyleaflet
   - ipympl
   - jupyter_bokeh
+  - lonboard
   - panel
   - param
   - selenium
@@ -93,7 +94,6 @@ dependencies:
   - pandas
   - pint
   - polars
-  - pyarrow
   - pyproj
   - pyyaml
   - scikit-image
@@ -171,6 +171,7 @@ dependencies:
   - rio-tiler
   - rioxarray
   - spatialpandas
+  - spyndex
   - stac-vrt
   - stackstac
   - stactools
@@ -203,6 +204,8 @@ dependencies:
       - networkx
       - stac-geoparquet  # pypi has more recent releases
       - coloredlogs
+      - graphviz
+      - coiled
       # - coastpy  # probably better to install in dev mode (pip install -e .)
     # - dea-tools
     # - stactools-geoparquet-items

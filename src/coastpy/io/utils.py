@@ -1,12 +1,8 @@
 import dataclasses
+import datetime
 import hashlib
-import json
 import logging
 import pathlib
-import uuid
-import warnings
-from datetime import datetime
-from posixpath import join as urljoin
 from typing import Any
 from urllib.parse import urlparse, urlsplit
 
@@ -15,6 +11,7 @@ import geopandas as gpd
 import pandas as pd
 import xarray as xr
 from pyproj import Transformer
+from pystac.utils import datetime_to_str
 from shapely.geometry import box
 from shapely.ops import transform
 
@@ -90,7 +87,7 @@ class PathParser:
         self.scheme = parsed.scheme
         self.name = parsed.path.split("/")[-1]
         self.suffix = f".{self.name.split('.')[-1]}"
-        self.stac_item_id = self.name.split(".")[0]
+        self.stac_item_id = self._extract_stac_item_id(self.name)
 
         if not self.base_dir:
             self.base_dir = self.DEFAULT_BASE_DIR
@@ -171,7 +168,7 @@ class PathParser:
         self.path = "/".join(parts[1:])
         self.name = path.name
         self.suffix = f".{path.suffix}"
-        self.stac_item_id = path.stem
+        self.stac_item_id = self._extract_stac_item_id(path.stem)
 
         if self.cloud_protocol == "az":
             if not self.account_name:
@@ -245,164 +242,208 @@ class PathParser:
         )
 
 
-def name_block(
-    block: xr.DataArray,
-    storage_prefix: str = "",
-    name_prefix: str | None = None,
-    include_band: str | None = None,
-    time_dim: str | None = "time",
-    x_dim: str | None = "x",
-    y_dim: str | None = "y",
-) -> str:
-    """Create a name for a block based on its coordinates and other options.
+def extract_datetimes(
+    data: pd.DataFrame | gpd.GeoDataFrame | xr.Dataset | xr.DataArray,
+) -> dict[str, datetime.datetime | None]:
+    """
+    Extract datetime information (datetime, start_datetime, end_datetime) from a dataset.
 
     Args:
-        block (xr.DataArray): The DataArray block whose name is to be generated.
-        storage_prefix (str | None, optional): Storage prefix to prepend to blob name. Defaults to None.
-        name_prefix (Optional[str], optional): String prefix to prepend to the name. Defaults to None.
-        include_band (Optional[str], optional): Name of the band to include in the name. Defaults to None.
-        time_dim (Optional[str], optional): Name of the time dimension. Defaults to "time".
-        x_dim (str | None, optional): Name of the x dimension. Defaults to "x".
-        y_dim (str | None, optional): Name of the y dimension. Defaults to "y".
+        data: Input dataset (pandas DataFrame, GeoDataFrame, or xarray object).
 
     Returns:
-        str: A string name constructed from the block's coordinates.
+        dict[str, datetime | None]: Dictionary with keys 'datetime', 'start_datetime', and 'end_datetime'.
 
     Raises:
-        ValueError: If no valid components are available to form a name.
+        ValueError: If datetime information cannot be determined.
     """
+    # Handle pandas DataFrame or GeoDataFrame
+    if isinstance(data, (pd.DataFrame | gpd.GeoDataFrame)):
+        # Check for 'start_datetime' and 'end_datetime' columns
+        if "start_datetime" in data.columns and "end_datetime" in data.columns:
+            start_datetime = pd.Timestamp(data["start_datetime"].min()).to_pydatetime()  # type: ignore
+            end_datetime = pd.Timestamp(data["end_datetime"].max()).to_pydatetime()  # type: ignore
+            return {
+                "datetime": start_datetime,
+                "start_datetime": start_datetime,
+                "end_datetime": end_datetime,
+            }
+        # Check for a single 'datetime' column
+        elif "datetime" in data.columns:
+            datetime_value = pd.Timestamp(data["datetime"].iloc[0]).to_pydatetime()
+            return {
+                "datetime": datetime_value,
+                "start_datetime": None,
+                "end_datetime": None,
+            }
 
-    storage_prefix = str(storage_prefix) if storage_prefix else ""
+    # Handle xarray Dataset or DataArray
+    elif isinstance(data, (xr.Dataset | xr.DataArray)):
+        # Check for a time dimension
+        if "time" in data.dims:
+            time_values = data.coords["time"].values
+            if len(time_values) > 1:
+                return {
+                    "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
+                    "start_datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
+                    "end_datetime": pd.Timestamp(time_values[-1]).to_pydatetime(),
+                }
+            else:
+                return {
+                    "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
+                    "start_datetime": None,
+                    "end_datetime": None,
+                }
+        # Check for start and end datetime attributes
+        if "start_datetime" in data.attrs and "end_datetime" in data.attrs:
+            return {
+                "datetime": pd.Timestamp(data.attrs["start_datetime"]).to_pydatetime(),
+                "start_datetime": pd.Timestamp(
+                    data.attrs["start_datetime"]
+                ).to_pydatetime(),
+                "end_datetime": pd.Timestamp(
+                    data.attrs["end_datetime"]
+                ).to_pydatetime(),
+            }
+        # Check for a single datetime attribute
+        if "datetime" in data.attrs:
+            return {
+                "datetime": pd.Timestamp(data.attrs["datetime"]).to_pydatetime(),
+                "start_datetime": None,
+                "end_datetime": None,
+            }
 
-    components = []
+        # Check for datetime attributes in variables
+        start_times = []
+        end_times = []
+        for var in data.data_vars.values():
+            if "start_datetime" in var.attrs:
+                start_times.append(
+                    pd.Timestamp(var.attrs["start_datetime"]).to_pydatetime()
+                )
+            if "end_datetime" in var.attrs:
+                end_times.append(
+                    pd.Timestamp(var.attrs["end_datetime"]).to_pydatetime()
+                )
+        if start_times and end_times:
+            return {
+                "datetime": min(start_times),
+                "start_datetime": min(start_times),
+                "end_datetime": max(end_times),
+            }
 
-    epsg = block.rio.crs.to_epsg()
-
-    if name_prefix:
-        components.append(name_prefix)
-
-    if (x_dim or y_dim) and (epsg != 4326 and epsg != 3857):
-        components.append(f"epsg={block.rio.crs.to_epsg()}")
-
-    if include_band:
-        components.append(include_band)
-
-    if time_dim and time_dim in block.coords:
-        time = pd.Timestamp(block.coords[time_dim].item()).isoformat()
-        components.append(f"{time_dim}={time}")
-
-    if x_dim and x_dim in block.coords:
-        if epsg == 4326:
-            x_val = round(block.coords[x_dim].min().item(), 2)
-        else:
-            x_val = int(round(block.coords[x_dim].min().item(), 2))
-        components.append(f"{x_dim}={x_val}")
-
-    if y_dim and y_dim in block.coords:
-        if epsg == 4326:
-            y_val = round(block.coords[y_dim].min().item(), 2)
-        else:
-            y_val = int(round(block.coords[y_dim].min().item(), 2))
-        components.append(f"{y_dim}={y_val}")
-
-    if not components:
-        msg = (
-            "No valid components to form a name. Check the input DataArray and provided"
-            " arguments."
-        )
-        raise ValueError(msg)
-
-    name = f"{'_'.join(components)}.tif"
-
-    if not is_file(storage_prefix):  # cloud storage
-        return str(urljoin(storage_prefix, name))
-    else:  # local storage
-        return str(pathlib.Path(storage_prefix) / name)
+    # Raise error if no datetime information is found
+    raise ValueError("Unable to determine datetime information from the dataset.")
 
 
-def name_table(
-    gdf: gpd.GeoDataFrame,
-    storage_prefix: str = "",
-    name_prefix: str | None = None,
-    x_dim: str = "x",
-    y_dim: str = "y",
-) -> str:
-    """Create a name for a Parquet file based on the total_bounds of a GeoDataFrame.
+def short_id(seed: str, length: int = 6) -> str:
+    """
+    Generate a short deterministic hash ID.
 
     Args:
-        gdf (gpd.GeoDataFrame): The GeoDataFrame whose file name is to be generated.
-        storage_prefix (str, optional): Storage prefix to prepend to file name. Defaults to "".
-        name_prefix (str | None, optional): String prefix to prepend to the name. Defaults to None.
-        x_dim (str, optional): Name of the x dimension. Defaults to "x".
-        y_dim (str, optional): Name of the y dimension. Defaults to "y".
+        seed (str): Input string to hash.
+        length (int): Length of the output hash.
 
     Returns:
-        str: A string name constructed from the GeoDataFrame's total bounds.
-
-    Raises:
-        ValueError: If no valid components are available to form a name.
+        str: Short hash string.
     """
-
-    storage_prefix = str(storage_prefix) if storage_prefix else ""
-
-    components = []
-
-    if name_prefix:
-        components.append(name_prefix)
-
-    epsg = gdf.crs.to_epsg()
-    if epsg and epsg not in [4326, 3857]:
-        components.append(f"epsg={epsg}")
-        warnings.warn(
-            "It is recommended to save GeoSpatial tabular data in EPSG 4326 or 3857 to"
-            " ease global analyses.",
-            stacklevel=2,
-        )
-
-    # Using total bounds for naming
-    try:
-        total_bounds = gdf.total_bounds
-        x_min, y_min, _, _ = map(int, total_bounds)
-        components.append(f"{x_dim}={x_min}_{y_dim}={y_min}")
-    except ValueError:
-        components.append("")
-
-    if not components:
-        msg = (
-            "No valid components to form a name. Check the input GeoDataFrame and"
-            " provided arguments."
-        )
-        raise ValueError(msg)
-
-    name = f"{'_'.join(components)}.parquet"
-
-    if not is_file(storage_prefix):
-        return str(urljoin(storage_prefix, name))
-    else:
-        return str(pathlib.Path(storage_prefix) / name)
+    return hashlib.md5(seed.encode()).hexdigest()[:length]
 
 
-def name_bounds(bounds: tuple, crs: Any):
+def transform_bounds_to_epsg4326(
+    bounds: tuple[float, float, float, float], crs: Any
+) -> tuple[float, float, float, float]:
     """
-    Generate a location-based name for bounding box coordinates.
+    Transform bounding box coordinates to EPSG:4326.
 
     Args:
         bounds (tuple): Bounding box as (minx, miny, maxx, maxy).
         crs (str): Coordinate reference system of the bounds.
 
     Returns:
-        str: Formatted name, e.g., "n45e123".
+        tuple: Transformed bounding box in EPSG:4326.
     """
     bounds_geometry = box(*bounds)
     if crs != "EPSG:4326":
         transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
         bounds_geometry = transform(transformer.transform, bounds_geometry)
-    minx, miny, _, _ = bounds_geometry.bounds
+    return bounds_geometry.bounds
+
+
+def format_bounds(
+    minx: float, miny: float, maxx: float, maxy: float, precision: int = 6
+) -> str:
+    """
+    Format bounding box coordinates with specified precision.
+
+    Args:
+        minx, miny, maxx, maxy (float): Bounding box coordinates.
+        precision (int): Decimal precision for the bounds.
+
+    Returns:
+        str: Formatted bounding box string.
+    """
+    return f"{minx:.{precision}f}_{miny:.{precision}f}_{maxx:.{precision}f}_{maxy:.{precision}f}"
+
+
+def name_bounds(
+    bounds: tuple[float, float, float, float], crs: Any, precision: int = 0
+) -> str:
+    """
+    Generate a location-based name for bounding box coordinates.
+
+    Args:
+        bounds (tuple): Bounding box as (minx, miny, maxx, maxy).
+        crs (str): Coordinate reference system of the bounds.
+        precision (int): Decimal precision for naming (default: integer degrees).
+
+    Returns:
+        str: Formatted name, e.g., "n45e123".
+    """
+    minx, miny, _, _ = transform_bounds_to_epsg4326(bounds, crs)
+
     lon_prefix = "e" if minx >= 0 else "w"
     lat_prefix = "n" if miny >= 0 else "s"
-    formatted_minx = f"{abs(minx):03.0f}"
-    formatted_miny = f"{abs(miny):02.0f}"
+
+    formatted_minx = f"{abs(minx):0{3 + precision}.{precision}f}".replace(".", "")
+    formatted_miny = f"{abs(miny):0{2 + precision}.{precision}f}".replace(".", "")
+
     return f"{lat_prefix}{formatted_miny}{lon_prefix}{formatted_minx}"
+
+
+def name_bounds_with_hash(
+    bounds: tuple[float, float, float, float],
+    crs: Any,
+    precision: int = 6,
+    length: int = 6,
+) -> str:
+    """
+    Generate a deterministic hash-based name for bounding box coordinates.
+
+    Args:
+        bounds (tuple): Bounding box as (minx, miny, maxx, maxy).
+        crs (str): Coordinate reference system of the bounds.
+        precision (int): Decimal precision for the bounds.
+        length (int): Length of the hash suffix.
+
+    Returns:
+        str: Formatted name, e.g., "n45e123-abc".
+    """
+    minx, miny, maxx, maxy = transform_bounds_to_epsg4326(bounds, crs)
+
+    # Format bounds with specified precision
+    formatted_bounds = format_bounds(minx, miny, maxx, maxy, precision)
+
+    # Generate a deterministic short hash
+    hash_suffix = short_id(formatted_bounds, length=length)
+
+    lon_prefix = "e" if minx >= 0 else "w"
+    lat_prefix = "n" if miny >= 0 else "s"
+
+    formatted_minx = f"{abs(minx):02.0f}"
+    formatted_miny = f"{abs(miny):02.0f}"
+
+    return f"{lat_prefix}{formatted_miny}{lon_prefix}{formatted_minx}-{hash_suffix}"
 
 
 def name_data(
@@ -410,32 +451,38 @@ def name_data(
     prefix: str | None = None,
     filename_prefix: str | None = None,
     include_bounds: bool = True,
-    include_random_hex: bool = False,
+    add_deterministic_hash: bool = True,
+    postfix: str | None = None,
+    include_time: str | bool | None = None,
 ) -> str:
     """
-    Generate a unique filename for a dataset based on bounds and a deterministic hash.
+    Generate a unique filename for a dataset based on bounds, hash, and optional components.
 
     Args:
         data: Spatial or non-spatial dataset (DataFrame, GeoDataFrame, or xarray).
         prefix: Optional prefix for the filename.
         filename_prefix: Additional prefix for further categorization.
-        include_bounds: Include geographic bounds in the filename.
-        include_random_hex: Include a random hex string (overridden by deterministic hash).
+        include_bounds: Include geographic bounds in the filename (default: True).
+        add_deterministic_hash: Use deterministic hash for naming (default: True).
+        postfix: Optional postfix to add after bounds/hash (e.g., "01", "02").
+        include_time: Time component to include in the filename:
+            - None (default): No time added.
+            - str: Custom time string (e.g., "2023-2024").
+            - True: Infer time from the data.
 
     Returns:
         str: A unique filename based on the provided options.
 
     Raises:
-        ValueError: If no valid parts are generated for the filename.
+        ValueError: If no valid parts were generated for the filename.
     """
-    if not include_bounds and not include_random_hex:
-        msg = "At least one of include_bounds or include_random_hex must be set."
-        raise ValueError(msg)
+    # Synchronize include_bounds and add_deterministic_hash
+    if not include_bounds:
+        add_deterministic_hash = False
 
     parts = []
 
-    # Generate bounds part with deterministic hash
-    bounds_part = ""
+    # Generate bounds or bounds with hash
     if include_bounds and isinstance(
         data, gpd.GeoDataFrame | xr.Dataset | xr.DataArray
     ):
@@ -446,167 +493,56 @@ def name_data(
             bounds = data.rio.bounds()
             crs = data.rio.crs.to_string()
 
-        bounds_part = name_bounds_with_hash(bounds, crs)  # type: ignore
+        if add_deterministic_hash:
+            bounds_part = name_bounds_with_hash(bounds, crs)  # type: ignore
+        else:
+            bounds_part = name_bounds(bounds, crs)  # type: ignore
+
         if bounds_part:
             parts.append(bounds_part)
 
-    # Generate random hex part (optional, for fallback)
-    if include_random_hex:
-        random_hex = uuid.uuid4().hex[:3]
-        parts.append(random_hex)
+    # Add optional postfix
+    if postfix:
+        if parts:
+            parts[-1] = f"{parts[-1]}-{postfix}"
+        elif filename_prefix:
+            filename_prefix = f"{filename_prefix}-{postfix}"
+        else:
+            parts.append(postfix)
+
+    # Add time component
+    if include_time:
+        if isinstance(include_time, str):
+            time_part = include_time
+        elif isinstance(include_time, bool):
+            datetime_info = extract_datetimes(data)
+            if datetime_info["start_datetime"] and datetime_info["end_datetime"]:
+                start = datetime_to_str(
+                    datetime_info["start_datetime"], timespec="days"
+                )
+                end = datetime_to_str(datetime_info["end_datetime"], timespec="days")
+                time_part = f"{start}_{end}"
+            else:
+                time_part = datetime_to_str(datetime_info["datetime"], timespec="auto")  # type: ignore
+        else:
+            raise ValueError(
+                "Invalid value for `include_time`. Use None, str, or bool."
+            )
+
+        parts.append(time_part)
 
     if not parts:
-        msg = "No valid parts were generated for the filename."
-        raise ValueError(msg)
+        raise ValueError("No valid parts were generated for the filename.")
 
-    # Construct filename components
+    # Determine file suffix
     suffix = ".parquet" if isinstance(data, pd.DataFrame | gpd.GeoDataFrame) else ".tif"
     name_part = "_".join(parts) + suffix
+
+    # Construct filename components
     components = [comp for comp in [filename_prefix, name_part] if comp]
     filename = "_".join(components)
 
     return f"{prefix}/{filename}" if prefix else filename
-
-
-def name_bounds_with_hash(bounds: tuple, crs: Any, precision: int = 3) -> str:
-    """
-    Generate a deterministic hash-based name for bounding box coordinates.
-
-    Args:
-        bounds (tuple): Bounding box as (minx, miny, maxx, maxy).
-        crs (str): Coordinate reference system of the bounds.
-        precision (int): Decimal precision for the bounds.
-
-    Returns:
-        str: Formatted name, e.g., "n45e123-abc".
-    """
-    bounds_geometry = box(*bounds)
-    if crs != "EPSG:4326":
-        transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
-        bounds_geometry = transform(transformer.transform, bounds_geometry)
-
-    minx, miny, maxx, maxy = bounds_geometry.bounds
-
-    # Format bounds with specified precision
-    formatted_bounds = f"{minx:.{precision}f}_{miny:.{precision}f}_{maxx:.{precision}f}_{maxy:.{precision}f}"
-
-    # Generate a deterministic short hash
-    hash_seed = formatted_bounds
-    hash_suffix = short_id(hash_seed, length=4)
-
-    lon_prefix = "e" if minx >= 0 else "w"
-    lat_prefix = "n" if miny >= 0 else "s"
-
-    return f"{lat_prefix}{abs(miny):02.0f}{lon_prefix}{abs(minx):03.0f}-{hash_suffix}"
-
-
-def short_id(seed: str, length: int = 4) -> str:
-    """Generate a short deterministic ID based on a seed."""
-    return hashlib.md5(seed.encode()).hexdigest()[:length]
-
-
-def write_log_entry(
-    container: str,
-    name: str,
-    status: str,
-    storage_options: dict[str, str] | None = None,
-    prefix: str | None = None,
-    time: str | datetime | None = None,
-) -> None:
-    """
-    Adds a new entry to a JSON log file with a given name (can be URI), time, and status.
-    The log file is stored in the specified container and optionally prefixed with the given prefix.
-
-    Args:
-        container (str): The base path to the log container.
-        name (str): The name to log.
-        status (str): The status of the processing (e.g., 'success', 'failed').
-        storage_options (Optional[Dict[str, str]]): Authentication and configuration options for Azure storage.
-        prefix (Optional[str]): The prefix for the log file path.
-        time (Optional[Union[str, datetime]]): The time of logging. If None, the current time is used.
-    """
-    if storage_options is None:
-        storage_options = {}
-    # Generate a UUID for the log file name
-    log_id = uuid.uuid4().hex[:16]
-    log_filename = f"{log_id}.json"
-
-    # Construct the full path to the log file
-    log_path = (
-        f"{container}/{prefix}/{log_filename}"
-        if prefix
-        else f"{container}/{log_filename}"
-    )
-
-    # Ensure the time is in ISO format
-    if time is None:
-        time = datetime.now().isoformat()
-    else:
-        try:
-            if isinstance(time, str):
-                time = datetime.fromisoformat(time).isoformat()
-            elif isinstance(time, datetime):
-                time = time.isoformat()
-            else:
-                raise ValueError
-        except ValueError:
-            time = datetime.now().isoformat()
-
-    # Create the log entry
-    log_entry = {"name": name, "time": time, "status": status}
-
-    # Write the log entry to the specified path in JSON format
-    with fsspec.open(log_path, "w", **storage_options) as f:
-        json.dump(log_entry, f)
-
-
-def read_log_entries(
-    base_uri: str, storage_options: dict[str, str | None], prefix: str | None = None
-) -> pd.DataFrame:
-    """
-    Lists all JSON log files under a specified prefix, reads them into a DataFrame,
-    and sorts them by ascending time.
-
-    Args:
-        base_uri (str): The base URI to search for JSON log files.
-        storage_options (Dict[str, str]): Authentication and configuration options for Azure storage.
-        prefix (Optional[str]): A prefix to filter the log files.
-
-    Returns:
-        pd.DataFrame: A DataFrame of log entries sorted by ascending date.
-    """
-    protocol = base_uri.split("://")[0]
-    fs = fsspec.filesystem(protocol, **storage_options)
-
-    # Use glob to list all JSON files under the base URI with the optional prefix
-    search_pattern = f"{base_uri}/{prefix}/*.json" if prefix else f"{base_uri}/*.json"
-    json_files = fs.glob(search_pattern)
-
-    # Read JSON files into a list of dictionaries
-    logs: list[dict] = []
-    for f in json_files:
-        with fs.open(f, "r", **storage_options) as f2:
-            log_entry = json.load(f2)
-            logs.append(log_entry)
-
-    # If no log entries are found, return an empty DataFrame
-    if not logs:
-        return pd.DataFrame(columns=["name", "time", "status"])
-
-    # Create a DataFrame from the list of dictionaries
-    df = pd.DataFrame(logs)
-
-    # Ensure the time column is in datetime format, raise an error if parsing fails
-    try:
-        df["time"] = pd.to_datetime(df["time"], errors="raise")
-    except Exception as e:
-        msg = f"Error parsing datetime: {e}"
-        raise ValueError(msg)  # noqa: B904
-
-    # Sort DataFrame by time in ascending order
-    df = df.sort_values(by="time", ascending=True)
-
-    return df
 
 
 def rm_from_storage(

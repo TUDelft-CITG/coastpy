@@ -225,7 +225,7 @@ if __name__ == "__main__":
 
     [utm_grid_scattered] = client.scatter(
         [utm_grid.loc[:, ["geometry", "epsg", "utm_code"]]], broadcast=True
-    )
+    )  # type: ignore
 
     coastlines = (
         dask_geopandas.read_parquet(osm_coastline_uri, storage_options=storage_options)

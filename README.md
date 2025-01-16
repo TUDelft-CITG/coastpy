@@ -4,7 +4,7 @@ Python tools for cloud-native coastal analytics.
 
 ## Installation
 
-If you have all GDAL dependencies installed correctly you can install with pip:
+You can install coastpy with pip in a Python environment where [GDAL](https://pypi.org/project/GDAL/) and [pyproj](https://pypi.org/project/pyproj/) are already installed.
 
 ```bash
 pip install coastpy
@@ -57,7 +57,7 @@ az storage blob download-batch \
 
 The Coastal Grid dataset provides a global tiling system for coastal analytics. It
 supports scalable data processing workflows by offering coastal tiles at varying zoom
-levels (5, 6, 7) and buffer sizes (500 m, 1000 m, 2000 m, 5000 m, 10000 m, 15000 m).
+levels (5, 6, 7, 8, 9, 10) and buffer sizes (500 m, 1000 m, 2000 m, 5000 m, 10000 m, 15000 m).
 
 ## Usage
 

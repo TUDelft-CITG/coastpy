@@ -112,11 +112,23 @@ class STACQueryEngine(BaseQueryEngine):
         self.proj_epsg = self.extents["proj:epsg"].unique().item()
 
         if columns is None or not columns:
-            self.columns = ["*"]
+            # NOTE: before we used a wildcard, but that was tricky.. now we will rely on STAC? Also a bit
+            # tricky if the STAC is not complete..
+            # self.columns = ["*"]
+            self.columns = [
+                i["name"] for i in self.extents.assets.iloc[0]["data"]["table:columns"]
+            ]
         else:
             self.columns = columns
 
-    def get_data_within_bbox(self, minx: float, miny: float, maxx: float, maxy: float):
+    def get_data_within_bbox(
+        self,
+        minx: float,
+        miny: float,
+        maxx: float,
+        maxy: float,
+        sas_token: str | None = None,
+    ) -> gpd.GeoDataFrame:
         """
         Retrieve data within the specified bounding box.
 
@@ -129,6 +141,13 @@ class STACQueryEngine(BaseQueryEngine):
         Returns:
             pd.DataFrame: The queried data.
         """
+
+        # Helper function to escape column names
+        def escape_column(col):
+            if col == "geometry":
+                return "ST_AsWKB(ST_Transform(geometry, 'EPSG:4326', 'EPSG:4326')) AS geometry"
+            return f'"{col}"'
+
         bbox = shapely.box(minx, miny, maxx, maxy)
         bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs="EPSG:4326")
 
@@ -136,13 +155,14 @@ class STACQueryEngine(BaseQueryEngine):
         overlapping_hrefs = gpd.sjoin(self.extents, bbox_gdf).href.tolist()
 
         # Sign each HREF with the SAS token if the storage backend is Azure
+        sas_token = self._get_token() if sas_token is None else sas_token
         if self.storage_backend == "azure":
             signed_hrefs = []
             for href in overlapping_hrefs:
                 signed_href = href.replace(
                     "az://", "https://coclico.blob.core.windows.net/"
                 )
-                signed_href = signed_href + "?" + self._get_token()
+                signed_href = signed_href + "?" + sas_token
                 signed_hrefs.append(signed_href)
         else:
             signed_hrefs = overlapping_hrefs
@@ -150,12 +170,7 @@ class STACQueryEngine(BaseQueryEngine):
         # Join the hrefs into a single string
         hrefs_str = ", ".join(f'"{href}"' for href in signed_hrefs)
 
-        columns_str = ", ".join(
-            col
-            if col != "geometry"
-            else "ST_AsWKB(ST_Transform(geometry, 'EPSG:4326', 'EPSG:4326')) AS geometry"
-            for col in self.columns
-        )
+        columns_str = ", ".join(escape_column(col) for col in self.columns)
 
         query = f"""
             SELECT {columns_str}
