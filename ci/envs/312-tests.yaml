@@ -56,3 +56,5 @@ dependencies:
       - duckdb
       - more-itertools
       - stac-geoparquet  # pypi releases are more recent
+      - odc-stac
+      - odc-geo
