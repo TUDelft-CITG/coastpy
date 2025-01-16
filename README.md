@@ -13,7 +13,7 @@ pip install coastpy
 However, if you start from scratch, it's probably easier to install with conda:
 
 ```bash
-conda env create -f environment.yaml
+conda env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/heads/main/environment.yaml
 ```
 
 ## Data
@@ -68,9 +68,10 @@ and install the [environment](environment.yaml) using a package manager like
 may use Jupyter lab to run and/or explore the (interactive) content in the notebooks.
 
 ```bash
+conda env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/heads/main/environment.yaml
 git clone https://TUDelft-CITG/coastpy.git
 cd coastpy
-mamba env create -f environment.yml
+conda activate coastal
 jupyter lab
 ```
 
