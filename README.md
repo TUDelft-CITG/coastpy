@@ -59,21 +59,35 @@ The Coastal Grid dataset provides a global tiling system for coastal analytics. 
 supports scalable data processing workflows by offering coastal tiles at varying zoom
 levels (5, 6, 7, 8, 9, 10) and buffer sizes (500 m, 1000 m, 2000 m, 5000 m, 10000 m, 15000 m).
 
-## Usage
+## Usage instructions
 
-More installation and usage instructions will come when we build the documentation. For
-now, to run the tutorials, analytics or scripts proceed as follows. Clone the repository,
-and install the [environment](environment.yaml) using a package manager like
-[miniconda](https://github.com/conda-forge/miniforge?tab=readme-ov-file#download). Then you
-may use Jupyter lab to run and/or explore the (interactive) content in the notebooks.
+Better installation and usage instructions will come when we build the documentation. For
+now, to run the tutorials, analytics or scripts proceed as follows.
+
+### Installation
+
+1. Install [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) or [GitHub Desktop](https://github.com/apps/desktop)
+2. Clone [CoastPy](https://github.com/TUDelft-CITG/coastpy)
+3. Install [Miniforge](https://github.com/conda-forge/miniforge?tab=readme-ov-file#install)
+4. Open a Miniforge prompt (finder/spotlight)
+5. Run the following commands:
 
 ```bash
-conda env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/heads/main/environment.yaml
-git clone https://TUDelft-CITG/coastpy.git
-cd coastpy
-conda activate coastal
-jupyter lab
+# Make sure to update if you already had miniforge installed
+mamba update --all --yes
+
+# Create the software environment
+mamba env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/heads/main/environment.yaml
 ```
+
+### Usage
+
+1. Open Miniforge
+2. Change to the directory where CoastPy was cloned by using `cd /path/to/coastpy`
+3. Activate the software environment by `mamba activate coastal`
+4. Launch Jupyter lab by `jupyter lab`
+5. Navigate to the [tutorials](https://github.com/TUDelft-CITG/coastpy/tree/main/tutorials) folder in the finder in Jupyter lab
+
 
 ## Citation:
 
