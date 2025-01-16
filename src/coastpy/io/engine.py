@@ -225,31 +225,3 @@ class HREFQueryEngine(BaseQueryEngine):
             bbox.ymax >= {miny};
         """
         return self.execute_query(query)
-
-
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-    # Configure cloud and Dask settings
-    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-    storage_options = {"account_name": "coclico", "sas_token": sas_token}
-
-    coclico_catalog = pystac.Catalog.from_file(
-        "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
-    )
-    shorelines_col = coclico_catalog.get_child("shorelinemonitor-shorelines")
-
-    west, south, east, north = (4.730, 53.109, 5.305, 53.438)
-    roi = gpd.GeoDataFrame(
-        geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
-    )
-    sds_engine = STACQueryEngine(
-        stac_collection=shorelines_col,
-        storage_backend="azure",
-    )
-
-    r = sds_engine.get_data_within_bbox(west, south, east, north, sas_token=sas_token)
-
-    print("done `")

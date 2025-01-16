@@ -1,10 +1,8 @@
 import abc
 import logging
-import os
 from collections.abc import Callable
 from typing import Any, Literal
 
-import dotenv
 import geopandas as gpd
 import numpy as np
 import odc.geo
@@ -13,18 +11,13 @@ import odc.geo.geobox
 import odc.geo.geom
 import odc.stac
 import pandas as pd
-import planetary_computer as pc
 import pyproj
 import pystac
 import pystac.item
 import pystac_client
-import rioxarray
-import shapely
 import stac_geoparquet
 import xarray as xr
-from odc.stac import configure_rio
 
-from coastpy.eo.filter import filter_and_sort_stac_items
 from coastpy.eo.indices import calculate_indices
 from coastpy.eo.mask import (
     SceneClassification,
@@ -1129,98 +1122,3 @@ class CopernicusDEMCollection(TileCollection):
             raise ValueError(msg)
 
         return self
-
-
-if __name__ == "__main__":
-    import os
-
-    import dotenv
-    import geopandas as gpd
-    import odc
-    import odc.geo
-    import odc.geo.cog
-    import odc.geo.geobox
-    import odc.geo.geom
-    import odc.stac
-    import planetary_computer as pc
-    import rioxarray  # noqa
-    import shapely
-    from odc.stac import configure_rio
-
-    from coastpy.eo.collection import S2Collection
-    from coastpy.eo.filter import filter_and_sort_stac_items
-    from coastpy.utils.grid import make_coastal_mgrs_grid
-
-    # from coastpy.eo.collection import S2Collection
-
-    configure_rio(cloud_defaults=True)
-
-    dotenv.load_dotenv()
-    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-    storage_options = {"account_name": "coclico", "sas_token": sas_token}
-
-    RESAMPLING = "cubic"
-    DATETIME_RANGE = "2023-01-01/2024-01-01"
-    BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
-
-    def filter_stac_items(items):
-        """Filter and sort STAC items."""
-        return filter_and_sort_stac_items(
-            items,
-            max_items=10,
-            group_by=["s2:mgrs_tile", "sat:relative_orbit"],
-            sort_by="eo:cloud_cover",
-        )
-
-    west, south, east, north = (4.688, 52.979, 5.548, 53.308)
-    roi = gpd.GeoDataFrame(
-        geometry=[shapely.geometry.box(west, south, east, north)], crs=4326
-    )
-
-    grid = make_coastal_mgrs_grid("5000m")
-    grid_roi = gpd.sjoin(grid, roi)
-    # NOTE: we just take the first row as an example. It is the Holland Coast.
-    region_of_interest = grid_roi.iloc[[0]]
-
-    utm_epsg = region_of_interest.utm_epsg.item()
-    coastal_zone = odc.geo.geom.Geometry(
-        region_of_interest.geometry.item(), crs=region_of_interest.crs
-    )
-    geobox = odc.geo.geobox.GeoBox.from_geopolygon(
-        coastal_zone.to_crs(utm_epsg), resolution=10
-    )
-    mgrs_tile = region_of_interest["s2:mgrs_tile"].item()
-
-    def process_sentinel(region, zone, mgrs_tile):
-        """Process Sentinel-2 data for a region."""
-        s2 = (
-            S2Collection()
-            .search(
-                region,
-                datetime_range=DATETIME_RANGE,
-                query={"eo:cloud_cover": {"lt": 20}, "s2:mgrs_tile": {"eq": mgrs_tile}},
-            )
-            .load(
-                bands=BANDS,
-                chunks={"time": "auto", "y": "auto", "x": "auto"},
-                patch_url=pc.sign,
-                resampling=RESAMPLING,  # can also be specified per band ({"swir16": "bilinear"})
-                resolution=10,
-                dtype="float32",
-                crs="utm",
-            )
-            .mask(
-                geometry=zone,
-                nodata=True,
-                scl_classes=["NO_DATA", "DARK_AREA_PIXELS", "CLOUDS_HIGH_PROBABILITY"],
-            )
-            .composite(
-                method="simple", percentile=50, filter_function=filter_stac_items
-            )
-            .execute(compute=False)
-        )
-        s2 = s2.chunk({"y": "auto", "x": "auto"})
-        return s2
-
-    s2 = process_sentinel(region_of_interest, coastal_zone, mgrs_tile)
-    print("Done")

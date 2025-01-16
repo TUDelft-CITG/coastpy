@@ -1,5 +1,6 @@
 import math
 from itertools import product, repeat
+from typing import Any
 
 import geopandas as gpd
 import mercantile
@@ -41,7 +42,7 @@ def make_mercantiles(zoom_level: int) -> gpd.GeoDataFrame:
     Returns:
         gpd.GeoDataFrame: A GeoDataFrame containing tile geometries and their quadkeys.
     """
-    tiles_data: list[dict[str, str]] = []
+    tiles_data: list[dict[str, Any]] = []
     num_tiles = 2**zoom_level
 
     for x in range(num_tiles):
@@ -162,9 +163,7 @@ def tile2box(xtile: int, ytile: int, zoom: int) -> dict:
     return {boxname: sgeom.Polygon([nw, ne, sw, se]).envelope}
 
 
-def slippy_map_tiles_to_quadkey(
-    xtile: int, ytile: int, zoom: int
-) -> dict[str, Polygon]:
+def slippy_map_tiles_to_quadkey(xtile: int, ytile: int, zoom: int) -> dict[str, Any]:
     """Convert tile coordinates to a bounding box with an associated quadkey.
 
     This function computes the bounding box for a given tile, represented by its
