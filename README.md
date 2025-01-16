@@ -86,7 +86,7 @@ mamba env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/
 2. Change to the directory where CoastPy was cloned by using `cd /path/to/coastpy`
 3. Activate the software environment by `mamba activate coastal`
 4. Launch Jupyter lab by `jupyter lab`
-5. Navigate to the [tutorials](https://github.com/TUDelft-CITG/coastpy/tree/main/tutorials) folder in the finder in Jupyter lab
+5. Navigate to the [tutorials](https://github.com/TUDelft-CITG/coastpy/tree/main/tutorials) folder in Jupyter lab 
 
 
 ## Citation:
