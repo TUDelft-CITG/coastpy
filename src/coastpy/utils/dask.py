@@ -194,3 +194,43 @@ def make_meta_from_dtypes(
         return gpd.GeoDataFrame(df, geometry=geometry_column)
 
     return df
+
+
+def summarize_dask_cluster(client: Client) -> dict[str, int | set]:
+    """
+    Summarize the Dask cluster configuration, including the number of workers,
+    threads per worker, and memory per worker.
+
+    Args:
+        client (Client): An active Dask client instance.
+
+    Returns:
+        Dict[str, Union[int, set]]: A summary of the cluster's configuration:
+            - 'num_workers': Total number of active workers.
+            - 'threads_per_worker': Unique set of thread counts per worker.
+            - 'memory_per_worker_gb': Unique set of memory limits per worker (in GB).
+    """
+    # Retrieve scheduler information
+    scheduler_info = client.scheduler_info()
+    workers = scheduler_info.get("workers", {})
+
+    # Extract worker details
+    num_workers = len(workers)
+    threads_per_worker = set()
+    memory_per_worker_gb = set()
+
+    for worker_info in workers.values():
+        threads_per_worker.add(worker_info.get("nthreads", 0))
+        memory_per_worker_gb.add(worker_info.get("memory_limit", 0) / 1e9)
+
+    # Display the cluster configuration
+    print(f"\nDask Dashboard: {client.dashboard_link}")
+    print(f"Number of Workers       : {num_workers}")
+    print(f"Threads per Worker      : {threads_per_worker}")
+    print(f"Memory per Worker (GB)  : {memory_per_worker_gb}\n")
+
+    return {
+        "num_workers": num_workers,
+        "threads_per_worker": threads_per_worker,
+        "memory_per_worker_gb": memory_per_worker_gb,
+    }
