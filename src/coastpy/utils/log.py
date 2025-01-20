@@ -23,44 +23,78 @@ class FileLogger:
 
     Attributes:
         log_path (str): Path to the log file (cloud/local).
-        ids (List[str]): List of IDs to initialize the log with.
-        pattern (str): Regex pattern to extract IDs from file paths.
+        ids (List[str] | None): List of IDs to initialize the log with. Defaults to None.
+        pattern (str): Regex pattern to extract IDs from file paths. Defaults to r".*".
         storage_opts (dict): Storage options for fsspec.
+        add_missing (bool): Add missing IDs to the log if True. Defaults to False.
     """
 
     def __init__(
         self,
         log_path: str,
-        ids: list[str],
-        pattern: str,
+        ids: list[str] | None = None,
+        pattern: str = r".*",
         storage_options: dict | None = None,
+        add_missing: bool = False,
     ) -> None:
         self.log_path = log_path
         self.ids = ids
         self.pattern = pattern
+        self.add_missing = add_missing
         self.storage_options = storage_options or {}
         self.fs = fsspec.filesystem(log_path.split("://")[0], **self.storage_options)
         self.log_df: pd.DataFrame
 
         if self.fs.exists(self.log_path):
             self.read()
-            self._validate_ids()
+            if self.ids is None:
+                self.ids = self.log_df.index.tolist()
+            else:
+                self._validate_ids()
             self._preprocess()
-        else:
+        elif self.ids:
             self._init_log()
+        else:
+            raise ValueError(
+                "Either 'ids' must be provided, or a valid log must exist at 'log_path'."
+            )
 
     def _validate_ids(self) -> None:
         """Validate that all provided IDs exist in the log."""
-        missing = set(self.ids) - set(self.log_df.index)  # type: ignore
+        if self.ids is None:
+            raise ValueError("Cannot validate IDs: 'ids' is not initialized.")
+
+        missing = set(self.ids) - set(self.log_df.index)
         if missing:
-            raise ValueError(f"Missing IDs in log: {missing}")
+            if self.add_missing:
+                print(f"Adding missing IDs to the log: n={len(missing)}.")
+                self._add_missing_ids(missing)
+            else:
+                raise ValueError(f"Missing IDs in log: {missing}")
 
     def _preprocess(self) -> None:
         """Generic function with preprocessing steps."""
+        if self.ids is None:
+            raise ValueError("Cannot preprocess: 'ids' is not initialized.")
         self.log_df = self.log_df[self.log_df.index.isin(self.ids)]
+
+    def _add_missing_ids(self, missing_ids: set[str]) -> None:
+        """Add missing IDs to the log with PENDING status."""
+        new_entries = pd.DataFrame(
+            {
+                "id": list(missing_ids),
+                "status": Status.PENDING.value,
+                "datetime": pd.Timestamp.utcnow().isoformat(),
+                "message": "",
+            }
+        ).set_index("id")
+        self.log_df = pd.concat([self.log_df, new_entries])
+        self.write()
 
     def _init_log(self) -> None:
         """Initialize the log DataFrame with PENDING status."""
+        if not self.ids:
+            raise ValueError("Cannot initialize log: 'ids' is required.")
         self.log_df = pd.DataFrame(
             {
                 "id": self.ids,
