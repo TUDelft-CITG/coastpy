@@ -12,15 +12,15 @@ import enum
 from typing import Any, TypeVar
 
 import dask
-import pystac
 
-# NOTE: until query planning is enabled in Dask GeoPandas
-dask.config.set({"dataframe.query-planning": False})
+# # NOTE: until query planning is enabled in Dask GeoPandas
+# dask.config.set({"dataframe.query-planning": False})
 import dask_geopandas
 import fsspec
 import pandas as pd
 import pyarrow as pa
 import pyproj
+import pystac
 import pystac.utils
 import shapely.geometry
 from pystac.asset import Asset
