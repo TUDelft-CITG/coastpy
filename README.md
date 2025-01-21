@@ -74,10 +74,10 @@ now, to run the tutorials, analytics or scripts proceed as follows.
 
 ```bash
 # Make sure to update if you already had miniforge installed
-mamba update --all --yes
+conda update --all --yes
 
 # Create the software environment
-mamba env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/heads/main/environment.yaml
+conda env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/heads/main/environment.yaml
 ```
 
 ### Usage
