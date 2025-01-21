@@ -1,5 +1,5 @@
 from .config import configure_instance, detect_instance_type
-from .dask import DaskClientManager
+from .dask_utils import DaskClientManager
 from .size import readable_bytes, size_to_bytes
 
 __all__ = [

@@ -11,7 +11,7 @@ from pystac.extensions.raster import DataType, RasterBand, RasterExtension
 from shapely.geometry import box, mapping
 
 from coastpy.io.utils import PathParser, extract_datetimes
-from coastpy.utils.xarray import get_nodata
+from coastpy.utils.xarray_utils import get_nodata
 
 
 def create_cog_item(

@@ -19,13 +19,13 @@ class Status(Enum):
 
 class FileLogger:
     """
-    FileLogger for tracking processing statuses of items.
+    FileLogger for tracking processing statuses of items with retry tracking.
 
     Attributes:
         log_path (str): Path to the log file (cloud/local).
         ids (List[str] | None): List of IDs to initialize the log with. Defaults to None.
         pattern (str): Regex pattern to extract IDs from file paths. Defaults to r".*".
-        storage_opts (dict): Storage options for fsspec.
+        storage_options (dict): Storage options for fsspec.
         add_missing (bool): Add missing IDs to the log if True. Defaults to False.
     """
 
@@ -43,12 +43,12 @@ class FileLogger:
         self.add_missing = add_missing
         self.storage_options = storage_options or {}
         self.fs = fsspec.filesystem(log_path.split("://")[0], **self.storage_options)
-        self.log_df: pd.DataFrame
+        self.df: pd.DataFrame
 
         if self.fs.exists(self.log_path):
             self.read()
             if self.ids is None:
-                self.ids = self.log_df.index.tolist()
+                self.ids = self.df.index.tolist()
             else:
                 self._validate_ids()
         elif self.ids:
@@ -62,11 +62,9 @@ class FileLogger:
         """Validate that all provided IDs exist in the log."""
         if self.ids is None:
             raise ValueError("Cannot validate IDs: 'ids' is not initialized.")
-
-        missing = set(self.ids) - set(self.log_df.index)
+        missing = set(self.ids) - set(self.df.index)
         if missing:
             if self.add_missing:
-                print(f"Adding missing IDs to the log: n={len(missing)}.")
                 self._add_missing_ids(missing)
             else:
                 raise ValueError(f"Missing IDs in log: {missing}")
@@ -77,39 +75,29 @@ class FileLogger:
             {
                 "id": list(missing_ids),
                 "status": Status.PENDING.value,
+                "retries": 0,
                 "datetime": pd.Timestamp.utcnow().isoformat(),
                 "message": "",
             }
         ).set_index("id")
-        self.log_df = pd.concat([self.log_df, new_entries])
-        self.write()
+        self.df = pd.concat([self.df, new_entries])
 
     def _init_log(self) -> None:
         """Initialize the log DataFrame with PENDING status."""
         if not self.ids:
             raise ValueError("Cannot initialize log: 'ids' is required.")
-        self.log_df = pd.DataFrame(
+        self.df = pd.DataFrame(
             {
                 "id": self.ids,
                 "status": Status.PENDING.value,
+                "retries": 0,
                 "datetime": pd.Timestamp.utcnow().isoformat(),
                 "message": "",
             }
         ).set_index("id")
-        self.write()
 
     def _extract_id(self, urlpath: str) -> str:
-        """Extract the ID from a file path.
-
-        Args:
-            urlpath (str): File path to extract ID from.
-
-        Returns:
-            str: Extracted ID.
-
-        Raises:
-            ValueError: If the ID cannot be extracted.
-        """
+        """Extract the ID from a file path."""
         match = re.search(self.pattern, urlpath)
         if not match:
             raise ValueError(f"Cannot extract ID from urlpath: {urlpath}")
@@ -117,19 +105,65 @@ class FileLogger:
 
     def read(self) -> None:
         """Load the log from storage."""
-        try:
-            with self.fs.open(self.log_path, "rb") as f:
-                self.log_df = pd.read_parquet(f)
-        except Exception as e:
-            raise OSError(f"Failed to read log file: {e}")  # noqa: B904
+        with self.fs.open(self.log_path, "rb") as f:
+            self.df = pd.read_parquet(f)
 
     def write(self) -> None:
         """Write the log DataFrame back to storage."""
-        try:
-            with self.fs.open(self.log_path, "wb") as f:
-                self.log_df.to_parquet(f, index=True)
-        except Exception as e:
-            raise OSError(f"Failed to write log file: {e}")  # noqa: B904
+        with self.fs.open(self.log_path, "wb") as f:
+            self.df.to_parquet(f, index=True)
+
+    def reset(self, statuses: list | None = None) -> None:
+        """Reset the statuses of items in the log to Status.PENDING."""
+        if statuses is None:
+            statuses = [Status.PROCESSING]
+
+        for i, status in enumerate(statuses):
+            if isinstance(status, Status):
+                statuses[i] = status.value
+
+        to_reset = self.df[self.df.status.isin(statuses)].index.to_list()
+        for item_id in to_reset:
+            self.update(item_id, Status.PENDING, "")
+
+    def update(self, item_id: str, status: Status, message: str = "") -> None:
+        """
+        Update the status, message, and retry count of an item in the log.
+
+        Args:
+            item_id (str): ID of the item to update.
+            status (Status): New status.
+            message (str, optional): Optional message. Defaults to "".
+
+        Raises:
+            KeyError: If the ID is not in the log.
+        """
+        if item_id not in self.df.index:
+            raise KeyError(f"ID '{item_id}' not found in the log.")
+
+        if status == Status.FAILED:
+            self.df.at[item_id, "retries"] += 1
+
+        elif status == Status.SUCCESS:
+            self.df.at[item_id, "retries"] = 0
+
+        self.df.at[item_id, "status"] = status.value
+        self.df.at[item_id, "datetime"] = pd.Timestamp.utcnow().isoformat()
+        self.df.at[item_id, "message"] = message
+
+    def bulk_update(self, results: list[tuple[str, Status, str]]) -> None:
+        """
+        Bulk update the log with processing results.
+
+        Args:
+            results (List[Tuple[str, Status, str]]): List of (urlpath, Status, message).
+        """
+        for urlpath, status, message in results:
+            try:
+                item_id = self._extract_id(urlpath)
+                self.update(item_id, status, message)
+            except KeyError:
+                print(f"Warning: ID '{item_id}' not found in the log.")
 
     def sample(self, n: int, statuses: list[Status] | None = None) -> list[str]:
         """
@@ -146,50 +180,15 @@ class FileLogger:
             ValueError: If no items are available with the given statuses.
         """
         statuses = statuses or [Status.PENDING]
-        filtered = self.log_df[
-            (self.log_df["status"].isin([s.value for s in statuses]))
-            & (self.log_df.index.isin(self.ids))
+        filtered = self.df[
+            (self.df["status"].isin([s.value for s in statuses]))
+            & (self.df.index.isin(self.ids))
         ]
 
         if filtered.empty:
             raise ValueError(f"No items with statuses: {[s.value for s in statuses]}")
 
         return filtered.sample(n=min(n, len(filtered))).index.tolist()
-
-    def update(self, item_id: str, status: Status, message: str = "") -> None:
-        """
-        Update the status and message of an item in the log.
-
-        Args:
-            item_id (str): ID of the item to update.
-            status (Status): New status.
-            message (str, optional): Optional message. Defaults to "".
-
-        Raises:
-            KeyError: If the ID is not in the log.
-        """
-        if item_id not in self.log_df.index:
-            raise KeyError(f"ID '{item_id}' not found in the log.")
-        self.log_df.at[item_id, "status"] = status.value
-        self.log_df.at[item_id, "datetime"] = pd.Timestamp.utcnow().isoformat()
-        self.log_df.at[item_id, "message"] = message
-
-    def bulk_update(self, results: list[tuple[str, Status, str]]) -> None:
-        """
-        Bulk update the log with processing results.
-
-        Args:
-            results (List[Tuple[str, Status, str]]): List of (urlpath, Status, message).
-
-        Raises:
-            ValueError: If ID extraction fails.
-        """
-        for urlpath, status, message in results:
-            try:
-                item_id = self._extract_id(urlpath)
-                self.update(item_id, status, message)
-            except KeyError:
-                print(f"Warning: ID '{item_id}' not found in the log.")
 
 
 def log(
@@ -259,3 +258,26 @@ def read_logs(
     df = df.sort_values(by="datetime", ascending=True)
 
     return df
+
+
+if __name__ == "__main__":
+    import os
+
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+    storage_options = {"account_name": "coclico", "sas_token": sas_token}
+    OUT_STORAGE = "az://tmp/s2-l2a-composite/release/2025-01-17"
+
+    file_logger = FileLogger(
+        log_path=f"{OUT_STORAGE.replace('az://', 'az://log/')}/log.parquet",
+        pattern=r"(\d{2}[A-Za-z]{3}_z\d+-(?:n|s)\d{2}(?:w|e)\d{3}-[a-z0-9]{6})",
+        storage_options=storage_options,
+    )
+    log_df = file_logger.df.copy()
+    storage_pattern = OUT_STORAGE + "/*.tif"
+
+    file_logger.reset()
+
+    print("Done")

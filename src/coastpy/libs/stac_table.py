@@ -12,9 +12,6 @@ import enum
 from typing import Any, TypeVar
 
 import dask
-
-# # NOTE: until query planning is enabled in Dask GeoPandas
-# dask.config.set({"dataframe.query-planning": False})
 import dask_geopandas
 import fsspec
 import pandas as pd

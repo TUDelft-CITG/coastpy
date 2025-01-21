@@ -200,6 +200,7 @@ dependencies:
   - pip:
       - antimeridian
       - duckdb  # pypi has more recent releases
+      - imagecodecs
       - movingpandas
       - more-itertools
       - networkx

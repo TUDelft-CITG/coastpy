@@ -29,7 +29,7 @@ from coastpy.eo.mask import (
 )
 from coastpy.eo.utils import geobox_from_data_extent
 from coastpy.stac.utils import read_snapshot
-from coastpy.utils.xarray import combine_by_first, unscale
+from coastpy.utils.xarray_utils import combine_by_first, unscale
 
 # NOTE: currently all NODATA management is removed because we mask nodata after loading it by default.
 # Create a logger for this module

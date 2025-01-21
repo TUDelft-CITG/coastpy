@@ -32,7 +32,8 @@ def get_region_of_interest_from_map(
     center_lat = (north + south) / 2
 
     print(f"m.center = ({center_lat:.2f}, {center_lon:.2f})")
-    print(f"m.zoom = {m.zoom:.1f}")
+    if m:
+        print(f"m.zoom = {m.zoom:.1f}")
     print(
         f"west, south, east, north = ({west:.3f}, {south:.3f}, {east:.3f}, {north:.3f})"
     )

@@ -14,7 +14,7 @@ from shapely.geometry import MultiPolygon, Polygon
 from shapely.geometry.polygon import orient
 from shapely.validation import make_valid
 
-from coastpy.utils.dask import silence_shapely_warnings
+from coastpy.utils.dask_utils import silence_shapely_warnings
 
 BUFFER_SIZE = 500
 TOLERANCE = 100

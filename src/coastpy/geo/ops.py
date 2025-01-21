@@ -19,7 +19,7 @@ from shapely.geometry import (
 )
 from shapely.ops import snap, split
 
-from coastpy.utils.dask import silence_shapely_warnings
+from coastpy.utils.dask_utils import silence_shapely_warnings
 
 
 def shift_point(
