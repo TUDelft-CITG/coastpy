@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+
+load_dotenv()
 import datetime
 import logging
 import os
@@ -12,7 +15,6 @@ import pystac.media_type
 import stac_geoparquet
 import xarray as xr
 from coclicodata.coclico_stac.layouts import CoCliCoCOGLayout
-from dotenv import load_dotenv
 from pystac import Collection, Provider, ProviderRole
 from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.extensions.scientific import ScientificExtension
@@ -25,7 +27,6 @@ from coastpy.stac.item import (
 )
 
 # Load the environment variables from the .env file
-load_dotenv(override=True)
 
 logging.getLogger("azure").setLevel(logging.WARNING)
 
@@ -51,8 +52,8 @@ ASSET_EXTRA_FIELDS = {
 # Configuration
 STORAGE_ACCOUNT_NAME = "coclico"
 CONTAINER_NAME = "s2-l2a-composite"
-VERSION = "2025-01-11"
-CONTAINER_URI = f"az://{CONTAINER_NAME}/release/{VERSION}"
+VERSION = "2025-01-17"
+CONTAINER_URI = f"az://tmp/{CONTAINER_NAME}/release/{VERSION}"
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 LICENSE = "CC-BY-4.0"

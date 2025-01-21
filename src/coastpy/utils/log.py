@@ -51,7 +51,6 @@ class FileLogger:
                 self.ids = self.log_df.index.tolist()
             else:
                 self._validate_ids()
-            self._preprocess()
         elif self.ids:
             self._init_log()
         else:
@@ -71,12 +70,6 @@ class FileLogger:
                 self._add_missing_ids(missing)
             else:
                 raise ValueError(f"Missing IDs in log: {missing}")
-
-    def _preprocess(self) -> None:
-        """Generic function with preprocessing steps."""
-        if self.ids is None:
-            raise ValueError("Cannot preprocess: 'ids' is not initialized.")
-        self.log_df = self.log_df[self.log_df.index.isin(self.ids)]
 
     def _add_missing_ids(self, missing_ids: set[str]) -> None:
         """Add missing IDs to the log with PENDING status."""
@@ -153,7 +146,10 @@ class FileLogger:
             ValueError: If no items are available with the given statuses.
         """
         statuses = statuses or [Status.PENDING]
-        filtered = self.log_df[self.log_df["status"].isin([s.value for s in statuses])]
+        filtered = self.log_df[
+            (self.log_df["status"].isin([s.value for s in statuses]))
+            & (self.log_df.index.isin(self.ids))
+        ]
 
         if filtered.empty:
             raise ValueError(f"No items with statuses: {[s.value for s in statuses]}")

@@ -18,7 +18,6 @@ import pystac
 dask.config.set({"dataframe.query-planning": False})
 import dask_geopandas
 import fsspec
-import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyproj
@@ -216,7 +215,7 @@ def generate(
 
     if infer_datetime == InferDatetimeOptions.range:
         values = dask.compute(data[datetime_column].min(), data[datetime_column].max())  # type: ignore
-        values = np.array(pd.Series(values).dt.to_pydatetime())
+        values = pd.Series(values).dt.to_pydatetime().tolist()
         item.common_metadata.start_datetime = values[0]
         item.common_metadata.end_datetime = values[1]
         # NOTE: consider if its good practice to set datetime to midpoint when range is set
