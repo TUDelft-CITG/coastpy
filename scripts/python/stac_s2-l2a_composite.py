@@ -10,6 +10,7 @@ from collections import defaultdict
 from typing import Any
 
 import fsspec
+import pandas as pd
 import pystac
 import pystac.media_type
 import stac_geoparquet
@@ -182,40 +183,88 @@ def create_collection(
     return collection
 
 
-def group_tif_files_by_tile(paths: list[str]) -> dict[str, dict[str, str]]:
-    """
-    Group .tif file paths by tile ID.
+def extract_groups(pattern, urlpath: str) -> dict[str, str | None]:
+    """Extract groups from a file path using the regex pattern."""
+    match = pattern.search(urlpath)
+    if not match:
+        raise ValueError(f"Cannot extract groups from urlpath: {urlpath}")
+    groups = match.groupdict()
+    return {k: v for k, v in groups.items() if v is not None}
 
-    The tile IDs consist of an MGRS S2 tile name (e.g., 31UFU) followed by a numeric index (e.g., 00),
-    separated by a dash. Each grouped dictionary entry contains band-specific file paths.
+
+def group_tif_files_by_tile(
+    storage_pattern: str, filename_pattern, storage_options
+) -> dict[str, dict[str, str]]:
+    """
+    Group tiles by their Tile IDs and associated bands based on files in storage.
 
     Args:
-        paths (List[str]): List of file paths to group.
+        storage_pattern (str): The storage pattern to list files from storage.
+        filename_pattern (str): The regex pattern to extract tile ID and band from the filename.
+        storage_options (dict): Storage options to pass to fsspec.
 
     Returns:
-        Dict[str, Dict[str, str]]: Dictionary grouping file paths by tile ID, with bands as sub-keys.
+        Dict[str, Set[str]]: Mapping of tile IDs to their associated bands.
     """
-    # Define a regex pattern to extract tile ID and band
-    tile_pattern = re.compile(
-        r"(?P<tile_id>\d{2}[A-Z]{3}-\d{2})_[0-9]{8}_[0-9]{8}_(?P<band>\w+)_\d{2}m\.tif$"
-    )
+    fs = fsspec.filesystem(storage_pattern.split("://")[0], **storage_options)
+    files = fs.glob(storage_pattern)
 
-    grouped_files = defaultdict(dict)
+    pattern = re.compile(filename_pattern)
 
-    for path in paths:
-        filename = path.split("/")[-1]  # Extract the filename from the path
-        match = tile_pattern.search(filename)
+    if not files:
+        print("No files found.")
+        return {}
 
-        if match:
-            tile_id = match.group("tile_id")
-            band = match.group("band")
-            grouped_files[tile_id][band] = path
-        else:
-            raise ValueError(
-                f"File '{path}' does not match the expected naming convention."
-            )
+    tiles = defaultdict(dict)
+    for f in files:
+        try:
+            groups = extract_groups(pattern, f)
+            tile_id = groups["tile_id"]
+            band = groups.get("band")
+            if tile_id and band:
+                tiles[tile_id][band] = f
+            elif tile_id:
+                tiles[tile_id] = f
+        except ValueError as e:
+            print(f"Warning: Could not parse file {f}: {e}")
 
-    return dict(grouped_files)
+    return tiles
+
+
+# def group_tif_files_by_tile(paths: list[str]) -> dict[str, dict[str, str]]:
+#     """
+#     Group .tif file paths by tile ID.
+
+#     The tile IDs consist of an MGRS S2 tile name (e.g., 31UFU) followed by a numeric index (e.g., 00),
+#     separated by a dash. Each grouped dictionary entry contains band-specific file paths.
+
+#     Args:
+#         paths (List[str]): List of file paths to group.
+
+#     Returns:
+#         Dict[str, Dict[str, str]]: Dictionary grouping file paths by tile ID, with bands as sub-keys.
+#     """
+#     # Define a regex pattern to extract tile ID and band
+#     tile_pattern = re.compile(
+#         r"(?P<tile_id>\d{2}[A-Z]{3}-\d{2})_[0-9]{8}_[0-9]{8}_(?P<band>\w+)_\d{2}m\.tif$"
+#     )
+
+#     grouped_files = defaultdict(dict)
+
+#     for path in paths:
+#         filename = path.split("/")[-1]  # Extract the filename from the path
+#         match = tile_pattern.search(filename)
+
+#         if match:
+#             tile_id = match.group("tile_id")
+#             band = match.group("band")
+#             grouped_files[tile_id][band] = path
+#         else:
+#             raise ValueError(
+#                 f"File '{path}' does not match the expected naming convention."
+#             )
+
+#     return dict(grouped_files)
 
 
 def load_bands_to_dataset(
@@ -277,15 +326,48 @@ def load_bands_to_dataset(
 
 
 if __name__ == "__main__":
+    stac_item_container = "az://tmp/stac/tmp/s2-l2a-composite/release/2025-01-17/items"
+    DATETIME_RANGE = "2023-01-01/2024-01-01"
+    BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
+    required_bands = [b for b in BANDS if b != "SCL"]
+
+    def format_date_range(date_range: str) -> str:
+        """Convert ISO date range to YYYYMMDD_YYYYMMDD format."""
+        return "_".join(pd.to_datetime(date_range.split("/")).strftime("%Y%m%d"))
+
+    date_range = format_date_range(DATETIME_RANGE)
+
+    # NOTE: this is very important to get right
+    FILENAME_PATTERN = (
+        rf"(?P<tile_id>\d{{2}}[A-Za-z]{{3}}_z\d+-(?:n|s)\d{{2}}(?:w|e)\d{{3}}-[a-z0-9]{{6}})"  # Tile ID
+        rf"(?:_{date_range})?"  # Optional date range
+        r"(?:_(?P<band>[a-z0-9]+))?"  # Optional band
+        r"(?:_10m\.tif)?"  # Optional resolution
+    )
+
     stac_io = DefaultStacIO()  # CoCliCoStacIO()
     layout = CoCliCoCOGLayout()
 
     collection = create_collection()
 
-    fs = fsspec.filesystem("az", **storage_options)
-    paths = fs.glob(f"{CONTAINER_URI}/*.tif")
-    tiles = group_tif_files_by_tile(paths)
+    # fs = fsspec.filesystem("az", **storage_options)
+    # paths = fs.glob(f"{CONTAINER_URI}/*.tif")
+    # tiles = group_tif_files_by_tile(paths)
 
+    storage_pattern = "az://tmp/s2-l2a-composite/release/2025-01-17/*.tif"
+    storage_options = {"account_name": "coclico", "credential": sas_token}
+    tiles = group_tif_files_by_tile(storage_pattern, FILENAME_PATTERN, storage_options)
+
+    print(f"Found {len(tiles)} tiles.")
+
+    # Use dictionary comprehension to filter tiles with all required bands
+    tiles = {
+        tile_id: bands
+        for tile_id, bands in tiles.items()
+        if set(required_bands).issubset(set(bands.keys()))
+    }
+
+    print(f"Found {len(tiles)} tiles with all required bands.")
     for tile_id, band_paths in tiles.items():
         ds = load_bands_to_dataset(band_paths, storage_options)
 

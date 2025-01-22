@@ -1,4 +1,16 @@
-from . import geo, io, libs, stac, stats, utils
+from . import eo, geo, io, libs, schema, stac, stats, utils, viz
 from ._version import __version__
 
-__all__ = ["__version__", "io", "geo", "libs", "stac", "stats", "utils"]
+__all__ = [
+    "__version__",
+    "eo",
+    "geo",
+    "io",
+    "libs",
+    "schema",
+    "stac",
+    "stats",
+    "utils",
+    "utils",
+    "viz",
+]
