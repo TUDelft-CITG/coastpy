@@ -326,7 +326,10 @@ def load_bands_to_dataset(
 
 
 if __name__ == "__main__":
-    stac_item_container = "az://tmp/stac/tmp/s2-l2a-composite/release/2025-01-17/items"
+    STORAGE_CONTAINER = "az://tmp/s2-l2a-composite/release/2025-01-17"
+    stac_item_container = (
+        f"az://tmp/stac/{STORAGE_CONTAINER.replace('az://', '')}/items"
+    )
     DATETIME_RANGE = "2023-01-01/2024-01-01"
     BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
     required_bands = [b for b in BANDS if b != "SCL"]
@@ -354,7 +357,7 @@ if __name__ == "__main__":
     # paths = fs.glob(f"{CONTAINER_URI}/*.tif")
     # tiles = group_tif_files_by_tile(paths)
 
-    storage_pattern = "az://tmp/s2-l2a-composite/release/2025-01-17/*.tif"
+    storage_pattern = f"{STORAGE_CONTAINER}/*.tif"
     storage_options = {"account_name": "coclico", "credential": sas_token}
     tiles = group_tif_files_by_tile(storage_pattern, FILENAME_PATTERN, storage_options)
 
