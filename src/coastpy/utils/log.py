@@ -1,7 +1,9 @@
 import datetime
 import json
 import re
+import time
 import uuid
+from collections import defaultdict
 from enum import Enum
 
 import fsspec
@@ -17,29 +19,24 @@ class Status(Enum):
     FAILED = "failed"
 
 
-class FileLogger:
+class TileLogger:
     """
-    FileLogger for tracking processing statuses of items with retry tracking.
-
-    Attributes:
-        log_path (str): Path to the log file (cloud/local).
-        ids (List[str] | None): List of IDs to initialize the log with. Defaults to None.
-        pattern (str): Regex pattern to extract IDs from file paths. Defaults to r".*".
-        storage_options (dict): Storage options for fsspec.
-        add_missing (bool): Add missing IDs to the log if True. Defaults to False.
+    TileLogger for tracking tiles with optional band-level granularity, sampling, and retry handling.
     """
 
     def __init__(
         self,
         log_path: str,
-        ids: list[str] | None = None,
-        pattern: str = r".*",
-        storage_options: dict | None = None,
+        ids: list[str],
+        pattern: str,
+        required_bands: list[str] | None = None,
+        storage_options: dict[str, str] | None = None,
         add_missing: bool = False,
-    ) -> None:
+    ):
         self.log_path = log_path
         self.ids = ids
-        self.pattern = pattern
+        self.pattern = re.compile(pattern)
+        self.required_bands = sorted(required_bands or [])
         self.add_missing = add_missing
         self.storage_options = storage_options or {}
         self.fs = fsspec.filesystem(log_path.split("://")[0], **self.storage_options)
@@ -47,16 +44,23 @@ class FileLogger:
 
         if self.fs.exists(self.log_path):
             self.read()
-            if self.ids is None:
-                self.ids = self.df.index.tolist()
-            else:
-                self._validate_ids()
-        elif self.ids:
-            self._init_log()
+            self._validate_ids()
         else:
-            raise ValueError(
-                "Either 'ids' must be provided, or a valid log must exist at 'log_path'."
-            )
+            self._init_log()
+
+    def _init_log(self) -> None:
+        """Initialize the log DataFrame."""
+        bands_col = [frozenset()] * len(self.ids) if self.required_bands else None
+        self.df = pd.DataFrame(
+            {
+                "id": self.ids,
+                "status": Status.PENDING.value,
+                "bands": bands_col,
+                "retries": 0,
+                "datetime": pd.Timestamp.utcnow().isoformat(),
+                "message": "",
+            }
+        ).set_index("id")
 
     def _validate_ids(self) -> None:
         """Validate that all provided IDs exist in the log."""
@@ -71,10 +75,12 @@ class FileLogger:
 
     def _add_missing_ids(self, missing_ids: set[str]) -> None:
         """Add missing IDs to the log with PENDING status."""
+        bands_col = [frozenset()] * len(missing_ids) if self.required_bands else None
         new_entries = pd.DataFrame(
             {
                 "id": list(missing_ids),
                 "status": Status.PENDING.value,
+                "bands": bands_col,
                 "retries": 0,
                 "datetime": pd.Timestamp.utcnow().isoformat(),
                 "message": "",
@@ -82,88 +88,148 @@ class FileLogger:
         ).set_index("id")
         self.df = pd.concat([self.df, new_entries])
 
-    def _init_log(self) -> None:
-        """Initialize the log DataFrame with PENDING status."""
-        if not self.ids:
-            raise ValueError("Cannot initialize log: 'ids' is required.")
-        self.df = pd.DataFrame(
-            {
-                "id": self.ids,
-                "status": Status.PENDING.value,
-                "retries": 0,
-                "datetime": pd.Timestamp.utcnow().isoformat(),
-                "message": "",
-            }
-        ).set_index("id")
-
-    def _extract_id(self, urlpath: str) -> str:
-        """Extract the ID from a file path."""
-        match = re.search(self.pattern, urlpath)
+    def _extract_groups(self, urlpath: str) -> dict[str, str | None]:
+        """Extract groups from a file path using the regex pattern."""
+        match = self.pattern.search(urlpath)
         if not match:
-            raise ValueError(f"Cannot extract ID from urlpath: {urlpath}")
-        return match.group(1)
+            raise ValueError(f"Cannot extract groups from urlpath: {urlpath}")
+        groups = match.groupdict()
+        return {k: v for k, v in groups.items() if v is not None}
 
-    def read(self) -> None:
-        """Load the log from storage."""
-        with self.fs.open(self.log_path, "rb") as f:
-            self.df = pd.read_parquet(f)
+    def _update_tile_status(self, tile_id: str) -> None:
+        """Update tile status based on band completeness."""
+        if self.required_bands:
+            bands = self.df.at[tile_id, "bands"]
+            missing = set(self.required_bands) - bands
+            if not missing:
+                self.df.at[tile_id, "status"] = Status.SUCCESS.value
+                self.df.at[tile_id, "message"] = "All bands processed."
 
-    def write(self) -> None:
-        """Write the log DataFrame back to storage."""
-        with self.fs.open(self.log_path, "wb") as f:
-            self.df.to_parquet(f, index=True)
+            else:
+                self.df.at[tile_id, "status"] = Status.FAILED.value
+                self.df.at[tile_id, "message"] = (
+                    f"Missing bands: {', '.join(sorted(missing))}"
+                )
 
-    def reset(self, statuses: list | None = None) -> None:
-        """Reset the statuses of items in the log to Status.PENDING."""
-        if statuses is None:
-            statuses = [Status.PROCESSING]
-
-        for i, status in enumerate(statuses):
-            if isinstance(status, Status):
-                statuses[i] = status.value
-
-        to_reset = self.df[self.df.status.isin(statuses)].index.to_list()
-        for item_id in to_reset:
-            self.update(item_id, Status.PENDING, "")
-
-    def update(self, item_id: str, status: Status, message: str = "") -> None:
+    def _group_tiles_by_band(self, storage_path: str) -> dict[str, set[str]]:
         """
-        Update the status, message, and retry count of an item in the log.
+        Group tiles by their IDs and associated bands based on files in storage.
 
         Args:
-            item_id (str): ID of the item to update.
-            status (Status): New status.
-            message (str, optional): Optional message. Defaults to "".
+            storage_path (str): The path pattern to list files from storage.
 
-        Raises:
-            KeyError: If the ID is not in the log.
+        Returns:
+            Dict[str, Set[str]]: Mapping of tile IDs to their associated bands.
         """
-        if item_id not in self.df.index:
-            raise KeyError(f"ID '{item_id}' not found in the log.")
+        fs = fsspec.filesystem(storage_path.split("://")[0], **self.storage_options)
+        files = fs.glob(storage_path)
 
-        if status == Status.FAILED:
-            self.df.at[item_id, "retries"] += 1
+        if not files:
+            print("No files found.")
+            return {}
 
-        elif status == Status.SUCCESS:
-            self.df.at[item_id, "retries"] = 0
-
-        self.df.at[item_id, "status"] = status.value
-        self.df.at[item_id, "datetime"] = pd.Timestamp.utcnow().isoformat()
-        self.df.at[item_id, "message"] = message
-
-    def bulk_update(self, results: list[tuple[str, Status, str]]) -> None:
-        """
-        Bulk update the log with processing results.
-
-        Args:
-            results (List[Tuple[str, Status, str]]): List of (urlpath, Status, message).
-        """
-        for urlpath, status, message in results:
+        tiles = defaultdict(set)
+        for f in files:
             try:
-                item_id = self._extract_id(urlpath)
-                self.update(item_id, status, message)
-            except KeyError:
-                print(f"Warning: ID '{item_id}' not found in the log.")
+                groups = self._extract_groups(f)
+                tile_id = groups["tile_id"]
+                band = groups.get("band")
+                if tile_id and band:
+                    tiles[tile_id].add(band)
+                elif tile_id:
+                    tiles[tile_id]  # Ensure the tile exists even if no band is found
+            except ValueError as e:
+                print(f"Warning: Could not parse file {f}: {e}")
+
+        return tiles
+
+    def update(
+        self, urlpath: str, status: Status, message: str = "", dt: str | None = None
+    ) -> None:
+        """Update the log based on the given URL path."""
+        groups = self._extract_groups(urlpath)
+        tile_id = groups["tile_id"]
+        if not tile_id:
+            raise ValueError(f"Tile ID not found in urlpath: {urlpath}")
+        band = groups.get("band")
+        dt = dt or self.now_to_isoformat()
+
+        if tile_id not in self.df.index:
+            raise KeyError(f"Tile ID '{tile_id}' not found in the log.")
+
+        # Tile-level update
+        if not band:
+            self.df.at[tile_id, "status"] = status.value
+
+            self.df.at[tile_id, "message"] = message
+        # Band-level update
+        else:
+            current_bands = self.df.at[tile_id, "bands"] or frozenset()
+            if status == Status.SUCCESS:
+                self.df.at[tile_id, "bands"] = current_bands | {band}
+            self._update_tile_status(tile_id)
+
+        # Update datetime
+        self.df.at[tile_id, "datetime"] = dt
+
+        # Add retry logic
+        if status == Status.FAILED:
+            self.df.at[tile_id, "retries"] += 1
+            self.df.at[tile_id, "message"] = (
+                f"{message} (retry count: {self.df.at[tile_id, 'retries']})"
+            )
+        elif status == Status.SUCCESS:
+            self.df.at[tile_id, "retries"] = 0
+
+    def bulk_update(self, results: list[tuple[str, Status, str, str]]) -> None:
+        """Bulk update the log with multiple results."""
+        for urlpath, status, message, dt in results:
+            try:
+                self.update(urlpath, status, message, dt)
+            except Exception as e:
+                print(f"Error updating {urlpath}: {e}")
+
+    def update_from_storage(self, storage_pattern: str) -> None:
+        """
+        Update the logger based on files found in storage.
+
+        Args:
+            storage_pattern (str): The pattern to list files from storage.
+        """
+        tiles = self._group_tiles_by_band(storage_pattern)
+
+        for tile_id, bands in tiles.items():
+            if tile_id not in self.df.index:
+                print(f"Warning: Tile ID '{tile_id}' not found in the log.")
+                continue
+
+            # Check for completeness if required bands are defined
+            if self.required_bands:
+                missing_bands = set(self.required_bands) - bands
+                if not missing_bands:
+                    self.update(tile_id, Status.SUCCESS, "All bands processed.")
+                else:
+                    self.update(
+                        tile_id,
+                        Status.FAILED,
+                        f"Missing bands: {', '.join(sorted(missing_bands))}",
+                    )
+            else:
+                # No bands required; mark tile as success
+                self.update(tile_id, Status.SUCCESS, "Tile found in storage.")
+
+    def reset(self, statuses: list[Status] | None = None) -> None:
+        """Reset statuses to PENDING for specific tiles."""
+        statuses = statuses or [Status.PROCESSING]
+        for status in statuses:
+            to_reset = self.df[self.df["status"] == status.value].index.tolist()
+            for tile_id in to_reset:
+                self.update(
+                    tile_id,
+                    Status.PENDING,
+                    "",
+                    self.now_to_isoformat(),
+                )
 
     def sample(self, n: int, statuses: list[Status] | None = None) -> list[str]:
         """
@@ -189,6 +255,41 @@ class FileLogger:
             raise ValueError(f"No items with statuses: {[s.value for s in statuses]}")
 
         return filtered.sample(n=min(n, len(filtered))).index.tolist()
+
+    def read(self) -> None:
+        """Load the log from storage."""
+        with self.fs.open(self.log_path, "rb") as f:
+            self.df = pd.read_parquet(f)
+
+        # Convert strings back to frozensets
+        if "bands" in self.df.columns:
+            self.df["bands"] = self.df["bands"].apply(self._string_to_frozenset)
+
+    def write(self) -> None:
+        """Write the log DataFrame back to storage."""
+        df_copy = self.df.copy()
+        # Convert frozensets to strings
+        if "bands" in df_copy.columns:
+            df_copy["bands"] = df_copy["bands"].apply(self._frozenset_to_string)
+
+        with self.fs.open(self.log_path, "wb") as f:
+            df_copy.to_parquet(f, index=True)
+        time.sleep(0.5)
+
+    @staticmethod
+    def _frozenset_to_string(bands: frozenset | None) -> str:
+        """Convert a frozenset to a comma-separated string."""
+        return ",".join(sorted(bands)) if bands else ""
+
+    @staticmethod
+    def _string_to_frozenset(bands_str: str) -> frozenset:
+        """Convert a comma-separated string to a frozenset."""
+        return frozenset(bands_str.split(",")) if bands_str else frozenset()
+
+    @staticmethod
+    def now_to_isoformat():
+        """Return the current datetime in ISO format."""
+        return datetime.datetime.now(datetime.UTC).isoformat()
 
 
 def log(
@@ -258,26 +359,3 @@ def read_logs(
     df = df.sort_values(by="datetime", ascending=True)
 
     return df
-
-
-if __name__ == "__main__":
-    import os
-
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-    storage_options = {"account_name": "coclico", "sas_token": sas_token}
-    OUT_STORAGE = "az://tmp/s2-l2a-composite/release/2025-01-17"
-
-    file_logger = FileLogger(
-        log_path=f"{OUT_STORAGE.replace('az://', 'az://log/')}/log.parquet",
-        pattern=r"(\d{2}[A-Za-z]{3}_z\d+-(?:n|s)\d{2}(?:w|e)\d{3}-[a-z0-9]{6})",
-        storage_options=storage_options,
-    )
-    log_df = file_logger.df.copy()
-    storage_pattern = OUT_STORAGE + "/*.tif"
-
-    file_logger.reset()
-
-    print("Done")

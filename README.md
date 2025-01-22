@@ -59,10 +59,10 @@ The Coastal Grid dataset provides a global tiling system for coastal analytics. 
 supports scalable data processing workflows by offering coastal tiles at varying zoom
 levels (5, 6, 7, 8, 9, 10) and buffer sizes (500 m, 1000 m, 2000 m, 5000 m, 10000 m, 15000 m).
 
-## Usage instructions
+## Installation & usage instructions
 
 Better installation and usage instructions will come when we build the documentation. For
-now, to run the tutorials, analytics or scripts proceed as follows.
+now, to run tutorials, analytics or scripts, you could consider proceeding as follows.
 
 ### Installation
 
@@ -73,11 +73,11 @@ now, to run the tutorials, analytics or scripts proceed as follows.
 5. Run the following commands:
 
 ```bash
-# Make sure to update if you already had miniforge installed
-mamba update --all --yes
+# Update conda if you already had miniforge installed
+conda update --all --yes
 
 # Create the software environment
-mamba env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/heads/main/environment.yaml
+conda env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/heads/main/environment.yaml
 ```
 
 ### Usage
