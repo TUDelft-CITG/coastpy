@@ -359,3 +359,82 @@ def read_logs(
     df = df.sort_values(by="datetime", ascending=True)
 
     return df
+
+
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    import ast
+    import json
+    import os
+    import re
+    import time
+    from collections import defaultdict
+
+    import fsspec
+    import pandas as pd
+
+    from coastpy.utils.grid import read_coastal_grid
+
+    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+    storage_options = {"account_name": "coclico", "sas_token": sas_token}
+    VERSION = "2025-01-17"
+    OUT_STORAGE = f"az://tmp/s2-l2a-composite/release/{VERSION}"
+
+    DATETIME_RANGE = "2023-01-01/2024-01-01"
+    BANDS = ["blue", "green", "red", "nir", "swir16", "swir22"]
+    SPECTRAL_INDICES = ["NDWI", "NDVI", "MNDWI", "NDMI"]
+
+    ZOOM = 9
+    BUFFER_SIZE = "10000m"
+
+    def format_date_range(date_range: str) -> str:
+        """Convert ISO date range to YYYYMMDD_YYYYMMDD format."""
+        return "_".join(pd.to_datetime(date_range.split("/")).strftime("%Y%m%d"))
+
+    date_range = format_date_range(DATETIME_RANGE)
+    required_bands = [b for b in BANDS if b != "SCL"]
+
+    # NOTE: this is very important to get right
+    FILENAME_PATTERN = (
+        rf"(?P<tile_id>\d{{2}}[A-Za-z]{{3}}_z\d+-(?:n|s)\d{{2}}(?:w|e)\d{{3}}-[a-z0-9]{{6}})"  # Tile ID
+        rf"(?:_{date_range})?"  # Optional date range
+        r"(?:_(?P<band>[a-z0-9]+))?"  # Optional band
+        r"(?:_10m\.tif)?"  # Optional resolution
+    )
+
+    grid = read_coastal_grid(buffer_size=BUFFER_SIZE, zoom=ZOOM)
+
+    # Apply JSON parsing for specific columns
+    grid["admin:continents"] = grid["admin:continents"].apply(
+        lambda x: json.loads(x) if x else []
+    )
+    grid["admin:countries"] = grid["admin:countries"].apply(
+        lambda x: json.loads(x) if x else []
+    )
+    grid["s2:mgrs_tile"] = grid["s2:mgrs_tile"].apply(ast.literal_eval)
+    grid = grid.explode("s2:mgrs_tile", ignore_index=True)
+    grid["tile_id"] = grid[["s2:mgrs_tile", "coastal_grid:id"]].agg("_".join, axis=1)
+    print(f"Shape grid: {grid.shape}")
+
+    log_urlpath = f"{OUT_STORAGE.replace('az://', 'az://log/')}/log.parquet"
+
+    tile_logger = TileLogger(
+        log_urlpath,
+        grid.tile_id.to_list(),
+        FILENAME_PATTERN,
+        required_bands,
+        storage_options,
+    )
+
+    log_df = tile_logger.df.copy()
+
+    storage_pattern = f"{OUT_STORAGE}/*.tif"
+    df1 = tile_logger.df.copy()
+    print(df1.status.value_counts())
+    tile_logger.update_from_storage(storage_pattern)
+    df2 = tile_logger.df.copy()
+    tile_logger.write()
+    print(df2.status.value_counts())
+    print(f"Shape log_df: {log_df.shape}")

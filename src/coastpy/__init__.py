@@ -10,6 +10,5 @@ __all__ = [
     "stac",
     "stats",
     "utils",
-    "utils",
     "viz",
 ]
