@@ -407,7 +407,7 @@ def filter_existing_tiles(
 def create_stac_items():
     """Main function for creating STAC items."""
     # Initialize Dask client
-    client = Client(n_workers=1, threads_per_worker=1)
+    client = Client(threads_per_worker=1)
     summarize_dask_cluster(client)
 
     # List and filter tiles
@@ -454,7 +454,7 @@ def create_stac_items():
 
 
 def create_collection_with_items():
-    client = Client()
+    client = Client(threads_per_worker=1)
     summarize_dask_cluster(client)
 
     fs = fsspec.filesystem("az", **storage_options)
@@ -534,119 +534,9 @@ def create_collection_with_items():
 
 
 def main():
-    create_stac_items()
-    # create_collection_with_items()
+    # create_stac_items()
+    create_collection_with_items()
 
 
 if __name__ == "__main__":
     main()
-
-
-# if __name__ == "__main__":
-#     from distributed import Client
-
-#     client = Client(n_workers=1, threads_per_worker=1)
-
-#     stac_item_container = f"az://tmp/stac/{CONTAINER_URI.replace('az://', '')}/items"
-#     DATETIME_RANGE = "2023-01-01/2024-01-01"
-#     BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
-#     required_bands = [b for b in BANDS if b != "SCL"]
-
-#     def format_date_range(date_range: str) -> str:
-#         """Convert ISO date range to YYYYMMDD_YYYYMMDD format."""
-#         return "_".join(pd.to_datetime(date_range.split("/")).strftime("%Y%m%d"))
-
-#     date_range = format_date_range(DATETIME_RANGE)
-
-#     # NOTE: this is very important to get right
-#     FILENAME_PATTERN = (
-#         rf"(?P<tile_id>\d{{2}}[A-Za-z]{{3}}_z\d+-(?:n|s)\d{{2}}(?:w|e)\d{{3}}-[a-z0-9]{{6}})"  # Tile ID
-#         rf"(?:_{date_range})?"  # Optional date range
-#         r"(?:_(?P<band>[a-z0-9]+))?"  # Optional band
-#         r"(?:_10m\.tif)?"  # Optional resolution
-#     )
-
-#     stac_io = DefaultStacIO()  # CoCliCoStacIO()
-#     layout = CoCliCoCOGLayout()
-
-#     collection = create_collection()
-
-#     # fs = fsspec.filesystem("az", **storage_options)
-#     # paths = fs.glob(f"{CONTAINER_URI}/*.tif")
-#     # tiles = group_tif_files_by_tile(paths)
-
-#     storage_pattern = f"{CONTAINER_URI}/*.tif"
-#     storage_options = {"account_name": "coclico", "credential": sas_token}
-#     tiles = group_tif_files_by_tile(storage_pattern, FILENAME_PATTERN, storage_options)
-
-#     print(f"Found {len(tiles)} tiles.")
-
-#     # Use dictionary comprehension to filter tiles with all required bands
-#     tiles = {
-#         tile_id: bands
-#         for tile_id, bands in tiles.items()
-#         if set(required_bands).issubset(set(bands.keys()))
-#     }
-
-#     print(f"Found {len(tiles)} tiles with all required bands.")
-#     for tile_id, band_paths in tiles.items():
-#         ds = load_bands_to_dataset(band_paths, storage_options)
-
-#         # Create a STAC item for the combined dataset
-#         urlpath = f"{CONTAINER_URI}/{tile_id}.tif"
-#         item = create_cog_item(
-#             ds,
-#             urlpath,
-#             storage_options=storage_options,
-#             nodata=NODATA_VALUE,
-#             data_type=DATA_TYPE,
-#             scale_factor=SCALE_FACTOR,
-#             unit=UNIT,
-#         )
-
-#         collection.add_item(item)
-#     collection.update_extent_from_items()
-
-#     items = list(collection.get_all_items())
-#     items_as_json = [i.to_dict() for i in items]
-#     item_extents = stac_geoparquet.to_geodataframe(items_as_json)
-
-#     with fsspec.open(GEOPARQUET_STAC_ITEMS_HREF, mode="wb", **storage_options) as f:
-#         item_extents.to_parquet(f)
-
-#     snapshot_pp = PathParser(
-#         GEOPARQUET_STAC_ITEMS_HREF, account_name=STORAGE_ACCOUNT_NAME
-#     )
-#     with fsspec.open(snapshot_pp.to_cloud_uri(), mode="wb", **storage_options) as f:
-#         item_extents.to_parquet(f)
-
-#     gpq_items_asset = pystac.Asset(
-#         snapshot_pp.to_https_url(),
-#         title="GeoParquet STAC items",
-#         description="Snapshot of the collection's STAC items exported to GeoParquet format.",
-#         media_type=PARQUET_MEDIA_TYPE,
-#         roles=["metadata"],
-#     )
-#     collection.add_asset("geoparquet-stac-items", gpq_items_asset)
-
-#     catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
-
-#     # TODO: there should be a cleaner method to remove the previous stac catalog and its items
-#     try:
-#         if catalog.get_child(collection.id):
-#             catalog.remove_child(collection.id)
-#             print(f"Removed child: {collection.id}.")
-#     except Exception:
-#         pass
-
-#     catalog.add_child(collection)
-
-#     collection.normalize_hrefs(str(STAC_DIR / collection.id), strategy=layout)
-
-#     collection.validate_all()
-
-#     catalog.save(
-#         catalog_type=pystac.CatalogType.SELF_CONTAINED,
-#         dest_href=str(STAC_DIR),
-#         stac_io=stac_io,
-#     )

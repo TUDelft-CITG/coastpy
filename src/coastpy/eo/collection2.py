@@ -9,6 +9,13 @@ import odc.stac
 import pystac
 import xarray as xr
 
+from coastpy.eo.indices import calculate_indices
+from coastpy.eo.mask import (
+    apply_mask,
+    geometry_mask,
+    nodata_mask,
+    numeric_mask,
+)
 from coastpy.eo.utils import data_extent_from_stac_items
 
 # Logger setup
@@ -16,7 +23,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-class BaseCollection(abc.ABC):
+class BaseCollection(abc.ABC):  # noqa: B024
     """
     Base class for managing STAC-based collections.
     Provides core functionality for searching, loading, masking, and processing datasets.
@@ -34,15 +41,21 @@ class BaseCollection(abc.ABC):
         self.stac_cfg = stac_cfg or {}
 
         # Internal state
+        self.region_of_interest: gpd.GeoDataFrame = gpd.GeoDataFrame()
         self.search_params: dict = {}
         self.odc_load_params: dict = {}
-        self.items: list | None = None
+        self.stac_items: list | None = None
         self.dataset: xr.Dataset | None = None
 
         # Masking options
         self.geometry_mask: Any | None = None
         self.nodata_mask: bool = False
         self.value_mask: list[int] | None = None
+
+        # Composite options
+        self.composite_method: str | None = None
+        self.percentile: int | None = None
+        self.custom_composite_func: Callable[[xr.Dataset], xr.Dataset] | None = None
 
     def search(
         self,
@@ -62,19 +75,18 @@ class BaseCollection(abc.ABC):
         Returns:
             BaseCollection: Updated instance with search results.
         """
-        geom = region_of_interest.to_crs(4326).geometry.item()
+        self.region_of_interest = region_of_interest
         self.search_params = {
             "collections": self.collection,
-            "intersects": geom,
+            "intersects": self.region_of_interest.to_crs(4326).geometry.item(),
             "datetime": datetime_range,
             "query": query,
         }
 
-        logger.info(f"Searching with parameters: {self.search_params}")
         search = self.catalog.search(**self.search_params)
-        self.items = list(search.items())
+        self.stac_items = list(search.items())
 
-        if not self.items:
+        if not self.stac_items:
             raise ValueError("No items found for the given search parameters.")
 
         if filter_function:
@@ -88,37 +100,79 @@ class BaseCollection(abc.ABC):
                 msg = f"Error in filter_function: {e}"
                 raise RuntimeError(msg)  # noqa: B904
 
-        logger.info(f"Found {len(self.items)} items.")
-
-        self.data_extent = data_extent_from_stac_items(self.items)
+        self.data_extent = data_extent_from_stac_items(self.stac_items)
 
         return self
 
     def load(
         self,
-        bands: list[str],
-        **kwargs,
-    ) -> xr.Dataset:
+        bands: list[str] | None = None,
+        percentile: int | None = None,
+        spectral_indices: list[str] | None = None,
+        mask_nodata: bool = True,
+        normalize: bool = True,
+        **kwargs: Any,
+    ) -> "BaseCollection":
         """
-        Load data from the STAC items using odc.stac.load.
+        Configure parameters for loading data via odc.stac.load.
 
         Args:
-            bands (list[str]): Bands to load.
-            kwargs: Additional parameters for odc.stac.load.
+            bands (list[str], optional): Bands to load.
+            percentile (int | None, optional): Percentile for compositing (e.g., 50 for median).
+            spectral_indices (list[str] | None, optional): List of spectral indices to compute.
+            mask_nodata (bool, optional): Mask no-data values. Defaults to True.
+            normalize (bool, optional): Normalize data. Defaults to True.
+            **kwargs: Additional parameters passed to odc.stac.load.
+
+        Returns:
+            BaseCollection: Updated instance with load parameters configured.
+        """
+        if percentile is not None and not (0 <= percentile <= 100):
+            raise ValueError("`percentile` must be between 0 and 100.")
+
+        self.odc_load_params.update(kwargs)
+
+        if bands is not None:
+            self.odc_load_params["bands"] = bands
+        if percentile is not None:
+            self.percentile = percentile
+        if spectral_indices is not None:
+            self.spectral_indices = spectral_indices
+        self.mask_nodata = mask_nodata
+        self.normalize = normalize
+
+        return self
+
+    def _load(self) -> xr.Dataset:
+        """
+        Load data using odc.stac.load.
 
         Returns:
             xr.Dataset: Loaded dataset.
         """
-        if not self.items:
-            raise ValueError("No items found. Perform a search first.")
+        if not self.stac_items:
+            raise ValueError("No STAC items found. Perform a search first.")
 
-        self.odc_load_params.update(kwargs)
-        self.dataset = odc.stac.load(
-            self.items,
-            bands=bands,
+        # Adjust groupby for percentile-based compositing
+        if self.percentile:
+            self.odc_load_params["groupby"] = "id"
+
+        # Fallback to bbox if no spatial bounds are provided
+        if (
+            not self.odc_load_params.get("geobox")
+            and not self.odc_load_params.get("bbox")
+            and not self.odc_load_params.get("geopolygon")
+            and not self.odc_load_params.get("like")
+        ):
+            bbox = tuple(self.search_params["intersects"].bounds)
+            self.odc_load_params["bbox"] = bbox
+
+        ds = odc.stac.load(
+            self.stac_items,
             **self.odc_load_params,
         )
-        return self.dataset
+
+        return ds  # type: ignore
 
     def mask(
         self,
@@ -142,30 +196,78 @@ class BaseCollection(abc.ABC):
         self.value_mask = values
         return self
 
-    def _apply_masks(self, ds: xr.Dataset) -> xr.Dataset:
-        """
-        Apply configured masks to the dataset.
-
-        Args:
-            ds (xr.Dataset): Dataset to mask.
-
-        Returns:
-            xr.Dataset: Masked dataset.
-        """
+    def _apply_masks(self, ds: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
+        # Apply pre-load masks
         if self.geometry_mask:
             crs = ds.rio.crs
             if not crs:
-                raise ValueError("Dataset must have a CRS to apply geometry mask.")
-            ds = ds.rio.clip(self.geometry_mask.geometry, crs=crs)
+                msg = "Dataset must have a CRS to apply geometry mask."
+                raise ValueError(msg)
+            geometry = self.geometry_mask.to_crs(crs)
+            ds = geometry_mask(ds, geometry)
+            return ds
 
         if self.nodata_mask:
-            ds = ds.where(ds != ds.attrs.get("nodata", np.nan))
+            mask = nodata_mask(ds)
+            ds = apply_mask(ds, mask)
 
         if self.value_mask:
-            for value in self.value_mask:
-                ds = ds.where(ds != value)
+            mask = numeric_mask(ds, self.value_mask)
+            ds = apply_mask(ds, mask)
 
         return ds
+
+    def composite(
+        self,
+        method: str = "simple",
+        percentile: int = 50,
+        custom_composite_func: Callable[[xr.Dataset], xr.Dataset] | None = None,
+    ) -> "BaseCollection":
+        """
+        Configure composite options.
+
+        Args:
+            method (str): Composite method (simple or custom).
+            percentile (int, optional): Percentile for compositing. Defaults to 50.
+            custom_composite_func (Callable, optional): Custom composite function.
+
+        Returns:
+            BaseCollection: Updated instance with composite options configured.
+        """
+        self.composite_method = method
+        self.percentile = percentile
+        self.custom_composite_func = custom_composite_func
+        return self
+
+    def _default_composite(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Default composite method: median or percentile over the time dimension.
+
+        Args:
+            ds (xr.Dataset): Input dataset.
+
+        Returns:
+            xr.Dataset: Composite dataset.
+        """
+        if self.percentile == 50:
+            return ds.median(dim="time")
+        else:
+            return ds.reduce(np.percentile, q=self.percentile, dim="time")
+
+    def _apply_composite(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Apply the configured composite method to the dataset.
+
+        Args:
+            ds (xr.Dataset): Input dataset.
+
+        Returns:
+            xr.Dataset: Composite dataset.
+        """
+        if self.custom_composite_func:
+            return self.custom_composite_func(ds)
+        else:
+            return self._default_composite(ds)
 
     def add_spectral_indices(self, indices: list[str]) -> "BaseCollection":
         """
@@ -177,9 +279,7 @@ class BaseCollection(abc.ABC):
         Returns:
             BaseCollection: Updated instance with computed indices.
         """
-        if self.dataset is None:
-            raise ValueError("Dataset not loaded. Perform `load` first.")
-        self.dataset = self._compute_spectral_indices(self.dataset, indices)
+        self.spectral_indices = indices
         return self
 
     def _compute_spectral_indices(
@@ -211,24 +311,44 @@ class BaseCollection(abc.ABC):
         Returns:
             xr.Dataset: Processed dataset.
         """
-        if self.dataset is None:
-            raise ValueError("Dataset not loaded. Perform `load` first.")
+        if self.stac_items is None:
+            search = self.catalog.search(**self.search_params)
+            self.stac_items = list(search.items())
 
-        self.dataset = self._apply_masks(self.dataset)
+        if self.dataset is None:
+            self.dataset = self._load()
+
+        if self.geometry_mask or self.nodata_mask or self.value_mask:
+            self.dataset = self._apply_masks(self.dataset)
+
+        if self.composite_method:
+            if self.composite_method == "simple":
+                self.dataset = self._simple_composite(self.dataset)
+            elif self.composite_method == "grouped" and self.percentile:
+                self.dataset = self._grouped_composite(self.dataset, self.percentile)
+            else:
+                raise ValueError(
+                    f"Unsupported composite method: {self.composite_method}"
+                )
+
+        if self.spectral_indices:
+            if isinstance(self.dataset, xr.DataArray):
+                try:
+                    ds = self.dataset.to_dataset("band")
+                    self.dataset = ds
+                except Exception as e:
+                    msg = "Cannot convert DataArray to Dataset: {e}"
+                    raise ValueError(msg) from e
+                msg = "Spectral indices not implemented for DataArray."
+                raise NotImplementedError(msg)
+
+            self.dataset = calculate_indices(
+                self.dataset, self.spectral_indices, normalize=False
+            )
 
         if compute:
             self.dataset = self.dataset.compute()
 
-        return self._post_process(self.dataset)
+        return self.dataset
 
-    @abc.abstractmethod
-    def _post_process(self, ds: xr.Dataset) -> xr.Dataset:
-        """
-        Abstract method for custom post-processing. Must be implemented by subclasses.
-
-        Args:
-            ds (xr.Dataset): Loaded dataset.
-
-        Returns:
-            xr.Dataset: Processed dataset.
-        """
+        return self.dataset
