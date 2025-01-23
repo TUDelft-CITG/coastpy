@@ -103,3 +103,26 @@ class ParquetLayout(BestPracticesLayoutStrategy):
 
         # Join the parent directory, items directory, and filename to form the full item href
         return join_path_or_url(join_type, parent_dir, items_dir, filename)
+
+
+class COGLayout(BestPracticesLayoutStrategy):
+    """
+    Custom layout for CoGs, based on the CoCliCo STAC collections with COGs.
+    """
+
+    def get_item_href(self, item: Item, parent_dir: str) -> str:
+        """
+        Determines the item href based on the custom layout for CoGs.
+
+        Args:
+            item (Item): The STAC item.
+            parent_dir (str): The parent directory path.
+
+        Returns:
+            str: The constructed item href.
+        """
+        parsed_parent_dir = safe_urlparse(parent_dir)
+        join_type = JoinType.from_parsed_uri(parsed_parent_dir)
+        items_dir = "items"
+        custom_id = pathlib.Path(item.id).with_suffix(".json")
+        return join_path_or_url(join_type, parent_dir, items_dir, str(custom_id))

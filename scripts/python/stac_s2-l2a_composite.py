@@ -11,10 +11,12 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import dask.bag as db
 import fsspec
 import pandas as pd
 import pystac
 import pystac.media_type
+import stac_geoparquet
 import xarray as xr
 from dask import delayed
 from dask.distributed import Client
@@ -22,10 +24,13 @@ from pystac import Collection, Item, Provider, ProviderRole
 from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.extensions.scientific import ScientificExtension
 from pystac.extensions.version import VersionExtension
+from pystac.stac_io import DefaultStacIO
 
+from coastpy.io.utils import PathParser
 from coastpy.stac.item import (
     create_cog_item,
 )
+from coastpy.stac.layouts import COGLayout
 from coastpy.utils.dask_utils import summarize_dask_cluster
 
 # Load the environment variables from the .env file
@@ -36,7 +41,7 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 VERSION = "2025-01-17"
 CONTAINER_NAME = "tmp"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/s2-l2a-composite/release/{VERSION}"
-STAC_ITEM_CONTAINER = f"az://tmp/stac/{CONTAINER_NAME}/items"
+STAC_ITEM_CONTAINER = f"az://tmp/stac/{CONTAINER_URI.replace('az://', '')}/items"
 DATETIME_RANGE = "2023-01-01/2024-01-01"
 BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
 REQUIRED_BANDS = [b for b in BANDS if b != "SCL"]
@@ -253,6 +258,35 @@ def group_tif_files_by_tile(
     return tiles
 
 
+def update_attributes(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Update attribute names in the dataset and its variables by replacing the first underscore
+    with a semicolon for attributes starting with 'eo_' or 'composite_'.
+
+    Args:
+        ds (xr.Dataset): Input dataset.
+
+    Returns:
+        xr.Dataset: Dataset with updated attribute names.
+    """
+    # Update global attributes
+    attrs_copy = ds.attrs.copy()
+    for attr in attrs_copy:
+        if attr.startswith(("eo_", "composite_")):
+            new_attr = attr.replace("_", ":", 1)
+            ds.attrs[new_attr] = ds.attrs.pop(attr)
+
+    # Update variable-specific attributes
+    for var in ds.data_vars:
+        var_attrs_copy = ds[var].attrs.copy()
+        for attr in var_attrs_copy:
+            if attr.startswith(("eo_", "composite_")):
+                new_attr = attr.replace("_", ":", 1)
+                ds[var].attrs[new_attr] = ds[var].attrs.pop(attr)
+
+    return ds
+
+
 def load_bands_to_dataset(
     band_paths: dict[str, str],
     storage_options: dict,
@@ -308,10 +342,8 @@ def load_bands_to_dataset(
 
     del combined_dataset.attrs["band_name"]
 
-    for attr in list(combined_dataset.attrs):
-        if attr.startswith(("eo_", "composite_")):
-            new_attr = attr.replace("_", ":", 1)
-            combined_dataset.attrs[new_attr] = combined_dataset.attrs.pop(attr)
+    # Replaces underscores in attribute names with colons to comply with STAC
+    combined_dataset = update_attributes(combined_dataset)
 
     return combined_dataset
 
@@ -352,6 +384,12 @@ def write_stac_item_to_storage(item: Item, storage_options: dict) -> str | None:
         return None
 
 
+def read_stac_item_from_storage(file: str, filesystem) -> Item:
+    with filesystem.open(file) as f:
+        item_dict = json.load(f)
+    return Item.from_dict(item_dict)
+
+
 def filter_existing_tiles(
     tiles: dict[str, dict], storage_options: dict
 ) -> dict[str, dict]:
@@ -366,10 +404,10 @@ def filter_existing_tiles(
     }
 
 
-def main():
+def create_stac_items():
     """Main function for creating STAC items."""
     # Initialize Dask client
-    client = Client()
+    client = Client(n_workers=1, threads_per_worker=1)
     summarize_dask_cluster(client)
 
     # List and filter tiles
@@ -388,11 +426,18 @@ def main():
     tiles = filter_existing_tiles(tiles, storage_options)
     print(f"Processing {len(tiles)} new tiles.")
 
+    stac_id_pattern = r"(?P<stac_id>\d{2}[A-Za-z]{3}_z\d+-(?:n|s)\d{2}(?:w|e)\d{3}-[a-z0-9]{6}_\d{8}_\d{8})"
+
     # Create tasks
     tasks = []
-    for tile_id, band_paths in tiles.items():
+    for _, band_paths in tiles.items():
         ds = load_bands_to_dataset_delayed(band_paths, storage_options)
-        urlpath = f"{CONTAINER_URI}/{tile_id}.tif"
+        first_href = band_paths[next(iter(band_paths.keys()))]
+        match = re.search(stac_id_pattern, first_href)
+        if not match:
+            raise ValueError(f"Could not extract STAC ID from URL: {first_href}")
+        stac_id = match.group("stac_id")
+        urlpath = f"{CONTAINER_URI}/{stac_id}.tif"
         item = create_stac_item_delayed(ds, urlpath)
         task = write_stac_item_to_storage(item, storage_options)
         tasks.append(task)
@@ -404,6 +449,93 @@ def main():
         print(f"Error processing STAC items: {results}")
 
     print(f"Completed processing {len(results)} STAC items.")  # type: ignore
+
+    client.close()
+
+
+def create_collection_with_items():
+    client = Client()
+    summarize_dask_cluster(client)
+
+    fs = fsspec.filesystem("az", **storage_options)
+    files = list(fs.glob(f"{STAC_ITEM_CONTAINER}/*.json"))
+
+    # Create a Dask bag from the list of files
+    bag = db.from_sequence(files, npartitions=10)
+
+    # Map the read_stac_item_from_storage function over the bag
+    items_bag = bag.map(lambda file: read_stac_item_from_storage(file, fs))
+
+    def validate(item):
+        if not isinstance(item, Item):
+            raise ValueError(f"Item is not a Pystac.Item: {item}")
+        if not item.validate():
+            raise ValueError(f"Invalid item: {item}")
+        return item
+
+    items_bag = items_bag.map(validate)
+
+    # Compute the bag to get the list of pystac.Item objects
+    items = client.compute(items_bag, sync=True, retries=3)
+
+    stac_io = DefaultStacIO()  # CoCliCoStacIO()
+    layout = COGLayout()
+
+    collection = create_collection()
+
+    for item in items:
+        collection.add_item(item)
+
+    collection.update_extent_from_items()
+
+    items = list(collection.get_all_items())
+    items_as_json = [i.to_dict() for i in items]
+    item_extents = stac_geoparquet.to_geodataframe(items_as_json)
+
+    with fsspec.open(GEOPARQUET_STAC_ITEMS_HREF, mode="wb", **storage_options) as f:
+        item_extents.to_parquet(f)
+
+    snapshot_pp = PathParser(
+        GEOPARQUET_STAC_ITEMS_HREF, account_name=storage_options["account_name"]
+    )
+    with fsspec.open(snapshot_pp.to_cloud_uri(), mode="wb", **storage_options) as f:
+        item_extents.to_parquet(f)
+
+    gpq_items_asset = pystac.Asset(
+        snapshot_pp.to_https_url(),
+        title="GeoParquet STAC items",
+        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
+        media_type=PARQUET_MEDIA_TYPE,
+        roles=["metadata"],
+    )
+    collection.add_asset("geoparquet-stac-items", gpq_items_asset)
+
+    catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
+
+    # TODO: there should be a cleaner method to remove the previous stac catalog and its items
+    try:
+        if catalog.get_child(collection.id):
+            catalog.remove_child(collection.id)
+            print(f"Removed child: {collection.id}.")
+    except Exception:
+        pass
+
+    catalog.add_child(collection)
+
+    collection.normalize_hrefs(str(STAC_DIR / collection.id), strategy=layout)
+
+    collection.validate_all()
+
+    catalog.save(
+        catalog_type=pystac.CatalogType.SELF_CONTAINED,
+        dest_href=str(STAC_DIR),
+        stac_io=stac_io,
+    )
+
+
+def main():
+    create_stac_items()
+    # create_collection_with_items()
 
 
 if __name__ == "__main__":
