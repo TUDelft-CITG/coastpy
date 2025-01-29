@@ -1,4 +1,3 @@
-import logging
 import math
 import warnings
 from typing import Literal
@@ -433,7 +432,7 @@ def get_rotation_angle(
     target_axis: Literal[
         "closest", "vertical", "horizontal", "horizontal-right-aligned"
     ] = "closest",
-) -> float | None:
+) -> float:
     """
     Computes the correct rotation angle to align with a specified axis.
 
@@ -453,10 +452,7 @@ def get_rotation_angle(
     x1, y1 = extract_coordinates(pt1)
     x2, y2 = extract_coordinates(pt2)
 
-    angle = get_angle(pt1, pt2)
     bearing = get_planar_bearing(pt1, pt2)
-    logging.info(f"Angle between points: {angle} degrees.")
-    logging.info(f"Bearing between points: {bearing} degrees.")
 
     if x1 == x2 or y1 == y2:
         return 0

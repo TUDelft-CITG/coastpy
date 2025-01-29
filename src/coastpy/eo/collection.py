@@ -303,7 +303,7 @@ class ImageCollection:
             ds = self._add_metadata_from_stac(self.stac_items, ds)
 
         if self.normalize:
-            ds = unscale(ds, scale_factor=10000, variables_to_ignore=["SCL"])
+            ds = unscale(ds, scale_factor=0.0001, variables_to_ignore=["SCL"])
 
         return ds  # type: ignore
 

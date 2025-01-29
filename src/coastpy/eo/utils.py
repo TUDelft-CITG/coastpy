@@ -16,21 +16,15 @@ def data_extent_from_stac_items(
 
     Args:
         items (list[dict]): List of STAC items as dictionaries.
-        group_by (str, optional): Column name for grouping.
-            If None, geometries are grouped by their unique representation.
         dissolve_kwargs (dict, optional): Additional parameters for GeoDataFrame `dissolve`.
 
     Returns:
         gpd.GeoDataFrame: Dissolved GeoDataFrame.
     """
-    if not items:
-        raise ValueError("No items provided.")
-
     items_as_json = [item.to_dict() for item in items]
-
     gdf = stac_geoparquet.to_geodataframe(items_as_json, dtype_backend="pyarrow")
     dissolve_kwargs = dissolve_kwargs or {}
-    return gdf.dissolve(by=gdf.geometry.apply(lambda geom: geom.wkt), **dissolve_kwargs)
+    return gdf[["geometry"]].dissolve(**dissolve_kwargs)
 
 
 def geobox_from_data_extent(

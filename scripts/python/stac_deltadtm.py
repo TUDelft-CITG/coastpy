@@ -7,6 +7,7 @@ from typing import Any
 import fsspec
 import pystac
 import pystac.media_type
+import pystac.utils
 import rasterio
 import shapely
 import stac_geoparquet
@@ -59,7 +60,7 @@ ASSET_EXTRA_FIELDS = {
 # Container and URI configuration
 VERSION = "v1.1"
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
-DATETIME_DATA_CREATED = datetime.datetime(2023, 10, 30, tzinfo=datetime.UTC)
+DATETIME_DATA_CREATED = pystac.utils.now_in_utc()
 CONTAINER_NAME = "deltares-delta-dtm"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{VERSION}"
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"

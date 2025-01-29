@@ -80,6 +80,7 @@ dependencies:
   # Cloud
   - adlfs
   - gcsfs
+  - obstore
 
   # Spatial libraries
   - cartopy

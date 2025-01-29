@@ -160,7 +160,6 @@ class TileLogger:
         # Tile-level update
         if not band:
             self.df.at[tile_id, "status"] = status.value
-
             self.df.at[tile_id, "message"] = message
         # Band-level update
         else:

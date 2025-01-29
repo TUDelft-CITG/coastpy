@@ -1,349 +1,635 @@
-import abc
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Self
 
 import geopandas as gpd
 import numpy as np
+import odc.geo
+import odc.geo.cog
+import odc.geo.geobox
+import odc.geo.geom
 import odc.stac
 import pystac
+import pystac_client
+import pystac_client.errors
+import pystac_client.warnings
+import stac_geoparquet
 import xarray as xr
 
 from coastpy.eo.indices import calculate_indices
 from coastpy.eo.mask import (
+    SceneClassification,
     apply_mask,
     geometry_mask,
+    keep_rio_attrs,
     nodata_mask,
     numeric_mask,
+    scl_mask,
+    set_nodata,
 )
-from coastpy.eo.utils import data_extent_from_stac_items
+from coastpy.eo.utils import data_extent_from_stac_items, geobox_from_data_extent
+from coastpy.stac.utils import read_snapshot
+from coastpy.utils.xarray_utils import scale, unscale
 
-# Logger setup
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-class BaseCollection(abc.ABC):  # noqa: B024
+class BaseCollection:
     """
-    Base class for managing STAC-based collections.
-    Provides core functionality for searching, loading, masking, and processing datasets.
+    Base class for managing STAC-based collections. Supports search, load,
+    masking, compositing, spectral indices, and additional operations.
     """
 
-    def __init__(
-        self,
-        catalog_url: str,
-        collection: str,
-        stac_cfg: dict | None = None,
-    ):
+    default_stac_cfg = {}
+
+    def __init__(self, catalog_url: str, collection: str, stac_cfg: dict | None = None):
         self.catalog_url = catalog_url
         self.collection = collection
-        self.catalog = odc.stac.Client.open(self.catalog_url)
-        self.stac_cfg = stac_cfg or {}
+        self.catalog = pystac_client.Client.open(self.catalog_url)
+        self.stac_cfg = stac_cfg or self.default_stac_cfg
 
-        # Internal state
-        self.region_of_interest: gpd.GeoDataFrame = gpd.GeoDataFrame()
+        # State variables
+        self.roi: gpd.GeoDataFrame = gpd.GeoDataFrame()
         self.search_params: dict = {}
-        self.odc_load_params: dict = {}
-        self.stac_items: list | None = None
+        self.odc_stac_load_params: dict = {}
+        self.items: list | None = None
         self.dataset: xr.Dataset | None = None
+        self.data_extent: dict | None = None
 
-        # Masking options
-        self.geometry_mask: Any | None = None
-        self.nodata_mask: bool = False
-        self.value_mask: list[int] | None = None
+        # Mask and scale settings
+        self.mask_nodata: bool = False
+        self.mask_geometry: Any | None = None
+        self.mask_values: list[int] | None = None
+        self.scale: bool = False
+        self.scale_factor: float | None = None
+        self.add_offset: float | None = None
+        self.scale_vars_to_skip: list[str] | None = None
 
-        # Composite options
+        # Composite settings
         self.composite_method: str | None = None
         self.percentile: int | None = None
         self.custom_composite_func: Callable[[xr.Dataset], xr.Dataset] | None = None
 
+        # Spectral indices
+        self.spectral_indices: list[str] | None = None
+
+        # Hook for custom post-process function
+        self.postprocess_function: Callable[[xr.Dataset], xr.Dataset] | None = None
+
+        # Storage optimization
+        self.storage_scale_factor: int | float | None = None
+        self.storage_add_offset: int | float | None = None
+        self.storage_nodata: int | float | None = None
+        self.storage_squeeze_singleton: bool = False
+        self.storage_scale_vars_to_skip: list[str] | None = None
+
+    # --- Search ---
     def search(
-        self,
-        region_of_interest: gpd.GeoDataFrame,
-        datetime_range: str,
+        self: Self,
+        roi: gpd.GeoDataFrame,
+        date_range: str | None = None,
         query: dict | None = None,
-        filter_function: Callable[[list[pystac.Item]], list[pystac.Item]] | None = None,
-    ) -> "BaseCollection":
+        filter_function: Callable[[list], list] | None = None,
+        use_geoparquet_fallback: bool = True,
+    ) -> Self:
         """
-        Perform a generic STAC search and store the results.
+        Perform a STAC search using either the API or fallback to STAC GeoParquet if necessary.
 
         Args:
-            region_of_interest (gpd.GeoDataFrame): Region of interest.
-            datetime_range (str): Temporal range in 'YYYY-MM-DD/YYYY-MM-DD' format.
-            query (dict, optional): Additional query parameters.
+            roi (gpd.GeoDataFrame): Region of interest for the search.
+            date_range (str, optional): Date range for the search (ISO8601 format). Defaults to None.
+            query (dict, optional): Additional query parameters. Defaults to None.
+            filter_function (Callable, optional): Function to filter the resulting items. Defaults to None.
+            use_geoparquet_fallback (bool): Whether to fallback to STAC GeoParquet if API search fails. Defaults to True.
 
         Returns:
-            BaseCollection: Updated instance with search results.
+            Updated collection instance with search results.
         """
-        self.region_of_interest = region_of_interest
+
+        self.roi = roi
         self.search_params = {
             "collections": self.collection,
-            "intersects": self.region_of_interest.to_crs(4326).geometry.item(),
-            "datetime": datetime_range,
+            "intersects": self.roi.to_crs(4326).geometry.item(),
+            "datetime": date_range,
             "query": query,
         }
 
-        search = self.catalog.search(**self.search_params)
-        self.stac_items = list(search.items())
+        try:
+            # Attempt STAC API search
+            search = self.catalog.search(
+                **{k: v for k, v in self.search_params.items() if v is not None}
+            )
+            self.items = list(search.items())
 
-        if not self.stac_items:
-            raise ValueError("No items found for the given search parameters.")
+            if not self.items:
+                raise ValueError("No items found for the given search parameters.")
 
+        except Exception as e:
+            if not use_geoparquet_fallback:
+                raise RuntimeError(
+                    f"STAC API search failed and fallback is disabled: {e}"
+                ) from e
+
+            # Fallback to GeoParquet
+            self.items = self._fallback_to_stac_geoparquet(roi, date_range)
+
+        # Apply filter function if provided
         if filter_function:
             try:
-                logging.info("Applying custom filter function.")
-                self.stac_items = filter_function(self.stac_items)
-                if not self.stac_items:
+                self.items = filter_function(self.items)
+                if not self.items:
                     raise ValueError("Filter function returned no items.")
-
             except Exception as e:
-                msg = f"Error in filter_function: {e}"
-                raise RuntimeError(msg)  # noqa: B904
+                raise RuntimeError(f"Error in filter_function: {e}") from e
 
-        self.data_extent = data_extent_from_stac_items(self.stac_items)
-
+        # Store data extent
+        self.data_extent = self._compute_data_extent(self.items)
         return self
 
-    def load(
-        self,
-        bands: list[str] | None = None,
-        percentile: int | None = None,
-        spectral_indices: list[str] | None = None,
-        mask_nodata: bool = True,
-        normalize: bool = True,
-        **kwargs: Any,
-    ) -> "BaseCollection":
+    def _fallback_to_stac_geoparquet(
+        self, roi: gpd.GeoDataFrame, date_range: str | None = None
+    ) -> list:
         """
-        Configure parameters for loading data via odc.stac.load.
+        Fallback to STAC GeoParquet for searching items.
 
         Args:
-            bands (list[str], optional): Bands to load.
-            percentile (int | None, optional): Percentile for compositing (e.g., 50 for median).
-            spectral_indices (list[str] | None, optional): List of spectral indices to compute.
-            mask_nodata (bool, optional): Mask no-data values. Defaults to True.
-            normalize (bool, optional): Normalize data. Defaults to True.
-            **kwargs: Additional parameters passed to odc.stac.load.
+            roi (gpd.GeoDataFrame): Region of interest for the search.
+            date_range (str, optional): Date range for filtering. Defaults to None.
 
         Returns:
-            BaseCollection: Updated instance with load parameters configured.
+            list: STAC items that match the region of interest and date range.
         """
-        if percentile is not None and not (0 <= percentile <= 100):
-            raise ValueError("`percentile` must be between 0 and 100.")
+        collection = self.catalog.get_child(self.collection)
+        snapshot = read_snapshot(
+            collection,
+            columns=None,
+            storage_options=None,
+        )
 
-        self.odc_load_params.update(kwargs)
+        # Spatial filter using sjoin
+        snapshot = gpd.sjoin(snapshot, roi[["geometry"]].to_crs(snapshot.crs)).drop(
+            columns="index_right"
+        )
 
-        if bands is not None:
-            self.odc_load_params["bands"] = bands
-        if percentile is not None:
-            self.percentile = percentile
-        if spectral_indices is not None:
-            self.spectral_indices = spectral_indices
-        self.mask_nodata = mask_nodata
-        self.normalize = normalize
+        # Date range filter if provided
+        if date_range:
+            start_date, end_date = date_range.split("/")
+            snapshot = snapshot[
+                (snapshot["datetime"] >= start_date)
+                & (snapshot["datetime"] <= end_date)
+            ]
+
+        if snapshot.empty:
+            raise ValueError("No items found using GeoParquet fallback.")
+
+        return list(stac_geoparquet.to_item_collection(snapshot))
+
+    def _compute_data_extent(self, items: list) -> gpd.GeoDataFrame:
+        """
+        Compute the data extent from STAC items.
+        """
+        return data_extent_from_stac_items(items)
+
+    # --- Load ---
+    def load(
+        self: Self,
+        bands: list[str] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        """
+        Configure loading parameters.
+        """
+
+        resolution = kwargs.pop("resolution", None)
+        crs = kwargs.pop("crs", "utm")
+        geobox = kwargs.pop("geobox", None)
+
+        if geobox is None and resolution:
+            geobox = geobox_from_data_extent(
+                region=self.roi,
+                data_extent=self.data_extent,
+                crs=crs,
+                resolution=resolution,
+            )
+            self.odc_stac_load_params["geobox"] = geobox
+
+        self.odc_stac_load_params.update(kwargs)
+
+        if "stac_cfg" not in self.odc_stac_load_params:
+            self.odc_stac_load_params["stac_cfg"] = self.stac_cfg
+
+        if bands:
+            self.odc_stac_load_params["bands"] = bands
 
         return self
 
     def _load(self) -> xr.Dataset:
         """
-        Load data using odc.stac.load.
-
-        Returns:
-            xr.Dataset: Loaded dataset.
+        Internal: Load data using odc.stac.load.
         """
-        if not self.stac_items:
+
+        if not self.items:
             raise ValueError("No STAC items found. Perform a search first.")
 
-        # Adjust groupby for percentile-based compositing
         if self.percentile:
-            self.odc_load_params["groupby"] = "id"
+            self.odc_stac_load_params["groupby"] = "id"
 
-        # Fallback to bbox if no spatial bounds are provided
-        if (
-            not self.odc_load_params.get("geobox")
-            and not self.odc_load_params.get("bbox")
-            and not self.odc_load_params.get("geopolygon")
-            and not self.odc_load_params.get("like")
+        if not any(
+            k in self.odc_stac_load_params
+            for k in ["geobox", "bbox", "geopolygon", "like"]
         ):
             bbox = tuple(self.search_params["intersects"].bounds)
-            self.odc_load_params["bbox"] = bbox
+            bbox = tuple(self.roi.total_bounds)
+            self.odc_stac_load_params["bbox"] = bbox
 
-        ds = odc.stac.load(
-            self.stac_items,
-            **self.odc_load_params,
-        )
+        ds = odc.stac.load(self.items, **self.odc_stac_load_params)
 
-        return ds  # type: ignore
+        if "time" in ds.dims and ds.sizes["time"] == len(self.items):
+            ds = self._add_metadata_from_stac(self.items, ds)
 
-    def mask(
-        self,
-        geometry: Any | None = None,
-        nodata: bool = True,
-        values: list[int] | None = None,
-    ) -> "BaseCollection":
+        return ds
+
+    @classmethod
+    def _add_metadata_from_stac(
+        cls, items: list[pystac.Item], ds: xr.Dataset
+    ) -> xr.Dataset:
         """
-        Configure masking options.
+        Attach metadata from STAC items to the dataset as coordinates.
+        """
+        if len(items) != ds.sizes["time"]:
+            raise ValueError("Mismatch between STAC items and dataset time dimension.")
+
+        stac_ids = [i.id for i in items]
+        ds = ds.assign_coords({"stac_id": ("time", stac_ids)})
+        return ds
+
+    # --- Masking ---
+    def mask_and_scale(
+        self: Self,
+        mask_geometry: odc.geo.geom.Geometry | None = None,
+        mask_nodata: bool = True,
+        mask_values: list[int] | None = None,
+        scale: bool = False,
+        scale_factor: float | None = None,
+        add_offset: float | None = None,
+        scale_vars_to_skip: list[str] | None = None,
+    ) -> Self:
+        """
+        Applies masking and scaling transformations to an Xarray dataset or data array.
+
+        Masking:
+        - If `mask_geometry` is provided, masks data outside the given geometry.
+        - If `mask_nodata` is True, masks values in `mask_values` (if provided).
+
+        Scaling:
+        - If `scale` is True, applies scaling using `scale_factor` and `add_offset`.
+        - Variables listed in `scale_vars_to_skip` are excluded from scaling.
 
         Args:
-            geometry (Any, optional): Geometry to mask data within.
-            nodata (bool): Whether to apply a nodata mask.
-            values (list[int], optional): Specific values to mask.
+            mask_geometry (odc.geo.geom.Geometry, optional):
+                Geometry to mask the dataset against. If None, no geometric mask is applied.
+            mask_nodata (bool, optional):
+                If True, masks nodata values. Defaults to True.
+            mask_values (list[int], optional):
+                List of values to mask as nodata. Applied if `mask_nodata` is True.
+            scale (bool, optional):
+                If True, applies scaling using `scale_factor` and `add_offset`.
+            scale_factor (float, optional):
+                Factor by which to scale the data. Defaults to None.
+            add_offset (float, optional):
+                Offset to add during scaling. Defaults to None.
+            scale_vars_to_skip (list[str], optional):
+                List of variable names to exclude from scaling. Defaults to None.
 
-        Returns:
-            BaseCollection: Updated instance with masking options configured.
+        Returns BaseCollection with set params:
         """
-        self.geometry_mask = geometry
-        self.nodata_mask = nodata
-        self.value_mask = values
+
+        self.mask_geometry = mask_geometry
+        self.mask_nodata = mask_nodata
+        self.mask_values = mask_values
+        self.scale = scale
+
+        # Scale options
+        self.scale_factor = scale_factor
+        self.add_offset = add_offset
+        self.scale_vars_to_skip = scale_vars_to_skip or []
+
         return self
 
-    def _apply_masks(self, ds: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
+    def _apply_masks_and_scale(self, ds: xr.Dataset) -> xr.Dataset:
         # Apply pre-load masks
-        if self.geometry_mask:
+        if self.mask_geometry:
             crs = ds.rio.crs
             if not crs:
                 msg = "Dataset must have a CRS to apply geometry mask."
                 raise ValueError(msg)
-            geometry = self.geometry_mask.to_crs(crs)
-            ds = geometry_mask(ds, geometry)
-            return ds
 
-        if self.nodata_mask:
+            geometry = self.mask_geometry.to_crs(crs)
+            ds = geometry_mask(ds, geometry)  # type: ignore
+
+        if self.mask_nodata:
             mask = nodata_mask(ds)
-            ds = apply_mask(ds, mask)
+            apply_mask_with_attrs = keep_rio_attrs(
+                exclude_attrs={"nodata": [], "encoding": ["_FillValue"]}
+            )(apply_mask)
+            ds = apply_mask_with_attrs(ds, mask)  # type: ignore
+            ds = set_nodata(ds, np.nan)  # type: ignore
 
-        if self.value_mask:
-            mask = numeric_mask(ds, self.value_mask)
-            ds = apply_mask(ds, mask)
+        if self.mask_values:
+            mask = numeric_mask(ds, self.mask_values)
+            # ds = apply_mask(ds, mask)  # type: ignore
+
+            apply_mask_with_attrs = keep_rio_attrs()(apply_mask)
+            ds = apply_mask_with_attrs(ds, mask)  # type: ignore
+
+        if self.scale:
+            ds = unscale(
+                ds,
+                self.scale_factor,
+                self.add_offset,
+                keep_attrs=True,
+                variables_to_ignore=self.scale_vars_to_skip,
+            )  # type: ignore
 
         return ds
 
+    # --- Compositing ---
     def composite(
-        self,
+        self: Self,
         method: str = "simple",
         percentile: int = 50,
-        custom_composite_func: Callable[[xr.Dataset], xr.Dataset] | None = None,
-    ) -> "BaseCollection":
+        custom_func: Callable[[xr.Dataset], xr.Dataset] | None = None,
+        filter_function: Callable[[list], list] | None = None,
+    ) -> Self:
         """
-        Configure composite options.
-
-        Args:
-            method (str): Composite method (simple or custom).
-            percentile (int, optional): Percentile for compositing. Defaults to 50.
-            custom_composite_func (Callable, optional): Custom composite function.
-
-        Returns:
-            BaseCollection: Updated instance with composite options configured.
+        Configure compositing options.
         """
+        if not (0 <= percentile <= 100):
+            msg = "Percentile must be between 0 and 100."
+            raise ValueError(msg)
+
+        if not self.items:
+            raise ValueError("No STAC items found. Perform a search first.")
+
         self.composite_method = method
         self.percentile = percentile
-        self.custom_composite_func = custom_composite_func
+        self.custom_composite_func = custom_func
+
+        if filter_function:
+            try:
+                self.items = filter_function(self.items)
+
+                if not self.items:
+                    raise ValueError("Filter function returned no items.")
+
+            except Exception as e:
+                msg = f"Error in filter_function: {e}"
+                raise RuntimeError(msg) from e
+
         return self
 
-    def _default_composite(self, ds: xr.Dataset) -> xr.Dataset:
+    @classmethod
+    def _extract_composite_metadata(cls, data: xr.Dataset | xr.DataArray) -> dict:
         """
-        Default composite method: median or percentile over the time dimension.
-
-        Args:
-            ds (xr.Dataset): Input dataset.
-
-        Returns:
-            xr.Dataset: Composite dataset.
+        Extract composite metadata from the dataset.
         """
-        if self.percentile == 50:
-            return ds.median(dim="time")
-        else:
-            return ds.reduce(np.percentile, q=self.percentile, dim="time")
+        datetimes = data.time.to_series().sort_values()
+        start_datetime = datetimes.min().isoformat()
+        end_datetime = datetimes.max().isoformat()
+        avg_interval = datetimes.diff().mean()
+        n_obs = len(datetimes)
+        return {
+            "datetime": start_datetime,
+            "start_datetime": start_datetime,
+            "end_datetime": end_datetime,
+            "eo:cloud_cover": str(int(data["eo:cloud_cover"].mean().item())),
+            "composite:avg_interval": avg_interval,
+            "composite:n_obs": n_obs,
+            "composite:stac_ids": str([str(i) for i in data.stac_id.values]),
+        }
+
+    @classmethod
+    def _simple_composite(
+        cls, ds: xr.DataArray | xr.Dataset
+    ) -> xr.DataArray | xr.Dataset:
+        """
+        Generate a simple median composite dataset.
+        """
+        try:
+            composite = ds.median(dim="time", skipna=True, keep_attrs=True)
+            metadata = cls._extract_composite_metadata(ds)
+
+            # NOTE: we could consider to use the starting point of the datetime range
+            # as the time. That would make it easier to make homogeneous composites
+            # in the next processing step.
+            composite = composite.assign_coords(
+                {
+                    "time": metadata["datetime"],
+                    "start_datetime": metadata["start_datetime"],
+                    "end_datetime": metadata["end_datetime"],
+                }
+            )
+
+            composite.attrs.update(metadata)
+            composite.attrs.update(
+                {
+                    "composite:determination_method": "Simple Median Composite",
+                    "composite:summary": (
+                        "Composite dataset created by taking the median value of each pixel "
+                        "across all time steps."
+                    ),
+                }
+            )
+            return composite
+        except Exception as e:
+            raise RuntimeError(f"Failed to generate simple composite: {e}") from e
 
     def _apply_composite(self, ds: xr.Dataset) -> xr.Dataset:
         """
-        Apply the configured composite method to the dataset.
-
-        Args:
-            ds (xr.Dataset): Input dataset.
-
-        Returns:
-            xr.Dataset: Composite dataset.
+        Internal: Apply the specified composite method.
         """
-        if self.custom_composite_func:
-            return self.custom_composite_func(ds)
-        else:
-            return self._default_composite(ds)
+        composite_map = {
+            "simple": self._simple_composite,
+            "percentile": lambda ds: ds.reduce(
+                np.percentile, q=self.percentile, dim="time"
+            ),
+            "custom": self.custom_composite_func,
+        }
+        if (
+            self.composite_method not in composite_map
+            or not composite_map[self.composite_method]
+        ):
+            raise ValueError(f"Unsupported composite method: {self.composite_method}")
+        return composite_map[self.composite_method](ds)
 
-    def add_spectral_indices(self, indices: list[str]) -> "BaseCollection":
+    # --- Spectral Indices ---
+    def add_spectral_indices(self: Self, indices: list[str]) -> Self:
         """
-        Add spectral indices to the dataset.
-
-        Args:
-            indices (list[str]): List of spectral indices to compute.
-
-        Returns:
-            BaseCollection: Updated instance with computed indices.
+        Add spectral indices to compute.
         """
         self.spectral_indices = indices
         return self
 
-    def _compute_spectral_indices(
-        self, ds: xr.Dataset, indices: list[str]
-    ) -> xr.Dataset:
+    @classmethod
+    def _compute_spectral_indices(cls, ds: xr.Dataset, spectral_indices) -> xr.Dataset:
         """
-        Compute spectral indices for the dataset.
-
-        Args:
-            ds (xr.Dataset): Input dataset.
-            indices (list[str]): List of spectral indices to compute.
-
-        Returns:
-            xr.Dataset: Dataset with spectral indices added.
+        Internal: Compute spectral indices.
         """
-        for index in indices:
-            # Example implementation for NDVI; extend as needed
-            if index == "NDVI" and {"nir", "red"}.issubset(ds.data_vars):
-                ds[index] = (ds["nir"] - ds["red"]) / (ds["nir"] + ds["red"])
+        if isinstance(ds, xr.DataArray):
+            try:
+                ds = ds.to_dataset("band")
+            except Exception as e:
+                msg = "Cannot convert DataArray to Dataset: {e}"
+                raise ValueError(msg) from e
+
+        calculate_indices_with_attrs = keep_rio_attrs()(calculate_indices)
+        ds = calculate_indices_with_attrs(ds, spectral_indices, normalize=False)
+
         return ds
 
-    def execute(self, compute: bool = False) -> xr.Dataset:
+    def postprocess(self: Self, function: Callable[[xr.Dataset], xr.Dataset]) -> Self:
         """
-        Execute the workflow: load, apply masks, and compute indices.
+        Set a custom postprocessing function.
 
         Args:
-            compute (bool): Whether to trigger computation for lazy datasets.
+            function (Callable[[xr.Dataset], xr.Dataset]): A function to postprocess the dataset.
 
         Returns:
-            xr.Dataset: Processed dataset.
+            BaseCollection: The updated instance with the postprocessing function set.
         """
-        if self.stac_items is None:
-            search = self.catalog.search(**self.search_params)
-            self.stac_items = list(search.items())
+        self.postprocess_function = function
+        return self
 
-        if self.dataset is None:
-            self.dataset = self._load()
+    @classmethod
+    def _postprocess(
+        cls, ds: xr.Dataset, function: Callable[[xr.Dataset], xr.Dataset]
+    ) -> xr.Dataset:
+        """
+        Apply the custom postprocessing function to the dataset.
 
-        if self.geometry_mask or self.nodata_mask or self.value_mask:
-            self.dataset = self._apply_masks(self.dataset)
+        Args:
+            ds (xr.Dataset): The dataset to be processed.
+            function (Callable[[xr.Dataset], xr.Dataset]): The postprocessing function.
+
+        Returns:
+            xr.Dataset: The processed dataset.
+        """
+        try:
+            return function(ds)
+        except Exception as e:
+            raise RuntimeError(f"Postprocessing function failed: {e}") from e
+
+    def optimize_for_storage(
+        self: Self,
+        scale_factor: int | float | None = None,
+        add_offset: int | float | None = None,
+        nodata: int | float | None = None,
+        squeeze_singleton: bool = False,
+        scale_vars_to_skip: list[str] | None = None,
+    ) -> Self:
+        """
+        Configure storage optimization options for the dataset.
+
+        Args:
+            scale_factor (int | float | None): Scale factor for storage optimization.
+            add_offset (int | float | None): Add offset for storage optimization.
+            nodata (int | float | None): Nodata value for storage optimization.
+            squeeze_singleton (bool): Whether to remove singleton dimensions.
+            scale_vars_to_skip (list[str] | None): Variables to ignore when scaling.
+
+        Returns:
+            BaseCollection: The updated collection instance.
+        """
+        if (scale_factor or add_offset) and nodata is None:
+            raise ValueError("Nodata value must be provided when scaling data.")
+
+        self.storage_scale_factor = scale_factor
+        self.storage_add_offset = add_offset
+        self.storage_nodata = nodata
+        self.storage_squeeze_singleton = squeeze_singleton
+        self.storage_scale_vars_to_skip = scale_vars_to_skip
+        return self
+
+    @classmethod
+    def _optimize_for_storage(
+        cls,
+        ds: xr.Dataset,
+        scale_factor: int | float | None = None,
+        add_offset: int | float | None = None,
+        nodata: int | float | None = None,
+        squeeze_singleton: bool = False,
+        scale_vars_to_skip: list[str] | None = None,
+    ) -> xr.Dataset:
+        """
+        Optimize the dataset for storage by applying scaling and removing singleton dimensions.
+
+        Args:
+            ds (xr.Dataset): Input dataset to optimize.
+            scale_factor (int | float | None): Scale factor for storage optimization.
+            add_offset (int | float | None): Add offset for storage optimization.
+            nodata (int | float | None): Nodata value for storage optimization.
+            squeeze_singleton (bool): Whether to remove singleton dimensions.
+            scale_vars_to_skip (list[str] | None): Variables to ignore when scaling.
+
+        Returns:
+            xr.Dataset: Optimized dataset.
+        """
+        # Squeeze singleton dimensions if requested
+        if squeeze_singleton:
+            ds = ds.squeeze(drop=True)  # Drop singleton dimensions explicitly
+
+        # Apply scaling if parameters are provided
+        if scale_factor is not None:
+            if nodata is None:
+                raise ValueError("Nodata value must be provided when scaling data.")
+
+            scale_vars_to_skip = scale_vars_to_skip or []
+
+            ds = scale(
+                ds,
+                scale_factor=scale_factor,
+                add_offset=add_offset,
+                nodata=nodata,
+                keep_attrs=True,
+                scale_vars_to_skip=scale_vars_to_skip,
+            )  # type: ignore
+
+        # Return the optimized dataset
+        return ds
+
+    # --- Execution ---
+    def execute(self, compute: bool = False) -> xr.Dataset:
+        """
+        Execute the workflow: load, mask, composite, and compute indices.
+        """
+        if not self.items:
+            self.search(self.roi, self.search_params.get("datetime", ""))
+
+        self.dataset = self._load()
+
+        if any([self.mask_geometry, self.mask_nodata, self.mask_values]):
+            self.dataset = self._apply_masks_and_scale(self.dataset)
 
         if self.composite_method:
-            if self.composite_method == "simple":
-                self.dataset = self._simple_composite(self.dataset)
-            elif self.composite_method == "grouped" and self.percentile:
-                self.dataset = self._grouped_composite(self.dataset, self.percentile)
-            else:
-                raise ValueError(
-                    f"Unsupported composite method: {self.composite_method}"
-                )
+            self.dataset = self._apply_composite(self.dataset)
 
         if self.spectral_indices:
-            if isinstance(self.dataset, xr.DataArray):
-                try:
-                    ds = self.dataset.to_dataset("band")
-                    self.dataset = ds
-                except Exception as e:
-                    msg = "Cannot convert DataArray to Dataset: {e}"
-                    raise ValueError(msg) from e
-                msg = "Spectral indices not implemented for DataArray."
-                raise NotImplementedError(msg)
+            self.dataset = self._compute_spectral_indices(
+                self.dataset, self.spectral_indices
+            )
 
-            self.dataset = calculate_indices(
-                self.dataset, self.spectral_indices, normalize=False
+        if self.postprocess_function:
+            self.dataset = self._postprocess(self.dataset, self.postprocess_function)
+
+        if self.storage_scale_factor or self.storage_squeeze_singleton:
+            self.dataset = self._optimize_for_storage(
+                ds=self.dataset,
+                scale_factor=self.storage_scale_factor,
+                add_offset=self.storage_add_offset,
+                nodata=self.storage_nodata,
+                squeeze_singleton=self.storage_squeeze_singleton,
+                scale_vars_to_skip=self.storage_scale_vars_to_skip,
             )
 
         if compute:
@@ -351,4 +637,289 @@ class BaseCollection(abc.ABC):  # noqa: B024
 
         return self.dataset
 
-        return self.dataset
+
+class S2Collection(BaseCollection):
+    """
+    A class to manage Sentinel-2 collections from the Planetary Computer catalog.
+    """
+
+    default_stac_cfg = {
+        "sentinel-2-l2a": {
+            "assets": {
+                "*": {"data_type": "float32", "nodata": np.nan},
+                "SCL": {"data_type": "float32", "nodata": np.nan},
+                "visual": {"data_type": None, "nodata": np.nan},
+            },
+        },
+        "*": {"warnings": "ignore"},
+    }
+
+    def __init__(
+        self,
+        catalog_url: str = "https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection: str = "sentinel-2-l2a",
+        stac_cfg: dict | None = None,
+    ):
+        stac_cfg = stac_cfg or self.default_stac_cfg
+        super().__init__(catalog_url, collection, stac_cfg)
+
+    @classmethod
+    def _add_metadata_from_stac(
+        cls, items: list[pystac.Item], ds: xr.Dataset
+    ) -> xr.Dataset:
+        """
+        Attach metadata from STAC items to the dataset as coordinates.
+        """
+        if len(items) != ds.sizes["time"]:
+            raise ValueError("Mismatch between STAC items and dataset time dimension.")
+
+        mgrs_tiles = [i.properties["s2:mgrs_tile"] for i in items]
+        cloud_cover = [i.properties["eo:cloud_cover"] for i in items]
+        rel_orbits = [i.properties["sat:relative_orbit"] for i in items]
+        stac_ids = [i.id for i in items]
+
+        ds = ds.assign_coords({"stac_id": ("time", stac_ids)})
+        ds = ds.assign_coords({"s2:mgrs_tile": ("time", mgrs_tiles)})
+        ds = ds.assign_coords({"eo:cloud_cover": ("time", cloud_cover)})
+        ds = ds.assign_coords({"sat:relative_orbit": ("time", rel_orbits)})
+        return ds
+
+    # --- Masking ---
+    def mask_and_scale(
+        self: Self,
+        mask_geometry: odc.geo.geom.Geometry | None = None,
+        mask_nodata: bool = True,
+        mask_values: list[int] | None = None,
+        scale: bool = False,
+        scale_factor: float | None = None,
+        add_offset: float | None = None,
+        scale_vars_to_skip: list[str] | None = None,
+        mask_scl: list[str | SceneClassification | int] | None = None,
+    ) -> Self:
+        """
+        Applies masking and scaling transformations to a Sentinel-2 dataset.
+
+        Masking:
+        - If `mask_geometry` is provided, masks data outside the given geometry.
+        - If `mask_nodata` is True, masks values in `mask_values` (if provided).
+        - If `mask_scl` is provided, masks specific Sentinel-2 Scene Classification Layer (SCL) values.
+
+        Scaling:
+        - If `scale` is True, applies scaling using `scale_factor` and `add_offset`.
+        - Variables listed in `scale_vars_to_skip` are excluded from scaling.
+
+        Args:
+            mask_geometry (odc.geo.geom.Geometry, optional):
+                Geometry to mask the dataset against. If None, no geometric mask is applied.
+            mask_nodata (bool, optional):
+                If True, masks nodata values. Defaults to True.
+            mask_values (list[int], optional):
+                List of values to mask as nodata. Applied if `mask_nodata` is True.
+            scale (bool, optional):
+                If True, applies scaling transformations.
+            scale_factor (float, optional):
+                Factor by which to scale the data. Defaults to None.
+            add_offset (float, optional):
+                Offset to add during scaling. Defaults to None.
+            scale_vars_to_skip (list[str], optional):
+                List of variable names to exclude from scaling. Defaults to None.
+            mask_scl (list[str | SceneClassification | int], optional):
+                List of Sentinel-2 Scene Classification Layer (SCL) class names or numeric values to mask. Defaults to None.
+
+        Returns:
+            S2Collection: The updated instance with masking and scaling applied.
+
+        Valid SCL classes:
+            - NO_DATA
+            - SATURATED_DEFECTIVE
+            - DARK_AREA_PIXELS
+            - CLOUD_SHADOWS
+            - VEGETATION
+            - BARE_SOILS
+            - WATER
+            - CLOUDS_LOW_PROBABILITY
+            - CLOUDS_MEDIUM_PROBABILITY
+            - CLOUDS_HIGH_PROBABILITY
+            - CIRRUS
+            - SNOW_ICE
+        """
+        super().mask_and_scale(
+            mask_geometry=mask_geometry,
+            mask_nodata=mask_nodata,
+            mask_values=mask_values,
+            scale=scale,
+            scale_factor=scale_factor,
+            add_offset=add_offset,
+            scale_vars_to_skip=scale_vars_to_skip,
+        )
+        self.mask_scl = mask_scl
+        return self
+
+    def _apply_masks_and_scale(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Apply masks to the dataset.
+        """
+        ds = super()._apply_masks_and_scale(ds)
+
+        if self.mask_scl:
+            # NOTE/BUG: it is possible that the mask will upgrade the data type to float32 and with
+            # that the nodata value will be changed to np.nan, while the rio attribute will remain the same.
+            # This is for now not an issue, but is noted here because it might eventually happen with a very
+            # specific use case. Then the fix would be to use the keep_rio_attrs decorator with the right args.
+            mask = scl_mask(ds, self.mask_scl)
+            ds = apply_mask(ds, mask)  # type: ignore
+
+        return ds
+
+
+class S2CompositeCollection(BaseCollection):
+    """
+    A class to manage Sentinel-2 composite collections from a STAC-based catalog.
+    """
+
+    default_stac_cfg = {
+        "*": {"warnings": "ignore"},
+    }
+
+    def __init__(
+        self,
+        catalog_url: str = "https://coclico.blob.core.windows.net/stac/v1/catalog.json",
+        collection: str = "s2-l2a-composite",
+        stac_cfg: dict | None = None,
+    ):
+        """
+        Initialize the S2CompositeCollection.
+
+        Args:
+            catalog_url (str): URL to the STAC catalog.
+            collection (str): Name of the collection in the catalog.
+            stac_cfg (dict, optional): Configuration for STAC handling. Defaults to None.
+        """
+        super().__init__(catalog_url, collection, stac_cfg)
+        self.percentile = None  # Disable percentile compositing for this collection.
+        self.composite_method = None  # Disable composite method for this collection.
+        self.merge = None
+
+    # --- Merge
+    def merge_overlapping_tiles(self: Self, merge=True) -> Self:
+        self.merge = merge
+        return self
+
+    def _merge_overlapping_tiles(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Merge overlapping tiles in the dataset.
+        """
+
+        def _median(ds, mask):
+            return ds.where(~mask).median("time", skipna=True, keep_attrs=True)
+
+        if not self.merge:
+            return ds
+
+        mask = nodata_mask(ds)
+
+        apply_median_with_attrs = keep_rio_attrs(
+            exclude_attrs={"nodata": [], "encoding": ["_FillValue"]}
+        )(_median)
+        ds = apply_median_with_attrs(ds, mask)  # type: ignore
+        ds = set_nodata(ds, np.nan)  # type: ignore
+
+        return ds
+
+    # --- Execute ---
+    def execute(self, compute=False) -> xr.Dataset:
+        """
+        Apply masks to the dataset.
+        """
+        ds = super().execute(compute=compute)
+
+        if self.merge:
+            ds = self._merge_overlapping_tiles(ds)
+
+        return ds
+
+
+class DeltaDTMCollection(BaseCollection):
+    """
+    A class to manage DeltaDTM from a STAC-based catalog.
+    """
+
+    default_stac_cfg = {
+        "*": {"warnings": "ignore"},
+    }
+
+    def __init__(
+        self,
+        catalog_url: str = "https://coclico.blob.core.windows.net/stac/v1/catalog.json",
+        collection: str = "deltares-delta-dtm",
+        stac_cfg: dict | None = None,
+    ):
+        """
+        Initialize the S2CompositeCollection.
+
+        Args:
+            catalog_url (str): URL to the STAC catalog.
+            collection (str): Name of the collection in the catalog.
+            stac_cfg (dict, optional): Configuration for STAC handling. Defaults to None.
+        """
+        super().__init__(catalog_url, collection, stac_cfg)
+        self.percentile = None  # Disable percentile compositing for this collection.
+        self.composite_method = None  # Disable composite method for this collection.
+        self.merge = None
+
+    @staticmethod
+    def postprocess_deltadtm(ds: xr.Dataset) -> xr.Dataset:
+        # Squeeze time dimension
+        ds = ds.squeeze()
+
+        # Replace nodata with 0 because its a DTM.
+        NEW_NODATA = 0
+        mask = nodata_mask(ds)
+
+        def _replace_nodata_with_zero(ds):
+            return ds.where(~mask, NEW_NODATA)
+
+        apply_replace_nodata_with_zero_with_attrs = keep_rio_attrs(
+            exclude_attrs={"nodata": [], "encoding": ["_FillValue"]}
+        )(_replace_nodata_with_zero)
+
+        ds = apply_replace_nodata_with_zero_with_attrs(ds)  # type: ignore
+        # NOTE: we don't have to set the nodata value because its actually an elevation.
+        # ds = set_nodata(ds, NEW_NODATA)  # type: ignore
+
+        return ds
+
+
+class CopernicusDEMCollection(BaseCollection):
+    """
+    A class to manage CopernicusDEM from a STAC-based catalog.
+    """
+
+    default_stac_cfg = {
+        "*": {"warnings": "ignore"},
+    }
+
+    def __init__(
+        self,
+        catalog_url: str = "https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection: str = "cop-dem-glo-30",
+        stac_cfg: dict | None = None,
+    ):
+        """
+        Initialize the CopernicusDEMCollection.
+
+        Args:
+            catalog_url (str): URL to the STAC catalog.
+            collection (str): Name of the collection in the catalog.
+            stac_cfg (dict, optional): Configuration for STAC handling. Defaults to None.
+        """
+        super().__init__(catalog_url, collection, stac_cfg)
+        self.percentile = None  # Disable percentile compositing for this collection.
+        self.composite_method = None  # Disable composite method for this collection.
+        self.merge = None
+
+    @staticmethod
+    def postprocess_cop_dem30(ds: xr.Dataset) -> xr.Dataset:
+        # Squeeze time dimension
+        ds = ds.squeeze()
+        return ds

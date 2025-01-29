@@ -110,6 +110,7 @@ dependencies:
   - boto3
   - gcsfs
   - google-cloud-storage
+  - obstore
   - s3fs
 
   # Plotting libraries
