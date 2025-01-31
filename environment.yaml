@@ -112,6 +112,7 @@ dependencies:
       - antimeridian
       - coastpy
       - duckdb
+      - 'ibis-framework[duckdb,geospatial]'
       - more-itertools
       - xvec
       - stac-geoparquet # pypi releases are more recent
