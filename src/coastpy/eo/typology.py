@@ -75,6 +75,7 @@ class TypologyCollection:
             "resolution": 10,
             "crs": "utm",
             "mask_nodata": True,
+            "add_metadata_from_stac": False,
             "scale": True,
             "scale_factor": 0.0001,
             "patch_url": lambda url: f"{url}?{self.sas_token}",
@@ -84,12 +85,14 @@ class TypologyCollection:
         self.DELTADTM_DEFAULTS = {
             "dtype": "float32",
             "mask_nodata": True,
+            "add_metadata_from_stac": False,
             "patch_url": lambda url: f"{url}?{self.sas_token}",
             "chunks": {"y": "auto", "x": "auto"},
         }
         self.COP_DEM_DEFAULTS = {
             "dtype": "float32",
             "mask_nodata": True,
+            "add_metadata_from_stac": False,
             "patch_url": pc.sign,
             "chunks": {"y": "auto", "x": "auto"},
         }
@@ -97,7 +100,7 @@ class TypologyCollection:
     def search(
         self,
         roi: gpd.GeoDataFrame,
-        coastal_zone: odc.geo.geom.Geometry,
+        coastal_zone: odc.geo.geom.Geometry | None = None,
         sas_token: str | None = None,
     ) -> "TypologyCollection":
         """
@@ -134,9 +137,9 @@ class TypologyCollection:
         Returns:
             TypologyCollection: Updated instance with loaded data.
         """
-        if self.roi is None or self.coastal_zone is None:
+        if self.roi is None:
             raise ValueError(
-                "Both `roi` and `coastal_zone` must be set via `search()` before loading."
+                "The region of interest (`roi`) must be set via `search()` before loading."
             )
 
         # Merge user-specified configurations with defaults
@@ -200,7 +203,7 @@ class TypologyCollection:
 
         # --- Merge into a Single Dataset ---
         s2_cube["deltadtm"] = delta_dtm["data"]
-        s2_cube["cop30"] = cop_dem["data"]
+        s2_cube["cop_dem_glo_30"] = cop_dem["data"]
         self.dataset = s2_cube
         return self
 

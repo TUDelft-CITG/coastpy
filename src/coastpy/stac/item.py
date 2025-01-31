@@ -6,6 +6,7 @@ import pystac.utils
 import rasterio
 import rasterio.warp
 import xarray as xr
+from pystac.extensions.eo import Band, EOExtension
 from pystac.extensions.projection import ProjectionExtension
 from pystac.extensions.raster import DataType, RasterBand, RasterExtension
 from shapely.geometry import box, mapping
@@ -16,7 +17,7 @@ from coastpy.utils.xarray_utils import get_nodata
 
 def create_cog_item(
     dataset: xr.Dataset | xr.DataArray,
-    urlpath: str,
+    pathlike: str,
     storage_options: dict[str, Any] | None = None,
     nodata: Any = "infer",
     data_type: Any = None,
@@ -49,7 +50,7 @@ def create_cog_item(
     account_name = (
         storage_options.get("account_name", None) if storage_options else None
     )
-    path_parser = PathParser(urlpath, account_name=account_name)
+    path_parser = PathParser(pathlike, account_name=account_name)
     stac_id = path_parser.stac_item_id
 
     # Extract datetime information
@@ -93,7 +94,7 @@ def create_cog_item(
         for var_name, var in dataset.data_vars.items():
             path_parser.band = var_name
             path_parser.resolution = f"{int(var.rio.resolution()[0])}m"
-            urlpath = path_parser.to_https_url()
+            pathlike = path_parser.to_https_url()
 
             # Handle nodata
             var_nodata = nodata if nodata != "infer" else get_nodata(var)
@@ -103,26 +104,49 @@ def create_cog_item(
                 item,
                 var,
                 var_name,
-                urlpath,
+                pathlike,
                 nodata=var_nodata,
                 data_type=data_type,
                 scale_factor=scale_factor,
                 unit=unit,
             )
     else:
-        urlpath = path_parser.to_cloud_uri()
+        pathlike = path_parser.to_cloud_uri()
         var_nodata = nodata if nodata != "infer" else get_nodata(dataset)
         add_cog_asset(
             item,
             dataset,
             None,
-            urlpath,
+            pathlike,
             nodata=var_nodata,
             scale_factor=scale_factor,
             unit=unit,
         )
 
     return item
+
+
+def extract_eo_bands(data: xr.DataArray) -> list[Band]:
+    """
+    Extract EO bands from the 'band' dimension of an xarray DataArray.
+
+    Args:
+        data (xr.DataArray): Input DataArray with a 'band' dimension.
+
+    Returns:
+        List[Band]: List of EO Bands with names and common names.
+    """
+    if "band" not in data.dims:
+        raise ValueError("The input DataArray does not contain a 'band' dimension.")
+
+    if "band" not in data.coords:
+        raise ValueError("The DataArray is missing a 'band' coordinate.")
+
+    band_names = [str(band) for band in data["band"].values]
+
+    return [
+        Band.create(name=band_name, common_name=band_name) for band_name in band_names
+    ]
 
 
 def add_cog_asset(
@@ -140,7 +164,7 @@ def add_cog_asset(
 
     Args:
         item (pystac.Item): The STAC item to which the asset will be added.
-        data (xr.DataArray): The data array representing the band.
+        data (xr.DataArray): The data array representing the band(s).
         var_name (Optional[str]): Name of the variable (band name).
         href (str): HREF for the asset.
         nodata (Any, optional): Nodata value. Use "infer" to extract from data. Defaults to "infer".
@@ -148,52 +172,38 @@ def add_cog_asset(
         unit (str, optional): Unit for the asset. Defaults to None.
 
     Returns:
-        None: The function updates the item in place.
-
-    Raises:
-        ValueError: If required attributes like CRS or resolution are missing.
+        pystac.Item: The updated STAC item with the asset.
     """
-    # Validate CRS
     if not data.rio.crs:
         raise ValueError("CRS information is missing in the data array.")
 
-    # Infer nodata value if needed
     nodata_value = nodata if nodata != "infer" else get_nodata(data)
-    if nodata_value is None:
-        warnings.warn(
-            f"Nodata value is missing for variable '{var_name}'.",
-            UserWarning,
-            stacklevel=2,
-        )
 
     if data_type is None:
         warnings.warn(
-            f"DataType value is missing for variable '{var_name}'.",
-            UserWarning,
-            stacklevel=2,
+            "DataType is missing. Inferring from dataset.", UserWarning, stacklevel=2
         )
         data_type = data.dtype.name
 
-    # Extract spatial resolution
     resolution = abs(data.rio.resolution()[0])  # Assumes square pixels
-
-    # Extract transform, shape, and bounds
     transform = list(data.rio.transform())
     shape = [data.sizes["y"], data.sizes["x"]]
     bbox = data.rio.bounds()
 
-    # Create the asset
     asset = pystac.Asset(
         href=href,
         media_type=pystac.MediaType.COG,
         roles=["data"],
-        title=f"{var_name} Band" if var_name else "Data Asset",
+        title=f"{var_name} band" if var_name else "COG Asset",
     )
-    # Attach the asset to the item
     asset_key = var_name or "data"
     item.add_asset(asset_key, asset)
 
-    # Add Raster extension to the asset
+    proj_ext = ProjectionExtension.ext(asset, add_if_missing=True)
+    proj_ext.shape = shape
+    proj_ext.bbox = bbox
+    proj_ext.transform = transform
+
     raster_ext = RasterExtension.ext(asset, add_if_missing=True)
     raster_ext.bands = [
         RasterBand.create(
@@ -205,10 +215,8 @@ def add_cog_asset(
         )
     ]
 
-    # Add Projection extension to the asset
-    proj_ext = ProjectionExtension.ext(asset, add_if_missing=True)
-    proj_ext.shape = shape
-    proj_ext.bbox = bbox
-    proj_ext.transform = transform
+    if "band" in data.dims:
+        eo_ext = EOExtension.ext(asset, add_if_missing=True)
+        eo_ext.bands = extract_eo_bands(data)
 
     return item

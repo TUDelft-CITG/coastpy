@@ -54,6 +54,7 @@ class BaseCollection:
         self.search_params: dict = {}
         self.odc_stac_load_params: dict = {}
         self.items: list | None = None
+        self.add_metadata_from_stac: bool = True
         self.dataset: xr.Dataset | None = None
         self.data_extent: dict | None = None
 
@@ -195,6 +196,7 @@ class BaseCollection:
     def load(
         self: Self,
         bands: list[str] | None = None,
+        add_metadata_from_stac: bool = True,
         **kwargs: Any,
     ) -> Self:
         """
@@ -222,6 +224,8 @@ class BaseCollection:
         if bands:
             self.odc_stac_load_params["bands"] = bands
 
+        self.add_metadata_from_stac = add_metadata_from_stac
+
         return self
 
     def _load(self) -> xr.Dataset:
@@ -245,7 +249,11 @@ class BaseCollection:
 
         ds = odc.stac.load(self.items, **self.odc_stac_load_params)
 
-        if "time" in ds.dims and ds.sizes["time"] == len(self.items):
+        if (
+            self.add_metadata_from_stac
+            and "time" in ds.dims
+            and ds.sizes["time"] == len(self.items)
+        ):
             ds = self._add_metadata_from_stac(self.items, ds)
 
         return ds
@@ -870,7 +878,10 @@ class DeltaDTMCollection(BaseCollection):
     @staticmethod
     def postprocess_deltadtm(ds: xr.Dataset) -> xr.Dataset:
         # Squeeze time dimension
-        ds = ds.squeeze()
+        ds = ds.squeeze(drop=True)
+
+        # if "stac_id" in ds:
+        #     ds = ds.drop_vars("stac_id")
 
         # Replace nodata with 0 because its a DTM.
         NEW_NODATA = 0
@@ -921,5 +932,7 @@ class CopernicusDEMCollection(BaseCollection):
     @staticmethod
     def postprocess_cop_dem30(ds: xr.Dataset) -> xr.Dataset:
         # Squeeze time dimension
-        ds = ds.squeeze()
+        ds = ds.squeeze(drop=True)
+        # if "stac_id" in ds:
+        #     ds = ds.drop_vars("stac_id")
         return ds

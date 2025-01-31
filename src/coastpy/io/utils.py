@@ -3,6 +3,7 @@ import datetime
 import hashlib
 import logging
 import pathlib
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlsplit
 
@@ -35,211 +36,207 @@ def is_file(urlpath: str | pathlib.Path) -> bool:
 
 @dataclasses.dataclass
 class PathParser:
-    """
-    Parses cloud storage paths into components, supporting multiple protocols.
+    """A robust parser for local file paths, HTTPS URLs, and Azure cloud storage URIs."""
 
-    Attributes:
-        urlpath (str): Full URL or URI to parse.
-        scheme (str): Protocol from the URL (e.g., "https", "az", "gs", "s3").
-        container (str): Storage container, bucket, or top-level directory.
-        prefix (str | None): Path prefix inside the container/bucket.
-        name (str): File name including its extension.
-        suffix (str): File extension (e.g., ".parquet", ".tif").
-        stac_item_id (str): Identifier for STAC, derived from the file name.
-        base_url (str): Base HTTPS URL for accessing the resource.
-        base_uri (str): Base URI for the cloud storage provider.
-        href (str): Full HTTPS URL for accessing the resource.
-        uri (str): Full URI for cloud-specific access.
-        account_name (str | None): Account name for cloud storage (required for Azure).
-        path (str): Full path within the container, excluding the container name.
-    """
+    original_path: str  # Input path (local, HTTPS, or cloud URI)
+    account_name: str = ""  # Required for Azure (az://)
+    band: str = ""  # Band information (e.g., "nir", "green")
+    resolution: str = ""  # Resolution (e.g., "10m", "30m")
 
-    urlpath: str
-    scheme: str = ""
-    container: str = ""
-    path: str = ""
-    name: str = ""
-    suffix: str = ""
-    stac_item_id: str = ""
-    https_url: str = ""
-    cloud_uri: str = ""
-    account_name: str | None = None
-    cloud_protocol: str = ""
-    base_dir: str | pathlib.Path = ""
-    band: str = ""
-    resolution: str = ""
-    _base_https_url: str = ""
-    _base_cloud_uri: str = ""
-
-    SUPPORTED_PROTOCOLS = {"https", "az", "gs", "s3"}
-    DEFAULT_BASE_DIR = pathlib.Path.home() / "data" / "tmp"
+    # Internal attributes for path management
+    _protocol: str = ""  # Internal protocol (file, https, az)
+    _https_netloc: str = ""  # Standardized HTTPS base domain
+    _cloud_netloc: str = ""  # Cloud provider URI prefix (az://)
+    _bucket: str = ""  # Cloud storage bucket/container
+    _key: str = ""  # Path inside the bucket
+    _directory: Path = Path()  # Local parent directory
+    _stem: str = ""  # Base filename (without suffix)
+    _suffix: str = ""  # File extension (e.g., .tif)
 
     def __post_init__(self):
-        if is_file(self.urlpath):
-            self._parse_path()
+        """Automatically parse the given path based on its protocol."""
+        self.protocol = fsspec.utils.get_protocol(self.original_path)  # Triggers setter
+
+    ### **🔹 Protocol Handling**
+    @property
+    def protocol(self) -> str:
+        """Getter for protocol."""
+        return self._protocol
+
+    @protocol.setter
+    def protocol(self, new_protocol: str):
+        """Setter for protocol. Updates attributes dynamically when protocol changes."""
+        self._protocol = new_protocol
+        self._parse_path()  # Re-parse with updated protocol
+
+    ### **🔹 Path Parsing**
+    def _parse_path(self):
+        """Parses the path into components based on protocol."""
+        parsed = urlparse(self.original_path)
+
+        if self.protocol == "file":
+            self._parse_local_path()
+        elif self.protocol in {"https", "az"}:
+            self._parse_azure_path(parsed)
         else:
-            self._parse_url()
+            raise ValueError(f"Unsupported protocol: {self.protocol}")
 
-    def _parse_url(self):
-        parsed = urlparse(self.urlpath)
+    def _parse_local_path(self):
+        """Extracts components for local file paths."""
+        path_obj = Path(self.original_path)
+        self._directory = path_obj.parent
+        self._stem = path_obj.stem  # Extract base name (without extension)
+        self._suffix = path_obj.suffix  # Extract extension
 
-        # Basic parsing
-        self.scheme = parsed.scheme
-        self.name = parsed.path.split("/")[-1]
-        self.suffix = f".{self.name.split('.')[-1]}"
-        self.stac_item_id = self._extract_stac_item_id(self.name)
+        # Reset cloud attributes
+        self._bucket = ""
+        self._key = ""
+        self._cloud_netloc = ""
+        self._https_netloc = ""
 
-        if not self.base_dir:
-            self.base_dir = self.DEFAULT_BASE_DIR
+    def _parse_azure_path(self, parsed):
+        """Extracts components for Azure cloud storage paths."""
+        self._key = parsed.path.lstrip("/")  # Remove leading slash
+        filename = Path(self._key).name
+        self._stem = Path(filename).stem
+        self._suffix = Path(filename).suffix
 
-        # Check for supported protocols
-        if self.scheme not in self.SUPPORTED_PROTOCOLS:
-            msg = f"Unsupported protocol: {self.scheme}"
-            raise ValueError(msg)
+        if self.protocol == "https":
+            # Extract account_name and enforce proper parsing
+            if "blob.core.windows.net" not in parsed.netloc:
+                raise ValueError("Invalid Azure HTTPS URL format.")
 
-        # Protocol-specific parsing
-        if self.scheme == "https":
-            self.container = parsed.path.split("/")[1]
-            self._base_https_url = (
-                self.scheme + "://" + parsed.netloc + "/" + self.container
-            )
-            self.path = "/".join(parsed.path.split("/")[2:])
+            self.account_name = parsed.netloc.split(".")[0]
+            self._bucket, self._key = self._key.split("/", 1)
+            self._cloud_netloc = "az://"
+            self._https_netloc = f"https://{self.account_name}.blob.core.windows.net"
 
-            if "windows" in self._base_https_url:
-                if not self.cloud_protocol:
-                    self.cloud_protocol = "az"
-            elif "google" in self._base_https_url:
-                if not self.cloud_protocol:
-                    self.cloud_protocol = "gs"
-            elif "amazon" in self._base_https_url:  # noqa: SIM102
-                if not self.cloud_protocol:
-                    self.cloud_protocol = "s3"
+        elif self.protocol == "az":
+            # Cloud URI format: az://<bucket>/<key>
+            self._bucket = parsed.netloc
+            self._key = parsed.path.lstrip("/")
+            self._cloud_netloc = "az://"
 
-        elif self.scheme in {"az", "gs", "s3"}:
-            self.path = parsed.path.lstrip("/")  # Remove leading slash
-            self.container = parsed.netloc
-            self.cloud_protocol = self.scheme
-
-            if self.scheme == "az":
-                if not self.account_name:
-                    msg = "For 'az://' URIs, 'account_name' must be provided."
-                    raise ValueError(msg)
-                self._base_https_url = f"https://{self.account_name}.blob.core.windows.net/{self.container}"
-            elif self.scheme == "gs":
-                self._base_https_url = (
-                    f"https://storage.googleapis.com/{self.container}"
+            # Allow account_name to be set later for HTTPS conversion
+            if self.account_name:
+                self._https_netloc = (
+                    f"https://{self.account_name}.blob.core.windows.net"
                 )
-            elif self.scheme == "s3":
-                self._base_https_url = f"https://{self.container}.s3.amazonaws.com"
 
-    def _extract_stac_item_id(self, filename: str) -> str:
-        """
-        Extracts the stac_item_id from a filename, optionally removing a band prefix.
+    ### **🔹 Properties for Path Components**
+    @property
+    def bucket(self) -> str:
+        """Getter for bucket/container name."""
+        return self._bucket
 
-        Args:
-            filename (str): The filename to process.
+    @bucket.setter
+    def bucket(self, new_bucket: str):
+        """Setter for bucket. Ensures attributes remain consistent."""
+        self._bucket = new_bucket
+
+    @property
+    def key(self) -> str:
+        """Returns the directory portion of the key if a filename exists, otherwise returns the full key.
 
         Returns:
-            str: The extracted stac_item_id.
+            str: The directory portion of the key, or the full key if no filename exists.
         """
-        if self.band and filename.startswith(self.band + "_"):
-            return filename[len(self.band) + 1 :]  # Remove band prefix
-        return filename.split(".")[0]  # Default behavio
+        if (
+            self._key and self._stem
+        ):  # Only strip if we have both a directory and a filename
+            return "/".join(self._key.split("/")[:-1]) if "/" in self._key else ""
+        return self._key  # If no filename, return full key
 
-    def _parse_path(self):
-        path = pathlib.Path(self.urlpath)
+    @key.setter
+    def key(self, new_key: str):
+        """Sets the key, ensuring the filename (if present) is stored separately.
 
-        if not self.base_dir:
-            msg = "For local file paths, 'base_dir' must be provided."
-            raise ValueError(msg)
+        Args:
+            new_key (str): The new key path (can be a full path with filename or just a directory).
+        """
+        if "." in Path(new_key).name:  # If it has an extension, treat it as a filename
+            self._key = (
+                "/".join(new_key.split("/")[:-1]) if "/" in new_key else ""
+            )  # Directory portion
+            self._stem = Path(new_key).stem  # Extract filename stem
+            self._suffix = Path(new_key).suffix  # Extract file extension
+        else:
+            self._key = new_key  # Entire key is just a directory
 
-        if not self.cloud_protocol:
-            msg = "For local file paths, 'cloud_protocol' must be provided."
-            raise ValueError(msg)
+    @property
+    def filename(self) -> str:
+        """Dynamically constructs the filename based on band and resolution."""
+        name_parts = [self._stem]
+        if self.band:
+            name_parts.append(self.band)
+        if self.resolution:
+            name_parts.append(self.resolution)
 
-        path = path.relative_to(self.base_dir)
-        parts = path.parts
+        return f"{'_'.join(name_parts)}{self._suffix}"
 
-        if len(parts) < 2:
-            msg = "Local file paths must have at least two components."
-            raise ValueError(msg)
+    @property
+    def https_netloc(self) -> str:
+        """Getter for HTTPS netloc."""
+        return self._https_netloc
 
-        self.container = parts[0]
-        self.path = "/".join(parts[1:])
-        self.name = path.name
-        self.suffix = f".{path.suffix}"
-        self.stac_item_id = self._extract_stac_item_id(path.stem)
+    @property
+    def cloud_netloc(self) -> str:
+        """Getter for Cloud netloc."""
+        return self._cloud_netloc
 
-        if self.cloud_protocol == "az":
-            if not self.account_name:
-                msg = "For 'az://' URIs, 'account_name' must be provided."
-                raise ValueError(msg)
-            self._base_https_url = (
-                f"https://{self.account_name}.blob.core.windows.net/{self.container}"
+    @property
+    def stac_item_id(self) -> str:
+        if self.band and self._stem.startswith(self.band + "_"):
+            return self._stem[len(self.band) + 1 :]
+        return self._stem
+
+    def _update_attributes(self, **kwargs):
+        """Updates multiple attributes dynamically based on provided kwargs."""
+        if "protocol" in kwargs:
+            self.protocol = kwargs["protocol"]
+        if "bucket" in kwargs:
+            self.bucket = kwargs["bucket"]
+        if "key" in kwargs:
+            self.key = kwargs["key"]
+        if "account_name" in kwargs:
+            self.account_name = kwargs["account_name"]
+        if "band" in kwargs:
+            self.band = kwargs["band"]
+        if "resolution" in kwargs:
+            self.resolution = kwargs["resolution"]
+
+    def to_https_url(self, **kwargs) -> str:
+        """Constructs a valid Azure HTTPS URL from cloud components."""
+        self._update_attributes(**kwargs)
+
+        if not self.bucket:
+            raise ValueError("Cannot generate HTTPS URL. Bucket is missing.")
+
+        if not self.account_name:
+            raise ValueError(
+                "Azure requires an `account_name` for HTTPS URLs. "
+                "Provide one via `to_https_url(account_name='...')`"
             )
 
-        elif self.cloud_protocol == "gs":
-            self._base_https_url = f"https://storage.googleapis.com/{self.container}"
+        # Correctly construct the URL, ensuring no extra `/`
+        key_part = f"{self.key}/" if self.key else ""
+        return f"https://{self.account_name}.blob.core.windows.net/{self.bucket}/{key_part}{self.filename}"
 
-        elif self.cloud_protocol == "s3":
-            self._base_https_url = f"https://{self.container}.s3.amazonaws.com"
+    def to_cloud_uri(self, **kwargs) -> str:
+        """Constructs a valid Azure cloud URI."""
+        self._update_attributes(**kwargs)
 
-    def to_filepath(
-        self, base_dir: pathlib.Path | str | None = None, capitalize=False
-    ) -> pathlib.Path:
-        "Convert to local file path."
-        if base_dir is None:
-            base_dir = self.base_dir
+        if not self.bucket:
+            raise ValueError("Cannot generate cloud URI. Bucket is missing.")
 
-        name_parts = [self.name.split(".")[0]]
-        if self.band:
-            name_parts.append(self.band)
-        if self.resolution:
-            name_parts.append(self.resolution)
-        name_with_band_and_res = "_".join(name_parts)
+        # Correctly construct the URI, ensuring no extra `/`
+        key_part = f"{self.key}/" if self.key else ""
+        return f"{self.cloud_netloc}{self.bucket}/{key_part}{self.filename}"
 
-        if capitalize:
-            name_with_band_and_res = name_with_band_and_res.upper()
-
-        name_with_band_and_res += self.suffix
-
-        path_parts = self.path.rsplit("/", 1)
-        path_with_band_and_res = (
-            f"{path_parts[0]}/{name_with_band_and_res}"
-            if len(path_parts) > 1
-            else name_with_band_and_res
-        )
-
-        return pathlib.Path(base_dir) / self.container / path_with_band_and_res
-
-    def _construct_url(self, base_url: str, capitalize: bool = False) -> str:
-        "Construct URL or URI."
-        name_parts = [self.name.split(".")[0]]
-
-        if self.band:
-            name_parts.append(self.band)
-
-        if self.resolution:
-            name_parts.append(self.resolution)
-
-        file_name = "_".join(name_parts)
-
-        if capitalize:
-            file_name = file_name.upper()
-
-        file_name += self.suffix
-
-        return f"{base_url}/{self.path.rsplit('/', 1)[0]}/{file_name}"
-
-    def to_https_url(self, capitalize: bool = False) -> str:
-        "Convert to HTTPS URL."
-        return self._construct_url(self._base_https_url, capitalize=capitalize)
-
-    def to_cloud_uri(self, capitalize=False) -> str:
-        "Convert to cloud storage URI."
-        return self._construct_url(
-            self.cloud_protocol + "://" + self.container, capitalize=capitalize
-        )
+    def to_filepath(self, directory: str | Path = "") -> Path:
+        """Converts to a local file path."""
+        directory = Path(directory) if directory else self._directory
+        return directory / self.filename
 
 
 def extract_datetimes(
@@ -290,7 +287,7 @@ def extract_datetimes(
                 }
             else:
                 return {
-                    "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
+                    "datetime": pd.Timestamp(time_values).to_pydatetime(),
                     "start_datetime": None,
                     "end_datetime": None,
                 }
