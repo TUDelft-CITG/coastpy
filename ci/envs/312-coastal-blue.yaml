@@ -200,6 +200,7 @@ dependencies:
   - pip:
       - antimeridian
       - duckdb  # pypi has more recent releases
+      - 'ibis-framework[duckdb,geospatial]'
       - movingpandas
       - more-itertools
       - networkx
