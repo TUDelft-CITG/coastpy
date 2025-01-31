@@ -85,8 +85,8 @@ dependencies:
   # Spatial libraries
   - cartopy
   - contextily
-  - dask
-  - dask-geopandas
+  - dask <2025.1.0
+  - dask-geopandas <0.4.3
   - dask-jobqueue
   - distributed
   - esda
@@ -114,6 +114,7 @@ dependencies:
       - coastpy
       - duckdb
       - imagecodecs
+      - 'ibis-framework[duckdb,geospatial]'
       - more-itertools
       - xvec
       - stac-geoparquet # pypi releases are more recent

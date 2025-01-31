@@ -129,8 +129,8 @@ dependencies:
   - cartopy
   - cfgrib
   - contextily
-  - dask[complete]
-  - dask-geopandas
+  - dask <2025.1.0
+  - dask-geopandas <0.4.3
   - dask-image
   - dask-jobqueue
   - datacube
@@ -201,6 +201,7 @@ dependencies:
       - antimeridian
       - duckdb  # pypi has more recent releases
       - imagecodecs
+      - 'ibis-framework[duckdb,geospatial]'
       - movingpandas
       - more-itertools
       - networkx
