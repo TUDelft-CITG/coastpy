@@ -8,7 +8,6 @@ import os
 import pathlib
 import re
 from collections import defaultdict
-from pathlib import Path
 from typing import Any
 
 import dask.bag as db
@@ -391,12 +390,25 @@ def read_stac_item_from_storage(file: str, filesystem) -> Item:
 
 
 def filter_existing_tiles(
-    tiles: dict[str, dict], storage_options: dict
+    tiles: dict[str, dict], storage_options: dict[str, str]
 ) -> dict[str, dict]:
     """Filter out tiles that already have STAC items in the cloud storage."""
     fs = fsspec.filesystem("az", **storage_options)
     existing_files = fs.glob(f"{STAC_ITEM_CONTAINER}/*.json")
-    existing_ids = {Path(file).stem for file in existing_files}
+    TILE_ID_PATTERN = (
+        r"(?P<tile_id>\d{2}[A-Za-z]{3}_z\d+-(?:n|s)\d{2}(?:w|e)\d{3}-[a-z0-9]{6})"
+    )
+    pattern = re.compile(TILE_ID_PATTERN)
+
+    existing_ids = set()
+    for file in existing_files:
+        match = pattern.search(file)
+        if match:
+            tile_id = match.group("tile_id")
+            existing_ids.add(tile_id)
+        else:
+            raise ValueError(f"Cannot extract tile ID from file: {file}")
+
     return {
         tile_id: bands
         for tile_id, bands in tiles.items()
@@ -534,8 +546,8 @@ def create_collection_with_items():
 
 
 def main():
-    # create_stac_items()
-    create_collection_with_items()
+    create_stac_items()
+    # create_collection_with_items()
 
 
 if __name__ == "__main__":
