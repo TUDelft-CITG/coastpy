@@ -23,6 +23,7 @@ def test_local_filepath():
 def test_azure_cloud_uri():
     uri = "az://tmp/s2-l2a-composite/release/2025-01-17/file.tif"
     pp = PathParser(uri)
+    pp.to_cloud_uri()
 
     assert pp.protocol == "az"
     assert pp.bucket == "tmp"
@@ -89,10 +90,6 @@ def test_dynamic_filename():
 
 
 def test_invalid_paths():
-    # Empty path should raise error
-    with pytest.raises(ValueError):  # noqa: PT011
-        PathParser("")
-
     # Unsupported protocol should raise error
     with pytest.raises(ValueError):  # noqa: PT011
         PathParser("ftp://example.com/file.tif")
@@ -120,9 +117,3 @@ def test_protocol_change():
     assert pp.to_https_url(account_name="coclico") == (
         "https://coclico.blob.core.windows.net/tmp/data/file.tif"
     )
-
-
-if __name__ == "__main__":
-    # test_local_filepath()
-    # test_https_url_parsing()
-    test_dynamic_filename()

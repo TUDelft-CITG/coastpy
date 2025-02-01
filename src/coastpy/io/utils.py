@@ -57,7 +57,6 @@ class PathParser:
         """Automatically parse the given path based on its protocol."""
         self.protocol = fsspec.utils.get_protocol(self.original_path)  # Triggers setter
 
-    ### **🔹 Protocol Handling**
     @property
     def protocol(self) -> str:
         """Getter for protocol."""
@@ -69,7 +68,6 @@ class PathParser:
         self._protocol = new_protocol
         self._parse_path()  # Re-parse with updated protocol
 
-    ### **🔹 Path Parsing**
     def _parse_path(self):
         """Parses the path into components based on protocol."""
         parsed = urlparse(self.original_path)
@@ -96,10 +94,8 @@ class PathParser:
 
     def _parse_azure_path(self, parsed):
         """Extracts components for Azure cloud storage paths."""
-        self._key = parsed.path.lstrip("/")  # Remove leading slash
-        filename = Path(self._key).name
-        self._stem = Path(filename).stem
-        self._suffix = Path(filename).suffix
+        # Setting self.key will also set the filename and suffix
+        self.key = parsed.path.lstrip("/")  # Remove leading slash
 
         if self.protocol == "https":
             # Extract account_name and enforce proper parsing
@@ -114,7 +110,8 @@ class PathParser:
         elif self.protocol == "az":
             # Cloud URI format: az://<bucket>/<key>
             self._bucket = parsed.netloc
-            self._key = parsed.path.lstrip("/")
+            # This will also set the filename and suffix
+            self.key = parsed.path.lstrip("/")
             self._cloud_netloc = "az://"
 
             # Allow account_name to be set later for HTTPS conversion
@@ -123,7 +120,6 @@ class PathParser:
                     f"https://{self.account_name}.blob.core.windows.net"
                 )
 
-    ### **🔹 Properties for Path Components**
     @property
     def bucket(self) -> str:
         """Getter for bucket/container name."""
@@ -141,10 +137,10 @@ class PathParser:
         Returns:
             str: The directory portion of the key, or the full key if no filename exists.
         """
-        if (
-            self._key and self._stem
-        ):  # Only strip if we have both a directory and a filename
-            return "/".join(self._key.split("/")[:-1]) if "/" in self._key else ""
+        # if (
+        #     self._key and self._stem
+        # ):  # Only strip if we have both a directory and a filename
+        #     return "/".join(self._key.split("/")[:-1]) if "/" in self._key else ""
         return self._key  # If no filename, return full key
 
     @key.setter
