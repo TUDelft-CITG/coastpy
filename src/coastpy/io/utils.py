@@ -81,10 +81,8 @@ class PathParser:
 
     def _parse_local_path(self):
         """Extracts components for local file paths."""
-        path_obj = Path(self.original_path)
-        self._directory = path_obj.parent
-        self._stem = path_obj.stem  # Extract base name (without extension)
-        self._suffix = path_obj.suffix  # Extract extension
+        # NOTE: this will also set the filename and suffix
+        self.directory = self.original_path
 
         # Reset cloud attributes
         self._bucket = ""
@@ -137,11 +135,7 @@ class PathParser:
         Returns:
             str: The directory portion of the key, or the full key if no filename exists.
         """
-        # if (
-        #     self._key and self._stem
-        # ):  # Only strip if we have both a directory and a filename
-        #     return "/".join(self._key.split("/")[:-1]) if "/" in self._key else ""
-        return self._key  # If no filename, return full key
+        return self._key
 
     @key.setter
     def key(self, new_key: str):
@@ -158,6 +152,30 @@ class PathParser:
             self._suffix = Path(new_key).suffix  # Extract file extension
         else:
             self._key = new_key  # Entire key is just a directory
+
+    @property
+    def directory(self) -> Path:
+        """Returns the directory portion of the key if a filename exists, otherwise returns the full key.
+
+        Returns:
+            Path: The directory portion of the key, or the full key if no filename exists.
+        """
+        return self._directory
+
+    @directory.setter
+    def directory(self, new_directory: str):
+        """Sets the directory, ensuring the filename (if present) is stored separately.
+
+        Args:
+            new_directory (str): The new key path (can be a full path with filename or just a directory).
+        """
+        path = Path(new_directory)
+        if path.suffix:  # If it has a suffix, treat it as a filename
+            self._directory = path.parent  # Directory portion
+            self._stem = path.stem  # Extract filename stem
+            self._suffix = path.suffix  # Extract file extension
+        else:
+            self._directory = path  # Entire key is just a directory
 
     @property
     def filename(self) -> str:
@@ -229,10 +247,10 @@ class PathParser:
         key_part = f"{self.key}/" if self.key else ""
         return f"{self.cloud_netloc}{self.bucket}/{key_part}{self.filename}"
 
-    def to_filepath(self, directory: str | Path = "") -> Path:
+    def to_filepath(self, directory: str | Path = "") -> str:
         """Converts to a local file path."""
-        directory = Path(directory) if directory else self._directory
-        return directory / self.filename
+        directory = Path(directory) if directory else self.directory
+        return str(self.directory / self.filename)
 
 
 def extract_datetimes(
