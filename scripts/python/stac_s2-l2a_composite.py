@@ -466,7 +466,7 @@ def create_stac_items():
 
 
 def create_collection_with_items():
-    client = Client(threads_per_worker=1)
+    client = Client(n_workers=4, threads_per_worker=1)
     summarize_dask_cluster(client)
 
     fs = fsspec.filesystem("az", **storage_options)
@@ -546,8 +546,8 @@ def create_collection_with_items():
 
 
 def main():
-    create_stac_items()
-    # create_collection_with_items()
+    # create_stac_items()
+    create_collection_with_items()
 
 
 if __name__ == "__main__":

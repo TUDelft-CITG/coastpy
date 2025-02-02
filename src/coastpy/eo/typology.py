@@ -1,3 +1,4 @@
+import datetime
 import warnings
 from typing import Literal
 
@@ -22,6 +23,7 @@ from coastpy.eo.collection2 import (
 )
 from coastpy.geo.geoms import create_offset_rectangle
 from coastpy.geo.ops import get_rotation_angle
+from coastpy.io.utils import extract_datetimes
 from coastpy.utils.xarray_utils import interpolate_raster, trim_outer_nans
 
 
@@ -169,6 +171,14 @@ class TypologyCollection:
             .merge_overlapping_tiles()  # type: ignore
             .execute(compute=compute)
         )
+        s2_datetimes = extract_datetimes(
+            s2_cube,
+            fallback_datetime={
+                "datetime": datetime.datetime(2023, 1, 1),
+                "start_datetime": datetime.datetime(2023, 1, 1),
+                "end_datetime": datetime.datetime(2024, 1, 1),
+            },
+        )
 
         geobox = s2_cube.odc.geobox
 
@@ -184,6 +194,7 @@ class TypologyCollection:
             .postprocess(DeltaDTMCollection.postprocess_deltadtm)
             .execute(compute=compute)
         ).squeeze()
+        ddtm_datetimes = extract_datetimes(delta_dtm)
 
         # --- Load Copernicus DEM ---
         mask_cop_dem30_nodata = cop_dem_config.pop("mask_nodata", False)
@@ -201,9 +212,55 @@ class TypologyCollection:
             .execute()
         ).squeeze()
 
+        cop_dem_datetimes = extract_datetimes(cop_dem)
+
         # --- Merge into a Single Dataset ---
         s2_cube["deltadtm"] = delta_dtm["data"]
         s2_cube["cop_dem_glo_30"] = cop_dem["data"]
+
+        # Calculate min and max datetimes
+        datetime_coords = {
+            "datetime": min(
+                dt
+                for dt in [
+                    s2_datetimes["datetime"],
+                    ddtm_datetimes["datetime"],
+                    cop_dem_datetimes["datetime"],
+                    s2_datetimes.get("start_datetime"),
+                    ddtm_datetimes.get("start_datetime"),
+                    cop_dem_datetimes.get("start_datetime"),
+                ]
+                if dt is not None
+            ),
+            "start_datetime": min(
+                dt
+                for dt in [
+                    s2_datetimes["datetime"],
+                    ddtm_datetimes["datetime"],
+                    cop_dem_datetimes["datetime"],
+                    s2_datetimes.get("start_datetime"),
+                    ddtm_datetimes.get("start_datetime"),
+                    cop_dem_datetimes.get("start_datetime"),
+                ]
+                if dt is not None
+            ),
+            "end_datetime": max(
+                dt
+                for dt in [
+                    s2_datetimes["datetime"],
+                    ddtm_datetimes["datetime"],
+                    cop_dem_datetimes["datetime"],
+                    s2_datetimes.get("end_datetime"),
+                    ddtm_datetimes.get("end_datetime"),
+                    cop_dem_datetimes.get("end_datetime"),
+                ]
+                if dt is not None
+            ),
+        }
+
+        # Add datetime coordinates to the final dataset
+        s2_cube = s2_cube.assign_coords(datetime_coords)
+
         self.dataset = s2_cube
         return self
 

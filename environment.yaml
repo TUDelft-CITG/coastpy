@@ -85,8 +85,8 @@ dependencies:
   # Spatial libraries
   - cartopy
   - contextily
-  - dask <2025.1.0
-  - dask-geopandas <0.4.3
+  - dask # <2025.1.0
+  - dask-geopandas # <0.4.3
   - dask-jobqueue
   - distributed
   - esda

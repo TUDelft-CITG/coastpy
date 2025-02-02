@@ -255,31 +255,39 @@ class PathParser:
 
 def extract_datetimes(
     data: pd.DataFrame | gpd.GeoDataFrame | xr.Dataset | xr.DataArray,
+    fallback_datetime: datetime.datetime
+    | dict[str, datetime.datetime | None]
+    | None = None,
 ) -> dict[str, datetime.datetime | None]:
     """
-    Extract datetime information (datetime, start_datetime, end_datetime) from a dataset.
+    Extract datetime information (datetime, start_datetime, end_datetime) from various data structures.
+
+    Supports:
+    - Pandas DataFrames / GeoDataFrames with 'datetime' or 'start_datetime' and 'end_datetime' columns.
+    - xarray Datasets and DataArrays with time coordinates, attributes, or metadata in data variables.
 
     Args:
-        data: Input dataset (pandas DataFrame, GeoDataFrame, or xarray object).
+        data: Input dataset.
+        fallback_datetime: A fallback datetime to use when no datetime information is found.
 
     Returns:
-        dict[str, datetime | None]: Dictionary with keys 'datetime', 'start_datetime', and 'end_datetime'.
-
-    Raises:
-        ValueError: If datetime information cannot be determined.
+        Dict[str, Optional[datetime.datetime]]: Dictionary with keys:
+            - 'datetime': A representative timestamp.
+            - 'start_datetime': The earliest time found (if applicable).
+            - 'end_datetime': The latest time found (if applicable).
     """
     # Handle pandas DataFrame or GeoDataFrame
     if isinstance(data, (pd.DataFrame | gpd.GeoDataFrame)):
-        # Check for 'start_datetime' and 'end_datetime' columns
-        if "start_datetime" in data.columns and "end_datetime" in data.columns:
-            start_datetime = pd.Timestamp(data["start_datetime"].min()).to_pydatetime()  # type: ignore
-            end_datetime = pd.Timestamp(data["end_datetime"].max()).to_pydatetime()  # type: ignore
+        if {"start_datetime", "end_datetime"}.issubset(data.columns):
+            start_datetime = pd.Timestamp(
+                str(data["start_datetime"].min())
+            ).to_pydatetime()
+            end_datetime = pd.Timestamp(str(data["end_datetime"].max())).to_pydatetime()
             return {
                 "datetime": start_datetime,
                 "start_datetime": start_datetime,
                 "end_datetime": end_datetime,
             }
-        # Check for a single 'datetime' column
         elif "datetime" in data.columns:
             datetime_value = pd.Timestamp(data["datetime"].iloc[0]).to_pydatetime()
             return {
@@ -290,23 +298,24 @@ def extract_datetimes(
 
     # Handle xarray Dataset or DataArray
     elif isinstance(data, (xr.Dataset | xr.DataArray)):
-        # Check for a time dimension
-        if "time" in data.dims:
+        # Check for a time coordinate
+        if "time" in data.coords:
             time_values = data.coords["time"].values
-            if len(time_values) > 1:
+            if time_values.size > 1:
                 return {
                     "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
-                    "start_datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
-                    "end_datetime": pd.Timestamp(time_values[-1]).to_pydatetime(),
+                    "start_datetime": pd.Timestamp(time_values.min()).to_pydatetime(),
+                    "end_datetime": pd.Timestamp(time_values.max()).to_pydatetime(),
                 }
             else:
                 return {
-                    "datetime": pd.Timestamp(time_values).to_pydatetime(),
+                    "datetime": pd.Timestamp(time_values).to_pydatetime(),  # type: ignore
                     "start_datetime": None,
                     "end_datetime": None,
                 }
-        # Check for start and end datetime attributes
-        if "start_datetime" in data.attrs and "end_datetime" in data.attrs:
+
+        # Check for global attributes with datetime info
+        if {"start_datetime", "end_datetime"}.issubset(data.attrs):
             return {
                 "datetime": pd.Timestamp(data.attrs["start_datetime"]).to_pydatetime(),
                 "start_datetime": pd.Timestamp(
@@ -316,7 +325,6 @@ def extract_datetimes(
                     data.attrs["end_datetime"]
                 ).to_pydatetime(),
             }
-        # Check for a single datetime attribute
         if "datetime" in data.attrs:
             return {
                 "datetime": pd.Timestamp(data.attrs["datetime"]).to_pydatetime(),
@@ -324,10 +332,14 @@ def extract_datetimes(
                 "end_datetime": None,
             }
 
-        # Check for datetime attributes in variables
+        # Handle datasets where datetime is in variable attributes
         start_times = []
         end_times = []
-        for var in data.data_vars.values():
+        data_vars_to_check = (
+            data.data_vars.values() if isinstance(data, xr.Dataset) else [data]
+        )
+
+        for var in data_vars_to_check:
             if "start_datetime" in var.attrs:
                 start_times.append(
                     pd.Timestamp(var.attrs["start_datetime"]).to_pydatetime()
@@ -336,6 +348,7 @@ def extract_datetimes(
                 end_times.append(
                     pd.Timestamp(var.attrs["end_datetime"]).to_pydatetime()
                 )
+
         if start_times and end_times:
             return {
                 "datetime": min(start_times),
@@ -343,8 +356,115 @@ def extract_datetimes(
                 "end_datetime": max(end_times),
             }
 
-    # Raise error if no datetime information is found
-    raise ValueError("Unable to determine datetime information from the dataset.")
+    # **Fallback to Default Datetime**
+    if fallback_datetime is not None:
+        if isinstance(fallback_datetime, dict):
+            return fallback_datetime
+        else:
+            return {
+                "datetime": fallback_datetime,
+                "start_datetime": None,
+                "end_datetime": None,
+            }
+
+    # Raise error if no datetime is found and no default is provided
+    raise ValueError(
+        "Unable to determine datetime information from the dataset, and no default datetime provided."
+    )
+
+
+# def extract_datetimes(
+#     data: pd.DataFrame | gpd.GeoDataFrame | xr.Dataset | xr.DataArray,
+# ) -> dict[str, datetime.datetime | None]:
+#     """
+#     Extract datetime information (datetime, start_datetime, end_datetime) from a dataset.
+
+#     Args:
+#         data: Input dataset (pandas DataFrame, GeoDataFrame, or xarray object).
+
+#     Returns:
+#         dict[str, datetime | None]: Dictionary with keys 'datetime', 'start_datetime', and 'end_datetime'.
+
+#     Raises:
+#         ValueError: If datetime information cannot be determined.
+#     """
+#     # Handle pandas DataFrame or GeoDataFrame
+#     if isinstance(data, (pd.DataFrame | gpd.GeoDataFrame)):
+#         # Check for 'start_datetime' and 'end_datetime' columns
+#         if "start_datetime" in data.columns and "end_datetime" in data.columns:
+#             start_datetime = pd.Timestamp(data["start_datetime"].min()).to_pydatetime()  # type: ignore
+#             end_datetime = pd.Timestamp(data["end_datetime"].max()).to_pydatetime()  # type: ignore
+#             return {
+#                 "datetime": start_datetime,
+#                 "start_datetime": start_datetime,
+#                 "end_datetime": end_datetime,
+#             }
+#         # Check for a single 'datetime' column
+#         elif "datetime" in data.columns:
+#             datetime_value = pd.Timestamp(data["datetime"].iloc[0]).to_pydatetime()
+#             return {
+#                 "datetime": datetime_value,
+#                 "start_datetime": None,
+#                 "end_datetime": None,
+#             }
+
+#     # Handle xarray Dataset or DataArray
+#     elif isinstance(data, (xr.Dataset | xr.DataArray)):
+#         # Check for a time dimension
+#         if "time" in data.dims:
+#             time_values = data.coords["time"].values
+#             if len(time_values) > 1:
+#                 return {
+#                     "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
+#                     "start_datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
+#                     "end_datetime": pd.Timestamp(time_values[-1]).to_pydatetime(),
+#                 }
+#             else:
+#                 return {
+#                     "datetime": pd.Timestamp(time_values).to_pydatetime(),
+#                     "start_datetime": None,
+#                     "end_datetime": None,
+#                 }
+#         # Check for start and end datetime attributes
+#         if "start_datetime" in data.attrs and "end_datetime" in data.attrs:
+#             return {
+#                 "datetime": pd.Timestamp(data.attrs["start_datetime"]).to_pydatetime(),
+#                 "start_datetime": pd.Timestamp(
+#                     data.attrs["start_datetime"]
+#                 ).to_pydatetime(),
+#                 "end_datetime": pd.Timestamp(
+#                     data.attrs["end_datetime"]
+#                 ).to_pydatetime(),
+#             }
+#         # Check for a single datetime attribute
+#         if "datetime" in data.attrs:
+#             return {
+#                 "datetime": pd.Timestamp(data.attrs["datetime"]).to_pydatetime(),
+#                 "start_datetime": None,
+#                 "end_datetime": None,
+#             }
+
+#         # Check for datetime attributes in variables
+#         start_times = []
+#         end_times = []
+#         for var in data.data_vars.values():
+#             if "start_datetime" in var.attrs:
+#                 start_times.append(
+#                     pd.Timestamp(var.attrs["start_datetime"]).to_pydatetime()
+#                 )
+#             if "end_datetime" in var.attrs:
+#                 end_times.append(
+#                     pd.Timestamp(var.attrs["end_datetime"]).to_pydatetime()
+#                 )
+#         if start_times and end_times:
+#             return {
+#                 "datetime": min(start_times),
+#                 "start_datetime": min(start_times),
+#                 "end_datetime": max(end_times),
+#             }
+
+#     # Raise error if no datetime information is found
+#     raise ValueError("Unable to determine datetime information from the dataset.")
 
 
 def short_id(seed: str, length: int = 6) -> str:

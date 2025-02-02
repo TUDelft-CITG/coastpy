@@ -878,7 +878,7 @@ class DeltaDTMCollection(BaseCollection):
     @staticmethod
     def postprocess_deltadtm(ds: xr.Dataset) -> xr.Dataset:
         # Squeeze time dimension
-        ds = ds.squeeze(drop=True)
+        # ds = ds.squeeze(drop=True)
 
         # if "stac_id" in ds:
         #     ds = ds.drop_vars("stac_id")
@@ -932,7 +932,7 @@ class CopernicusDEMCollection(BaseCollection):
     @staticmethod
     def postprocess_cop_dem30(ds: xr.Dataset) -> xr.Dataset:
         # Squeeze time dimension
-        ds = ds.squeeze(drop=True)
+        # ds = ds.squeeze(drop=True)
         # if "stac_id" in ds:
         #     ds = ds.drop_vars("stac_id")
         return ds
