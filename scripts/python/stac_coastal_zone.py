@@ -18,6 +18,7 @@ from pystac.stac_io import DefaultStacIO
 from coastpy.io.utils import PathParser
 from coastpy.libs import stac_table
 from coastpy.stac import ParquetLayout
+from coastpy.stac.item import PARQUET_MEDIA_TYPE
 
 # Load the environment variables from the .env file
 load_dotenv()
@@ -35,7 +36,6 @@ DATETIME_DATA_CREATED = datetime.datetime(2023, 2, 9)
 CONTAINER_NAME = "coastal-zone"
 PREFIX = f"release/{VERSION}"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
-PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 LICENSE = "CC-BY-4.0"
 
 # Collection information
@@ -194,7 +194,7 @@ def create_collection(
             "title": ASSET_TITLE,
             "description": ASSET_DESCRIPTION,
             "roles": ["data"],
-            "type": stac_table.PARQUET_MEDIA_TYPE,
+            "type": PARQUET_MEDIA_TYPE,
             **ASSET_EXTRA_FIELDS,
         }
     }

@@ -8,6 +8,7 @@ import pystac.common_metadata
 import pystac.utils
 import rasterio
 import rasterio.warp
+import shapely
 import xarray as xr
 from affine import Affine
 from pystac.extensions.eo import Band, EOExtension
@@ -15,9 +16,11 @@ from pystac.extensions.projection import ProjectionExtension
 from pystac.extensions.raster import DataType, RasterBand, RasterExtension
 from shapely.geometry import Polygon, box, mapping
 
-from coastpy.io.utils import PathParser, extract_datetimes
+from coastpy.io.utils import PathParser, get_datetimes
 from coastpy.libs.stac_table import InferDatetimeOptions, generate
 from coastpy.utils.xarray_utils import get_nodata
+
+PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 
 
 class AssetProtocol(Enum):
@@ -115,7 +118,7 @@ def create_cog_item(
     properties: dict[str, Any] | None = None,
     item_extra_fields: dict[str, Any] | None = None,
     asset_extra_fields: dict[str, Any] | None = None,
-    nodata: Any = "infer",
+    nodata: Any | None = None,
     data_type: Any = None,
     scale_factor: float | None = None,
     unit: str | None = None,
@@ -133,7 +136,7 @@ def create_cog_item(
         properties (dict[str, Any] | None, optional): STAC item properties.
         item_extra_fields (dict[str, Any] | None, optional): Extra fields for the item.
         asset_extra_fields (dict[str, Any] | None, optional): Extra fields for the asset.
-        nodata (Any, optional): Nodata value. Defaults to "infer".
+        nodata (Any | None): Nodata value. Inferred when this is None. Defaults to None.
         data_type (Any, optional): Data type. Defaults to None.
         scale_factor (float | None, optional): Scale factor. Defaults to None.
         unit (str | None, optional): Unit of measurement. Defaults to None.
@@ -163,10 +166,15 @@ def create_cog_item(
         geometry = mapping(box(*bbox))
 
     # Extract datetime information
-    datetimes = extract_datetimes(dataset)
-    dt = datetimes["datetime"]
-    start_datetime = datetimes.get("start_datetime")
-    end_datetime = datetimes.get("end_datetime")
+    datetimes = get_datetimes(dataset)
+    if datetimes:
+        dt = datetimes["datetime"]
+        start_datetime = datetimes.get("start_datetime")
+        end_datetime = datetimes.get("end_datetime")
+    else:
+        dt = pystac.utils.now_in_utc()
+        start_datetime = None
+        end_datetime = None
 
     attributes = dataset.attrs.copy()
     standard_metadata = {"datetime", "start_datetime", "end_datetime"}
@@ -182,7 +190,7 @@ def create_cog_item(
     item = pystac.Item(
         id=stac_id,
         geometry=geometry,
-        bbox=bbox,
+        bbox=bbox,  # type: ignore
         datetime=dt,
         properties=properties,
         start_datetime=start_datetime,
@@ -207,7 +215,8 @@ def create_cog_item(
 
             asset_href = protocol.get_uri(pp)
 
-            var_nodata = nodata if nodata != "infer" else get_nodata(var)
+            if nodata is None:
+                var_nodata = get_nodata(var)
 
             item = add_cog_asset(
                 item,
@@ -225,7 +234,10 @@ def create_cog_item(
                 item = add_alternate_links(item, pp, alternate_links)
     else:
         asset_href = protocol.get_uri(pp)
-        var_nodata = nodata if nodata != "infer" else get_nodata(dataset)
+
+        if nodata is None:
+            var_nodata = get_nodata(dataset)
+
         add_cog_asset(
             item,
             dataset,
@@ -270,7 +282,7 @@ def add_cog_asset(
     data: xr.DataArray,
     var_name: str | None,
     href: str,
-    nodata: Any = "infer",
+    nodata: Any | None = None,
     data_type: Any | None = None,
     scale_factor: float | None = None,
     unit: str | None = None,
@@ -284,7 +296,7 @@ def add_cog_asset(
         data (xr.DataArray): The data array representing the band(s).
         var_name (Optional[str]): Name of the variable (band name).
         href (str): HREF for the asset.
-        nodata (Any, optional): Nodata value. Use "infer" to extract from data. Defaults to "infer".
+        nodata (Any, optional): Nodata value. When None, the value is extracted using get_nodata(). Defaults to None.
         scale_factor (float, optional): Scale factor for the asset. Defaults to None.
         unit (str, optional): Unit for the asset. Defaults to None.
         resolution (int, optional): Resolution of the asset. Defaults to None.
@@ -295,7 +307,8 @@ def add_cog_asset(
     if not data.rio.crs:
         raise ValueError("CRS information is missing in the data array.")
 
-    nodata_value = nodata if nodata != "infer" else get_nodata(data)
+    if nodata is None:
+        nodata = get_nodata(data)
 
     if data_type is None:
         data_type = data.dtype.name
@@ -324,7 +337,7 @@ def add_cog_asset(
     raster_ext = RasterExtension.ext(asset, add_if_missing=True)
     raster_ext.bands = [
         RasterBand.create(
-            nodata=nodata_value,
+            nodata=nodata,
             spatial_resolution=resolution,
             data_type=DataType(data_type),
             unit=unit,
@@ -426,7 +439,7 @@ def create_tabular_item(
         asset_href=protocol.get_uri(pp),
         asset_title=asset_title,
         asset_description=asset_description,
-        asset_media_type="application/x-parquet",
+        asset_media_type=PARQUET_MEDIA_TYPE,
         asset_roles=["data"],
         asset_extra_fields=asset_extra_fields,
         storage_options=storage_options,
@@ -458,7 +471,7 @@ def create_tabular_item(
                         rel="alternate",
                         target=target,
                         title=f"{key.capitalize()} Access",
-                        media_type="application/x-parquet",
+                        media_type=PARQUET_MEDIA_TYPE,
                     )
                 )
 
@@ -545,83 +558,85 @@ if __name__ == "__main__":
     y_shape = int((OFFSET_DISTANCE * 2) / RESOLUTION)
     x_shape = int(TRANSECT_LENGTH / RESOLUTION)
 
-    transect = gpd.read_parquet(
+    transects = gpd.read_parquet(
         "/Users/calkoen/data/tmp/typology/train/transect.parquet"
     )
 
-    transect_properties = transect[TRANSECT_ATTRIBUTES].iloc[0].to_dict()
-    transect_properties["datetime_created"] = transect_properties[
-        "datetime_created"
-    ].isoformat()
-    transect_properties["datetime_updated"] = transect_properties[
-        "datetime_updated"
-    ].isoformat()
+    for i in range(len(transects)):
+        transect = transects.iloc[[i]]
+        transect_properties = transect[TRANSECT_ATTRIBUTES].iloc[0].to_dict()
+        transect_properties["datetime_created"] = transect_properties[
+            "datetime_created"
+        ].isoformat()
+        transect_properties["datetime_updated"] = transect_properties[
+            "datetime_updated"
+        ].isoformat()
 
-    # Define region of interest based on buffered transects
-    region_of_interest = gpd.GeoDataFrame(
-        geometry=[
-            shapely.box(
-                *gpd.GeoSeries.from_xy(transect.lon, transect.lat, crs=4326)
-                .to_crs(transect.utm_epsg.item())
-                .buffer(1500)
-                .to_crs(4326)
-                .total_bounds
-            )
-        ],
-        crs=4326,
-    )
+        # Define region of interest based on buffered transects
+        region_of_interest = gpd.GeoDataFrame(
+            geometry=[
+                shapely.box(
+                    *gpd.GeoSeries.from_xy(transect.lon, transect.lat, crs=4326)
+                    .to_crs(transect.utm_epsg.item())
+                    .buffer(1500)
+                    .to_crs(4326)
+                    .total_bounds
+                )
+            ],
+            crs=4326,
+        )
 
-    coastal_zone = odc.geo.geom.Geometry(
-        region_of_interest.geometry.item(), crs=region_of_interest.crs
-    )
+        coastal_zone = odc.geo.geom.Geometry(
+            region_of_interest.geometry.item(), crs=region_of_interest.crs
+        )
 
-    ds = (
-        TypologyCollection()
-        .search(region_of_interest, sas_token=sas_token)
-        .load()
-        .execute()
-    )
-    ds = ds.compute()
+        ds = (
+            TypologyCollection()
+            .search(region_of_interest, sas_token=sas_token)
+            .load()
+            .execute()
+        )
+        ds = ds.compute()
 
-    chip = TypologyCollection.chip_from_transect(
-        ds,
-        transect,
-        y_shape,
-        x_shape,
-        RESAMPLING,
-        rotate=True,
-        target_axis=TARGET_AXIS,
-        offset_distance=OFFSET_DISTANCE,
-        resolution=RESOLUTION,
-    )
+        chip = TypologyCollection.chip_from_transect(
+            ds,
+            transect,
+            y_shape,
+            x_shape,
+            RESAMPLING,
+            rotate=True,
+            target_axis=TARGET_AXIS,
+            offset_distance=OFFSET_DISTANCE,
+            resolution=RESOLUTION,
+        )
 
-    OUT_STORAGE = "/Users/calkoen/data/tmp/typology/train/release/2025-02-02"
-    STAC_DIR = pathlib.Path("/Users/calkoen/data/tmp/typology/stac")
+        OUT_STORAGE = "/Users/calkoen/data/tmp/typology/train/release/2025-02-02"
+        STAC_DIR = pathlib.Path("/Users/calkoen/data/tmp/typology/stac")
 
-    pathlike = name_data(chip, prefix=OUT_STORAGE)
+        pathlike = name_data(chip, prefix=OUT_STORAGE)
 
-    pp = PathParser(pathlike, account_name="coclico")
-    for var_name, var in chip.data_vars.items():
-        pp.band = var_name
-        pp.resolution = "10m"
-        pathlike2 = AssetProtocol.FILE.get_uri(pp, OUT_STORAGE)
-        var.rio.to_raster(pathlike2)
+        pp = PathParser(pathlike, account_name="coclico")
+        for var_name, var in chip.data_vars.items():
+            pp.band = var_name
+            pp.resolution = "10m"
+            pathlike2 = AssetProtocol.FILE.get_uri(pp, OUT_STORAGE)
+            var.rio.to_raster(pathlike2)
 
-    collection = create_collection()
+        collection = create_collection()
 
-    item = create_cog_item(
-        chip,
-        pathlike,
-        properties=transect_properties,
-        protocol=AssetProtocol.FILE,
-        storage_options=storage_options,
-        resolution=10,
-    )
-    item.validate()
+        item = create_cog_item(
+            chip,
+            pathlike,
+            properties=transect_properties,
+            protocol=AssetProtocol.FILE,
+            storage_options=storage_options,
+            resolution=10,
+        )
+        item.validate()
 
-    collection.add_item(item)
+        collection.add_item(item)
 
-    layout = COGLayout()
-    collection.normalize_hrefs(str(STAC_DIR / collection.id), layout)
+        layout = COGLayout()
+        collection.normalize_hrefs(str(STAC_DIR / collection.id), layout)
 
-    collection.save()
+        collection.save()

@@ -34,6 +34,7 @@ from stactools.core.utils import antimeridian
 from tqdm import tqdm
 
 from coastpy.io.utils import PathParser
+from coastpy.stac.item import PARQUET_MEDIA_TYPE
 
 # Load the environment variables from the .env file
 load_dotenv(override=True)
@@ -71,8 +72,6 @@ NODATA_VALUE = -9999
 RESOLUTION = 30
 DATA_TYPE = raster.DataType.FLOAT32
 UNIT = "m"
-
-PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 
 # NOTE: Since December 2024 we have changed to https hrefs instead of az blob storage paths
 EXAMPLE_HREF = "https://coclico.blob.core.windows.net/deltares-delta-dtm/v1.1/DeltaDTM_v1_1_N03W052.tif"

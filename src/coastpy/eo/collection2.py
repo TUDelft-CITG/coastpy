@@ -25,9 +25,9 @@ from coastpy.eo.mask import (
     nodata_mask,
     numeric_mask,
     scl_mask,
-    set_nodata,
 )
 from coastpy.eo.utils import data_extent_from_stac_items, geobox_from_data_extent
+from coastpy.io.utils import get_datetimes, update_time_coord
 from coastpy.stac.utils import read_snapshot
 from coastpy.utils.xarray_utils import scale, unscale
 
@@ -342,7 +342,8 @@ class BaseCollection:
                 exclude_attrs={"nodata": [], "encoding": ["_FillValue"]}
             )(apply_mask)
             ds = apply_mask_with_attrs(ds, mask)  # type: ignore
-            ds = set_nodata(ds, np.nan)  # type: ignore
+            # NOTE: we used to set the nodata value to np.nan before, but I think this is bad practice
+            # ds = set_nodata(ds, np.nan)  # type: ignore
 
         if self.mask_values:
             mask = numeric_mask(ds, self.mask_values)
@@ -824,13 +825,21 @@ class S2CompositeCollection(BaseCollection):
         if not self.merge:
             return ds
 
+        # Get datetimes from the dataset before we lose them in the median computation
+        datetimes = get_datetimes(ds)
+
         mask = nodata_mask(ds)
 
         apply_median_with_attrs = keep_rio_attrs(
             exclude_attrs={"nodata": [], "encoding": ["_FillValue"]}
         )(_median)
         ds = apply_median_with_attrs(ds, mask)  # type: ignore
-        ds = set_nodata(ds, np.nan)  # type: ignore
+        # NOTE: we used to set the nodata value to np.nan before, but I think this is bad practice
+        # ds = set_nodata(ds, np.nan)  # type: ignore
+
+        # Update time dimension with the median datetime
+        if datetimes:
+            ds = update_time_coord(ds, datetimes)
 
         return ds
 
@@ -895,6 +904,7 @@ class DeltaDTMCollection(BaseCollection):
         )(_replace_nodata_with_zero)
 
         ds = apply_replace_nodata_with_zero_with_attrs(ds)  # type: ignore
+
         # NOTE: we don't have to set the nodata value because its actually an elevation.
         # ds = set_nodata(ds, NEW_NODATA)  # type: ignore
 

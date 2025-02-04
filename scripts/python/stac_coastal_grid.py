@@ -19,6 +19,7 @@ from pystac.utils import now_in_utc
 from coastpy.io.utils import PathParser
 from coastpy.libs import stac_table
 from coastpy.stac import ParquetLayout
+from coastpy.stac.item import PARQUET_MEDIA_TYPE
 
 # Load the environment variables from the .env file
 load_dotenv()
@@ -35,7 +36,6 @@ DATETIME_DATA_CREATED = datetime.datetime(2023, 2, 9)
 CONTAINER_NAME = "coastal-grid"
 PREFIX = f"release/{VERSION}"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
-PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 LICENSE = "CC-BY-4.0"
 
 # Collection information
