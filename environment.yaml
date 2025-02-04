@@ -66,7 +66,7 @@ dependencies:
   - scikit-learn
   - scipy
   - xarray
-  - zarr
+  - zarr>3.0
 
   # Plotting libraries
   - descartes
@@ -100,7 +100,7 @@ dependencies:
   - odc-stac
   - planetary-computer
   - pooch
-  - pystac
+  - pystac>=1.12.1
   - rasterio
   - rioxarray
   - stackstac

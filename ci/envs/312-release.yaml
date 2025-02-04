@@ -20,7 +20,7 @@ dependencies:
   - poetry
   - pyarrow
   - pyproj
-  - pystac
+  - pystac>=1.12.1
   - python-dotenv
   - rasterio
   - rioxarray

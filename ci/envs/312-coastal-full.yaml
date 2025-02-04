@@ -166,7 +166,7 @@ dependencies:
   - pyarrow
   - pyod
   - pyogrio
-  - pystac
+  - pystac>=1.12.1
   - rasterio
   - rio-cogeo
   - rio-tiler
