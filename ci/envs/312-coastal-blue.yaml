@@ -130,8 +130,8 @@ dependencies:
   - cartopy
   - cfgrib
   - contextily
-  - dask # <2025.1.0
-  - dask-geopandas # <0.4.3
+  - dask<2025.1.0
+  - dask-geopandas<0.4.3
   - dask-image
   - dask-jobqueue
   - datacube
@@ -182,7 +182,7 @@ dependencies:
   - xarray
   - xarray-spatial
   - xvec
-  - zarr>3.0
+  - zarr # >3.0
   - zstandard
 
   # Machine learning libraries
