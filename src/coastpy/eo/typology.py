@@ -371,16 +371,19 @@ class TypologyCollection:
         return dataset
 
 
-def process_row(sample: gpd.GeoDataFrame) -> xr.Dataset | None:
+def load_stac_gpq_item_xr(stac_gpq_item: gpd.GeoDataFrame) -> xr.Dataset | None:
     """Converts a STAC GeoParquet row into an Xarray dataset."""
+    if len(stac_gpq_item) != 1:
+        raise ValueError("Expected a single STAC item, but got multiple.")
+
     try:
-        ds = odc.stac.load(stac_geoparquet.to_item_collection(sample)).squeeze(
+        ds = odc.stac.load(stac_geoparquet.to_item_collection(stac_gpq_item)).squeeze(
             drop=True
         )
         ds = ds.drop_vars("spatial_ref", errors="ignore")
 
         # These are STAC GeoParquet that cannot be added as coordinates to the dataset
-        sample = sample.drop(
+        stac_gpq_item = stac_gpq_item.drop(
             columns=[
                 "type",
                 "stac_version",
@@ -394,14 +397,14 @@ def process_row(sample: gpd.GeoDataFrame) -> xr.Dataset | None:
             ]
         )
         # Add the remaining metadata as coordinates
-        meta = sample.iloc[0].to_dict()
+        meta = stac_gpq_item.iloc[0].to_dict()
         meta["stac_id"] = meta.pop("id", None)
         coords = {k: (("uuid",), [v]) for k, v in meta.items()}
         coords["uuid"] = (("uuid",), [meta["uuid"]])
         return ds.assign_coords(**coords)  # type: ignore
 
     except Exception as e:
-        print(f"Error processing {sample.get('id', 'UNKNOWN')}: {e}")
+        print(f"Error processing {stac_gpq_item.get('id', 'UNKNOWN')}: {e}")
         return None
 
 
@@ -410,14 +413,14 @@ def load_stac_xr(df: gpd.GeoDataFrame, use_dask=False) -> xr.Dataset:
 
     if use_dask:
         bag = db.from_sequence([df.iloc[[i]] for i in range(len(df))])
-        delayed_datasets = bag.map(process_row)
+        delayed_datasets = bag.map(load_stac_gpq_item_xr)
         datasets = delayed_datasets.compute()
 
     else:
         datasets = []
         for i in range(len(df)):
             sample = df.iloc[[i]]
-            ds = process_row(sample)
+            ds = load_stac_gpq_item_xr(sample)
             datasets.append(ds)
 
     if not datasets:
