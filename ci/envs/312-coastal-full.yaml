@@ -184,18 +184,18 @@ dependencies:
   - zarr # >3.0
   - zstandard
 
-  # Machine learning libraries
+  # Deep learning / ML libraries
+  - libpng # for torchvision
+  - pytorch::pytorch
+  - pytorch::torchvision
+  - torchgeo
+  - timm>=0.9
+  - lightning
+  - albumentations
   - wandb
   - xgboost
-  # Some of the ML libs below are tricky, so they are commented
   # - dask-ml
-  - lightning
-  - pytorch::pytorch
   # - tensorboard
-  - timm>=0.9
-  - torchgeo
-  - pytorch::torchvision
-  - albumentations
 
   - pip:
       - antimeridian

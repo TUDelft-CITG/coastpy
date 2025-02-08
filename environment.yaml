@@ -54,6 +54,7 @@ dependencies:
   - cchardet
   - fsspec
   - intake
+  - msgspec
   - netcdf4
   - numcodecs
   - numpy

@@ -1,4 +1,5 @@
 import logging
+import warnings
 from collections.abc import Callable
 from typing import Any, Self
 
@@ -11,7 +12,6 @@ import odc.geo.geom
 import odc.stac
 import pystac
 import pystac_client
-import pystac_client.errors
 import pystac_client.warnings
 import stac_geoparquet
 import xarray as xr
@@ -46,7 +46,14 @@ class BaseCollection:
     def __init__(self, catalog_url: str, collection: str, stac_cfg: dict | None = None):
         self.catalog_url = catalog_url
         self.collection = collection
-        self.catalog = pystac_client.Client.open(self.catalog_url)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=pystac_client.client.NoConformsTo,  # type: ignore
+            )
+            self.catalog = pystac_client.Client.open(self.catalog_url)
+
         self.stac_cfg = stac_cfg or self.default_stac_cfg
 
         # State variables
