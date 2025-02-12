@@ -291,6 +291,180 @@ class TileLogger:
         return datetime.datetime.now(datetime.UTC).isoformat()
 
 
+class ParquetLogger:
+    """
+    ParquetLogger for tracking the processing status of parquet files.
+    """
+
+    def __init__(
+        self,
+        log_path: str,
+        ids: list[str],
+        pattern: str,
+        storage_options: dict[str, str] | None = None,
+        add_missing: bool = False,
+    ):
+        self.log_path = log_path
+        self.ids = ids
+        self.pattern = re.compile(pattern)
+        self.add_missing = add_missing
+        self.storage_options = storage_options or {}
+        self.fs = fsspec.filesystem(log_path.split("://")[0], **self.storage_options)
+        self.df: pd.DataFrame
+
+        if self.fs.exists(self.log_path):
+            self.read()
+            self._validate_ids()
+        else:
+            self._init_log()
+
+    def _init_log(self) -> None:
+        """Initialize the log DataFrame."""
+        self.df = pd.DataFrame(
+            {
+                "id": self.ids,
+                "status": Status.PENDING.value,
+                "retries": 0,
+                "datetime": pd.Timestamp.utcnow().isoformat(),
+                "message": "",
+            }
+        ).set_index("id")
+
+    def _validate_ids(self) -> None:
+        """Validate that all provided IDs exist in the log."""
+        missing = set(self.ids) - set(self.df.index)
+        if missing:
+            if self.add_missing:
+                self._add_missing_ids(missing)
+            else:
+                raise ValueError(f"Missing IDs in log: {missing}")
+
+    def _add_missing_ids(self, missing_ids: set[str]) -> None:
+        """Add missing IDs to the log with PENDING status."""
+        new_entries = pd.DataFrame(
+            {
+                "id": list(missing_ids),
+                "status": Status.PENDING.value,
+                "retries": 0,
+                "datetime": pd.Timestamp.utcnow().isoformat(),
+                "message": "",
+            }
+        ).set_index("id")
+        self.df = pd.concat([self.df, new_entries])
+
+    def _extract_tile_id(self, urlpath: str) -> str:
+        """Extract tile ID from the file path using the regex pattern."""
+        match = self.pattern.search(urlpath)
+        if not match:
+            raise ValueError(f"Cannot extract tile ID from urlpath: {urlpath}")
+        return match.group(0)
+
+    def update(
+        self, urlpath: str, status: Status, message: str = "", dt: str | None = None
+    ) -> None:
+        """Update the log based on the given URL path."""
+        tile_id = self._extract_tile_id(urlpath)
+        dt = dt or self.now_to_isoformat()
+
+        if tile_id not in self.df.index:
+            if self.add_missing:
+                self._add_missing_ids({tile_id})
+            else:
+                raise KeyError(f"Tile ID '{tile_id}' not found in the log.")
+
+        self.df.at[tile_id, "status"] = status.value
+        self.df.at[tile_id, "message"] = message
+        self.df.at[tile_id, "datetime"] = dt
+
+        if status == Status.FAILED:
+            self.df.at[tile_id, "retries"] += 1
+            self.df.at[tile_id, "message"] = (
+                f"{message} (retry count: {self.df.at[tile_id, 'retries']})"
+            )
+        elif status == Status.SUCCESS:
+            self.df.at[tile_id, "retries"] = 0
+
+    def bulk_update(self, results: list[tuple[str, Status, str, str]]) -> None:
+        """Bulk update the log with multiple results."""
+        for urlpath, status, message, dt in results:
+            try:
+                self.update(urlpath, status, message, dt)
+            except Exception as e:
+                print(f"Error updating {urlpath}: {e}")
+
+    def update_from_storage(self, storage_pattern: str) -> None:
+        """
+        Update the logger based on parquet files found in storage.
+
+        Args:
+            storage_pattern (str): The pattern to list parquet files from storage.
+        """
+        files = self.fs.glob(storage_pattern)
+
+        if not files:
+            print("No parquet files found.")
+            return
+
+        for f in files:
+            try:
+                tile_id = self._extract_tile_id(f)
+                if tile_id in self.df.index:
+                    self.update(f, Status.SUCCESS, "Parquet file processed.")
+                elif self.add_missing:
+                    self._add_missing_ids({tile_id})
+                    self.update(f, Status.SUCCESS, "Parquet file processed.")
+                else:
+                    print(f"Warning: Tile ID '{tile_id}' not found in the log.")
+            except ValueError as e:
+                print(f"Warning: Could not parse file {f}: {e}")
+
+    def reset(self, statuses: list[Status] | None = None) -> None:
+        """Reset statuses to PENDING for specific tiles."""
+        statuses = statuses or [Status.PROCESSING]
+        to_reset = self.df[
+            self.df["status"].isin([s.value for s in statuses])
+        ].index.tolist()
+        for tile_id in to_reset:
+            self.update(tile_id, Status.PENDING, "", self.now_to_isoformat())
+
+    def sample(self, n: int, statuses: list[Status] | None = None) -> list[str]:
+        """
+        Sample up to `n` IDs with specified statuses.
+
+        Args:
+            n (int): Number of IDs to sample.
+            statuses (List[Status], optional): Statuses to sample from. Defaults to [PENDING].
+
+        Returns:
+            List[str]: Sampled IDs.
+
+        Raises:
+            ValueError: If no items are available with the given statuses.
+        """
+        statuses = statuses or [Status.PENDING]
+        filtered = self.df[self.df["status"].isin([s.value for s in statuses])]
+
+        if filtered.empty:
+            raise ValueError(f"No items with statuses: {[s.value for s in statuses]}")
+
+        return filtered.sample(n=min(n, len(filtered))).index.tolist()
+
+    def read(self) -> None:
+        """Load the log from storage."""
+        with self.fs.open(self.log_path, "rb") as f:
+            self.df = pd.read_parquet(f)
+
+    def write(self) -> None:
+        """Write the log DataFrame back to storage."""
+        with self.fs.open(self.log_path, "wb") as f:
+            self.df.to_parquet(f, index=True)
+
+    @staticmethod
+    def now_to_isoformat() -> str:
+        """Return the current datetime in ISO format."""
+        return datetime.datetime.now(datetime.UTC).isoformat()
+
+
 def log(
     urlpath: str,
     name: str,
