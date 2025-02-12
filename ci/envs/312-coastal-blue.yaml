@@ -1,7 +1,6 @@
 name: coastal-blue
 channels:
   - conda-forge
-  - defaults
 
 dependencies:
   # Basic tools
