@@ -1,7 +1,6 @@
 name: coastal
 channels:
   - conda-forge
-  - defaults
 
 dependencies:
   # Basic tools
