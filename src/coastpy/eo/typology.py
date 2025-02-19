@@ -424,7 +424,8 @@ def load_stac_xr(df: gpd.GeoDataFrame, use_dask=False) -> xr.Dataset:
             datasets.append(ds)
 
     if not datasets:
-        raise ValueError("No valid datasets found.")
+        msg = "No valid datasets found."
+        raise ValueError(msg)
 
     return xr.concat(
         datasets, dim="uuid", join="override", combine_attrs="no_conflicts"

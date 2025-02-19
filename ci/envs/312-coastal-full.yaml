@@ -186,7 +186,7 @@ dependencies:
   # Deep learning / ML libraries
   - libpng # for torchvision
   - pytorch::pytorch
-  - pytorch::torchvision
+  # - pytorch::torchvision # install with pip until https://github.com/pytorch/vision/issues/8889
   - torchgeo
   - timm>=0.9
   - lightning
@@ -208,6 +208,7 @@ dependencies:
       - coloredlogs
       - graphviz
       - coiled
+      - torchvision
       # - coastpy  # probably better to install in dev mode (pip install -e .)
     # - dea-tools
     # - stactools-geoparquet-items
