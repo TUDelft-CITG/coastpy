@@ -1,4 +1,6 @@
 import warnings
+from collections.abc import Callable
+from functools import partial
 from typing import Literal
 
 import dask.bag as db
@@ -371,15 +373,17 @@ class TypologyCollection:
         return dataset
 
 
-def load_stac_gpq_item_xr(stac_gpq_item: gpd.GeoDataFrame) -> xr.Dataset | None:
+def load_stac_gpq_item_xr(
+    stac_gpq_item: gpd.GeoDataFrame, patch_url: Callable | None = None
+) -> xr.Dataset | None:
     """Converts a STAC GeoParquet row into an Xarray dataset."""
     if len(stac_gpq_item) != 1:
         raise ValueError("Expected a single STAC item, but got multiple.")
 
     try:
-        ds = odc.stac.load(stac_geoparquet.to_item_collection(stac_gpq_item)).squeeze(
-            drop=True
-        )
+        ds = odc.stac.load(
+            stac_geoparquet.to_item_collection(stac_gpq_item), patch_url=patch_url
+        ).squeeze(drop=True)
         ds = ds.drop_vars("spatial_ref", errors="ignore")
 
         # These are STAC GeoParquet that cannot be added as coordinates to the dataset
@@ -408,19 +412,21 @@ def load_stac_gpq_item_xr(stac_gpq_item: gpd.GeoDataFrame) -> xr.Dataset | None:
         return None
 
 
-def load_stac_xr(df: gpd.GeoDataFrame, use_dask=False) -> xr.Dataset:
+def load_stac_xr(
+    df: gpd.GeoDataFrame, use_dask=False, patch_url: Callable | None = None
+) -> xr.Dataset:
     """Loads STAC GeoParquet training items into an Xarray dataset, optionally using Dask Bag for efficiency."""
 
     if use_dask:
         bag = db.from_sequence([df.iloc[[i]] for i in range(len(df))])
-        delayed_datasets = bag.map(load_stac_gpq_item_xr)
+        delayed_datasets = bag.map(partial(load_stac_gpq_item_xr, patch_url=patch_url))
         datasets = delayed_datasets.compute()
 
     else:
         datasets = []
         for i in range(len(df)):
             sample = df.iloc[[i]]
-            ds = load_stac_gpq_item_xr(sample)
+            ds = load_stac_gpq_item_xr(sample, patch_url=patch_url)
             datasets.append(ds)
 
     if not datasets:
