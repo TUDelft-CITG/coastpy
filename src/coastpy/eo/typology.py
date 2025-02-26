@@ -378,7 +378,8 @@ def load_stac_gpq_item_xr(
 ) -> xr.Dataset | None:
     """Converts a STAC GeoParquet row into an Xarray dataset."""
     if len(stac_gpq_item) != 1:
-        raise ValueError("Expected a single STAC item, but got multiple.")
+        msg = "Expected a single STAC item, but got multiple."
+        raise ValueError(msg)
 
     try:
         ds = odc.stac.load(
