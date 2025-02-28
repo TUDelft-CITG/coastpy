@@ -19,7 +19,7 @@ from odc.geo.geom import Geometry
 from rasterio.enums import Resampling
 from shapely.geometry import Point
 
-from coastpy.eo.collection2 import (
+from coastpy.eo.collection import (
     CopernicusDEMCollection,
     DeltaDTMCollection,
     S2CompositeCollection,
