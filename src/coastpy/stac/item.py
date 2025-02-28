@@ -3,7 +3,6 @@ from enum import Enum
 from typing import Any
 
 import fsspec
-import pandas as pd
 import pystac
 import pystac.catalog
 import pystac.common_metadata
@@ -11,6 +10,7 @@ import pystac.utils
 import rasterio
 import rasterio.warp
 import shapely
+import stac_geoparquet
 import xarray as xr
 from affine import Affine
 from pystac.extensions.eo import Band, EOExtension
@@ -645,7 +645,6 @@ if __name__ == "__main__":
 
 
 def add_gpq_snapshot(
-    df: pd.DataFrame,
     collection: pystac.Collection,
     storage_path: str,
     storage_options: dict[str, Any],
@@ -675,9 +674,13 @@ def add_gpq_snapshot(
     cloud_uri = path_parser.to_cloud_uri()
     asset_href = path_parser.to_https_url()
 
+    items = list(collection.get_all_items())
+    items_as_json = [i.to_dict() for i in items]
+    item_extents = stac_geoparquet.to_geodataframe(items_as_json)
+
     # Write GeoParquet to cloud storage
     with fsspec.open(cloud_uri, mode="wb", **storage_options) as f:
-        df.to_parquet(f)
+        item_extents.to_parquet(f)
 
     # Create STAC Asset with hardcoded metadata
     asset = pystac.Asset(

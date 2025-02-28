@@ -15,7 +15,6 @@ import fsspec
 import pandas as pd
 import pystac
 import pystac.media_type
-import stac_geoparquet
 import xarray as xr
 from dask import delayed
 from dask.distributed import Client
@@ -25,10 +24,7 @@ from pystac.extensions.scientific import ScientificExtension
 from pystac.extensions.version import VersionExtension
 from pystac.stac_io import DefaultStacIO
 
-from coastpy.io.utils import PathParser
-from coastpy.stac.item import (
-    create_cog_item,
-)
+from coastpy.stac.item import add_gpq_snapshot, create_cog_item
 from coastpy.stac.layouts import COGLayout
 from coastpy.utils.dask_utils import summarize_dask_cluster
 
@@ -500,27 +496,9 @@ def create_collection_with_items():
 
     collection.update_extent_from_items()
 
-    items = list(collection.get_all_items())
-    items_as_json = [i.to_dict() for i in items]
-    item_extents = stac_geoparquet.to_geodataframe(items_as_json)
-
-    with fsspec.open(GEOPARQUET_STAC_ITEMS_HREF, mode="wb", **storage_options) as f:
-        item_extents.to_parquet(f)
-
-    snapshot_pp = PathParser(
-        GEOPARQUET_STAC_ITEMS_HREF, account_name=storage_options["account_name"]
+    collection = add_gpq_snapshot(
+        collection, GEOPARQUET_STAC_ITEMS_HREF, storage_options
     )
-    with fsspec.open(snapshot_pp.to_cloud_uri(), mode="wb", **storage_options) as f:
-        item_extents.to_parquet(f)
-
-    gpq_items_asset = pystac.Asset(
-        snapshot_pp.to_https_url(),
-        title="GeoParquet STAC items",
-        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
-        media_type=PARQUET_MEDIA_TYPE,
-        roles=["metadata"],
-    )
-    collection.add_asset("geoparquet-stac-items", gpq_items_asset)
 
     catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
 

@@ -5,7 +5,6 @@ from typing import Any
 
 import fsspec
 import pystac
-import stac_geoparquet
 import tqdm
 from dotenv import load_dotenv
 from pystac.extensions.item_assets import ItemAssetsExtension
@@ -14,11 +13,10 @@ from pystac.extensions.version import VersionExtension
 from pystac.provider import ProviderRole
 from pystac.stac_io import DefaultStacIO
 
-from coastpy.io.utils import PathParser
 from coastpy.libs import stac_table
 from coastpy.libs.stac_table import InferDatetimeOptions
 from coastpy.stac import ParquetLayout
-from coastpy.stac.item import create_tabular_item
+from coastpy.stac.item import add_gpq_snapshot, create_tabular_item
 
 # Load the environment variables from the .env file
 load_dotenv()
@@ -308,26 +306,9 @@ if __name__ == "__main__":
 
     collection.update_extent_from_items()
 
-    items = list(collection.get_all_items())
-    items_as_json = [i.to_dict() for i in items]
-    item_extents = stac_geoparquet.to_geodataframe(items_as_json)
-
-    snapshot_pp = PathParser(
-        GEOPARQUET_STAC_ITEMS_HREF, account_name=STORAGE_ACCOUNT_NAME
+    collection = add_gpq_snapshot(
+        collection, GEOPARQUET_STAC_ITEMS_HREF, storage_options
     )
-    with fsspec.open(snapshot_pp.to_cloud_uri(), mode="wb", **storage_options) as f:
-        item_extents.to_parquet(f)
-
-    gpq_items_asset = pystac.Asset(
-        snapshot_pp.to_https_url(),
-        title="GeoParquet STAC items",
-        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
-        media_type=PARQUET_MEDIA_TYPE,
-        roles=["metadata"],
-    )
-    gpq_items_asset.common_metadata.created = DATETIME_DATA_CREATED
-    collection.add_asset("geoparquet-stac-items", gpq_items_asset)
-
     # TODO: there should be a cleaner method to remove the previous stac catalog and its items
     try:
         if catalog.get_child(collection.id):
