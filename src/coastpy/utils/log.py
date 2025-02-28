@@ -299,13 +299,13 @@ class ParquetLogger:
     def __init__(
         self,
         log_path: str,
-        ids: list[str],
         pattern: str,
+        ids: list[str] | None = None,
         storage_options: dict[str, str] | None = None,
         add_missing: bool = False,
     ):
         self.log_path = log_path
-        self.ids = ids
+        self.ids = ids or []
         self.pattern = re.compile(pattern)
         self.add_missing = add_missing
         self.storage_options = storage_options or {}
@@ -314,7 +314,8 @@ class ParquetLogger:
 
         if self.fs.exists(self.log_path):
             self.read()
-            self._validate_ids()
+            if self.ids:
+                self._validate_ids()
         else:
             self._init_log()
 
