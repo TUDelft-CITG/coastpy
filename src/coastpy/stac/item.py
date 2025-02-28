@@ -2,6 +2,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+import fsspec
+import pandas as pd
 import pystac
 import pystac.catalog
 import pystac.common_metadata
@@ -640,3 +642,56 @@ if __name__ == "__main__":
         collection.normalize_hrefs(str(STAC_DIR / collection.id), layout)
 
         collection.save()
+
+
+def add_gpq_snapshot(
+    df: pd.DataFrame,
+    collection: pystac.Collection,
+    storage_path: str,
+    storage_options: dict[str, Any],
+) -> pystac.Collection:
+    """
+    Writes a GeoParquet snapshot to cloud storage and adds it as a STAC asset.
+
+    Args:
+        df (pd.DataFrame): The DataFrame to write to Parquet.
+        collection (pystac.Collection): The STAC Collection to attach the asset to.
+        storage_path (str): Cloud storage path (e.g., "az://bucket/path/to/file.parquet").
+        storage_options (dict): Storage options for `fsspec.open()`, must contain `account_name`.
+
+    Returns:
+        pystac.Collection: The updated STAC collection with the added asset.
+
+    Raises:
+        ValueError: If `account_name` is missing from `storage_options`.
+    """
+
+    # Validate `account_name` in storage options
+    if "account_name" not in storage_options:
+        raise ValueError("`storage_options` must contain `account_name`.")
+
+    # Parse paths using PathParser
+    path_parser = PathParser(storage_path, account_name=storage_options["account_name"])
+    cloud_uri = path_parser.to_cloud_uri()
+    asset_href = path_parser.to_https_url()
+
+    # Write GeoParquet to cloud storage
+    with fsspec.open(cloud_uri, mode="wb", **storage_options) as f:
+        df.to_parquet(f)
+
+    # Create STAC Asset with hardcoded metadata
+    asset = pystac.Asset(
+        href=asset_href,
+        title="GeoParquet STAC items",
+        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
+        media_type=PARQUET_MEDIA_TYPE,
+        roles=["metadata"],
+    )
+
+    # Set creation timestamp
+    asset.common_metadata.created = pystac.utils.now_in_utc()
+
+    # Attach asset to STAC collection
+    collection.add_asset("geoparquet-stac-items", asset)
+
+    return collection
