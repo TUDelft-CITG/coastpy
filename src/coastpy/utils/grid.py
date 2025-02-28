@@ -14,17 +14,26 @@ def read_coastal_grid(zoom: int, buffer_size: str) -> gpd.GeoDataFrame:
     catalog = pystac.Catalog.from_file(
         "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
     )
-    coastal_collection = catalog.get_child("coastal-grid")
-    if not coastal_collection:
+    collection = catalog.get_child("coastal-grid")
+    if not collection:
         raise ValueError("Coastal zone collection not found")
-    item = coastal_collection.get_item(f"coastal_grid_z{zoom}_{buffer_size}")
+    item = collection.get_item(f"coastal_grid_z{zoom}_{buffer_size}")
     if not item:
         raise ValueError(
             f"Coastal zone item for zoom {zoom} with {buffer_size} not found"
         )
     href = item.assets["data"].href
     with fsspec.open(href, mode="rb") as f:
-        return gpd.read_parquet(f)
+        grid = gpd.read_parquet(f)
+
+        # Apply JSON parsing for specific columns
+    grid["admin:continents"] = grid["admin:continents"].apply(
+        lambda x: json.loads(x) if x else []
+    )
+    grid["admin:countries"] = grid["admin:countries"].apply(
+        lambda x: json.loads(x) if x else []
+    )
+    return grid
 
 
 def filter_by_admins(
@@ -62,13 +71,18 @@ def filter_by_admins(
     return grid
 
 
+def coastal_grid_by_mgrs_tile(grid: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    grid["s2:mgrs_tile"] = grid["s2:mgrs_tile"].apply(ast.literal_eval)
+    grid = grid.explode("s2:mgrs_tile", ignore_index=True)
+    grid["tile_id"] = grid[["s2:mgrs_tile", "coastal_grid:id"]].agg("_".join, axis=1)
+    return grid
+
+
 def dissolve_by_mgrs_tile(grid: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Union geometries per unique MGRS tile."""
-    grid = grid.copy()
-    grid["s2:mgrs_tile"] = grid["s2:mgrs_tile"].apply(ast.literal_eval)
-    exploded = grid.explode("s2:mgrs_tile", ignore_index=True)
+    grid = coastal_grid_by_mgrs_tile(grid)
     return (
-        exploded[["geometry", "s2:mgrs_tile"]]
+        grid[["geometry", "s2:mgrs_tile"]]
         .dissolve(by="s2:mgrs_tile", as_index=False)
         .reset_index(drop=True)
     )

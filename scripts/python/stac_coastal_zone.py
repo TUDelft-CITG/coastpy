@@ -6,7 +6,6 @@ from typing import Any
 
 import fsspec
 import pystac
-import stac_geoparquet
 import tqdm
 from dotenv import load_dotenv
 from pystac.extensions.item_assets import ItemAssetsExtension
@@ -18,6 +17,7 @@ from pystac.stac_io import DefaultStacIO
 from coastpy.io.utils import PathParser
 from coastpy.libs import stac_table
 from coastpy.stac import ParquetLayout
+from coastpy.stac.item import PARQUET_MEDIA_TYPE, add_gpq_snapshot
 
 # Load the environment variables from the .env file
 load_dotenv()
@@ -35,7 +35,6 @@ DATETIME_DATA_CREATED = datetime.datetime(2023, 2, 9)
 CONTAINER_NAME = "coastal-zone"
 PREFIX = f"release/{VERSION}"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
-PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 LICENSE = "CC-BY-4.0"
 
 # Collection information
@@ -194,7 +193,7 @@ def create_collection(
             "title": ASSET_TITLE,
             "description": ASSET_DESCRIPTION,
             "roles": ["data"],
-            "type": stac_table.PARQUET_MEDIA_TYPE,
+            "type": PARQUET_MEDIA_TYPE,
             **ASSET_EXTRA_FIELDS,
         }
     }
@@ -322,25 +321,9 @@ if __name__ == "__main__":
 
     collection.update_extent_from_items()
 
-    items = list(collection.get_all_items())
-    items_as_json = [i.to_dict() for i in items]
-    item_extents = stac_geoparquet.to_geodataframe(items_as_json)
-
-    snapshot_pp = PathParser(
-        GEOPARQUET_STAC_ITEMS_HREF, account_name=STORAGE_ACCOUNT_NAME
+    collection = add_gpq_snapshot(
+        collection, GEOPARQUET_STAC_ITEMS_HREF, storage_options
     )
-    with fsspec.open(snapshot_pp.to_cloud_uri(), mode="wb", **storage_options) as f:
-        item_extents.to_parquet(f)
-
-    gpq_items_asset = pystac.Asset(
-        snapshot_pp.to_https_url(),
-        title="GeoParquet STAC items",
-        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
-        media_type=PARQUET_MEDIA_TYPE,
-        roles=["metadata"],
-    )
-    gpq_items_asset.common_metadata.created = DATETIME_DATA_CREATED
-    collection.add_asset("geoparquet-stac-items", gpq_items_asset)
 
     # TODO: there should be a cleaner method to remove the previous stac catalog and its items
     try:

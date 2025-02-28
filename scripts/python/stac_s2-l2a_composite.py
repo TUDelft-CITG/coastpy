@@ -1,4 +1,8 @@
+from dotenv import load_dotenv
+
+load_dotenv()
 import datetime
+import json
 import logging
 import os
 import pathlib
@@ -6,35 +10,58 @@ import re
 from collections import defaultdict
 from typing import Any
 
+import dask.bag as db
 import fsspec
+import pandas as pd
 import pystac
 import pystac.media_type
-import stac_geoparquet
 import xarray as xr
-from coclicodata.coclico_stac.layouts import CoCliCoCOGLayout
-from dotenv import load_dotenv
-from pystac import Collection, Provider, ProviderRole
+from dask import delayed
+from dask.distributed import Client
+from pystac import Collection, Item, Provider, ProviderRole
 from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.extensions.scientific import ScientificExtension
 from pystac.extensions.version import VersionExtension
 from pystac.stac_io import DefaultStacIO
 
-from coastpy.io.utils import PathParser
-from coastpy.stac.item import (
-    create_cog_item,
-)
+from coastpy.stac.item import add_gpq_snapshot, create_cog_item
+from coastpy.stac.layouts import COGLayout
+from coastpy.utils.dask_utils import summarize_dask_cluster
 
 # Load the environment variables from the .env file
-load_dotenv(override=True)
 
 logging.getLogger("azure").setLevel(logging.WARNING)
 
+# Configuration
+VERSION = "2025-01-17"
+CONTAINER_NAME = "tmp"
+CONTAINER_URI = f"az://{CONTAINER_NAME}/s2-l2a-composite/release/{VERSION}"
+STAC_ITEM_CONTAINER = f"az://tmp/stac/{CONTAINER_URI.replace('az://', '')}/items"
+DATETIME_RANGE = "2023-01-01/2024-01-01"
+BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
+REQUIRED_BANDS = [b for b in BANDS if b != "SCL"]
+
+
+def format_date_range(date_range: str) -> str:
+    """Convert ISO date range to YYYYMMDD_YYYYMMDD format."""
+    return "_".join(pd.to_datetime(date_range.split("/")).strftime("%Y%m%d"))
+
+
+date_range = format_date_range(DATETIME_RANGE)
+
+# NOTE: this is very important to get right
+FILENAME_PATTERN = (
+    rf"(?P<tile_id>\d{{2}}[A-Za-z]{{3}}_z\d+-(?:n|s)\d{{2}}(?:w|e)\d{{3}}-[a-z0-9]{{6}})"  # Tile ID
+    rf"(?:_{date_range})?"  # Optional date range
+    r"(?:_(?P<band>[a-z0-9]+))?"  # Optional band
+    r"(?:_10m\.tif)?"  # Optional resolution
+)
+
 # Get the SAS token and storage account name from environment variables
 sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-STORAGE_ACCOUNT_NAME = "coclico"
-storage_options = {"account_name": STORAGE_ACCOUNT_NAME, "credential": sas_token}
+storage_options = {"account_name": "coclico", "credential": sas_token}
 
-# CoCliCo STAC
+# STAC DEFINITIONS
 STAC_DIR = pathlib.Path.home() / "dev" / "coclicodata" / "current"
 
 COLLECTION_ID = "s2-l2a-composite"
@@ -48,11 +75,8 @@ ASSET_EXTRA_FIELDS = {
     "xarray:storage_options": {"account_name": "coclico"},
 }
 
-# Configuration
-STORAGE_ACCOUNT_NAME = "coclico"
-CONTAINER_NAME = "s2-l2a-composite"
-VERSION = "2025-01-11"
-CONTAINER_URI = f"az://{CONTAINER_NAME}/release/{VERSION}"
+
+#
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 LICENSE = "CC-BY-4.0"
@@ -181,40 +205,81 @@ def create_collection(
     return collection
 
 
-def group_tif_files_by_tile(paths: list[str]) -> dict[str, dict[str, str]]:
-    """
-    Group .tif file paths by tile ID.
+def extract_groups(pattern, urlpath: str) -> dict[str, str | None]:
+    """Extract groups from a file path using the regex pattern."""
+    match = pattern.search(urlpath)
+    if not match:
+        raise ValueError(f"Cannot extract groups from urlpath: {urlpath}")
+    groups = match.groupdict()
+    return {k: v for k, v in groups.items() if v is not None}
 
-    The tile IDs consist of an MGRS S2 tile name (e.g., 31UFU) followed by a numeric index (e.g., 00),
-    separated by a dash. Each grouped dictionary entry contains band-specific file paths.
+
+def group_tif_files_by_tile(
+    storage_pattern: str, filename_pattern, storage_options
+) -> dict[str, dict[str, str]]:
+    """
+    Group tiles by their Tile IDs and associated bands based on files in storage.
 
     Args:
-        paths (List[str]): List of file paths to group.
+        storage_pattern (str): The storage pattern to list files from storage.
+        filename_pattern (str): The regex pattern to extract tile ID and band from the filename.
+        storage_options (dict): Storage options to pass to fsspec.
 
     Returns:
-        Dict[str, Dict[str, str]]: Dictionary grouping file paths by tile ID, with bands as sub-keys.
+        Dict[str, Set[str]]: Mapping of tile IDs to their associated bands.
     """
-    # Define a regex pattern to extract tile ID and band
-    tile_pattern = re.compile(
-        r"(?P<tile_id>\d{2}[A-Z]{3}-\d{2})_[0-9]{8}_[0-9]{8}_(?P<band>\w+)_\d{2}m\.tif$"
-    )
+    fs = fsspec.filesystem(storage_pattern.split("://")[0], **storage_options)
+    files = fs.glob(storage_pattern)
 
-    grouped_files = defaultdict(dict)
+    pattern = re.compile(filename_pattern)
 
-    for path in paths:
-        filename = path.split("/")[-1]  # Extract the filename from the path
-        match = tile_pattern.search(filename)
+    if not files:
+        print("No files found.")
+        return {}
 
-        if match:
-            tile_id = match.group("tile_id")
-            band = match.group("band")
-            grouped_files[tile_id][band] = path
-        else:
-            raise ValueError(
-                f"File '{path}' does not match the expected naming convention."
-            )
+    tiles = defaultdict(dict)
+    for f in files:
+        try:
+            groups = extract_groups(pattern, f)
+            tile_id = groups["tile_id"]
+            band = groups.get("band")
+            if tile_id and band:
+                tiles[tile_id][band] = f
+            elif tile_id:
+                tiles[tile_id] = f
+        except ValueError as e:
+            print(f"Warning: Could not parse file {f}: {e}")
 
-    return dict(grouped_files)
+    return tiles
+
+
+def update_attributes(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Update attribute names in the dataset and its variables by replacing the first underscore
+    with a semicolon for attributes starting with 'eo_' or 'composite_'.
+
+    Args:
+        ds (xr.Dataset): Input dataset.
+
+    Returns:
+        xr.Dataset: Dataset with updated attribute names.
+    """
+    # Update global attributes
+    attrs_copy = ds.attrs.copy()
+    for attr in attrs_copy:
+        if attr.startswith(("eo_", "composite_")):
+            new_attr = attr.replace("_", ":", 1)
+            ds.attrs[new_attr] = ds.attrs.pop(attr)
+
+    # Update variable-specific attributes
+    for var in ds.data_vars:
+        var_attrs_copy = ds[var].attrs.copy()
+        for attr in var_attrs_copy:
+            if attr.startswith(("eo_", "composite_")):
+                new_attr = attr.replace("_", ":", 1)
+                ds[var].attrs[new_attr] = ds[var].attrs.pop(attr)
+
+    return ds
 
 
 def load_bands_to_dataset(
@@ -272,58 +337,168 @@ def load_bands_to_dataset(
 
     del combined_dataset.attrs["band_name"]
 
+    # Replaces underscores in attribute names with colons to comply with STAC
+    combined_dataset = update_attributes(combined_dataset)
+
     return combined_dataset
 
 
-if __name__ == "__main__":
+# Functions for the workflow
+@delayed
+def load_bands_to_dataset_delayed(
+    band_paths: dict, storage_options: dict
+) -> xr.Dataset:
+    """Lazy loading of datasets using Dask Delayed."""
+    return load_bands_to_dataset(band_paths, storage_options)
+
+
+@delayed
+def create_stac_item_delayed(ds: xr.Dataset, urlpath: str) -> Item:
+    """Create a STAC item from a dataset lazily."""
+    return create_cog_item(
+        ds,
+        urlpath,
+        storage_options=storage_options,
+        nodata=NODATA_VALUE,
+        data_type=DATA_TYPE,
+        scale_factor=SCALE_FACTOR,
+        unit=UNIT,
+    )
+
+
+@delayed
+def write_stac_item_to_storage(item: Item, storage_options: dict) -> str | None:
+    """Write a STAC item to cloud storage as a JSON file."""
+    item_path = f"{STAC_ITEM_CONTAINER}/{item.id}.json"
+    try:
+        with fsspec.open(item_path, mode="w", **storage_options) as f:
+            json.dump(item.to_dict(), f)
+        return item_path
+    except Exception as e:
+        print(f"Error writing item to storage: {e}")
+        return None
+
+
+def read_stac_item_from_storage(file: str, filesystem) -> Item:
+    with filesystem.open(file) as f:
+        item_dict = json.load(f)
+    return Item.from_dict(item_dict)
+
+
+def filter_existing_tiles(
+    tiles: dict[str, dict], storage_options: dict[str, str]
+) -> dict[str, dict]:
+    """Filter out tiles that already have STAC items in the cloud storage."""
+    fs = fsspec.filesystem("az", **storage_options)
+    existing_files = fs.glob(f"{STAC_ITEM_CONTAINER}/*.json")
+    TILE_ID_PATTERN = (
+        r"(?P<tile_id>\d{2}[A-Za-z]{3}_z\d+-(?:n|s)\d{2}(?:w|e)\d{3}-[a-z0-9]{6})"
+    )
+    pattern = re.compile(TILE_ID_PATTERN)
+
+    existing_ids = set()
+    for file in existing_files:
+        match = pattern.search(file)
+        if match:
+            tile_id = match.group("tile_id")
+            existing_ids.add(tile_id)
+        else:
+            raise ValueError(f"Cannot extract tile ID from file: {file}")
+
+    return {
+        tile_id: bands
+        for tile_id, bands in tiles.items()
+        if tile_id not in existing_ids
+    }
+
+
+def create_stac_items():
+    """Main function for creating STAC items."""
+    # Initialize Dask client
+    client = Client(threads_per_worker=1)
+    summarize_dask_cluster(client)
+
+    # List and filter tiles
+    storage_pattern = f"{CONTAINER_URI}/*.tif"
+    tiles = group_tif_files_by_tile(storage_pattern, FILENAME_PATTERN, storage_options)
+    print(f"Found {len(tiles)} tiles.")
+
+    tiles = {
+        tile_id: bands
+        for tile_id, bands in tiles.items()
+        if set(REQUIRED_BANDS).issubset(bands.keys())
+    }
+    print(f"Found {len(tiles)} tiles with all required bands.")
+
+    # Filter out tiles with existing STAC items
+    tiles = filter_existing_tiles(tiles, storage_options)
+    print(f"Processing {len(tiles)} new tiles.")
+
+    stac_id_pattern = r"(?P<stac_id>\d{2}[A-Za-z]{3}_z\d+-(?:n|s)\d{2}(?:w|e)\d{3}-[a-z0-9]{6}_\d{8}_\d{8})"
+
+    # Create tasks
+    tasks = []
+    for _, band_paths in tiles.items():
+        ds = load_bands_to_dataset_delayed(band_paths, storage_options)
+        first_href = band_paths[next(iter(band_paths.keys()))]
+        match = re.search(stac_id_pattern, first_href)
+        if not match:
+            raise ValueError(f"Could not extract STAC ID from URL: {first_href}")
+        stac_id = match.group("stac_id")
+        urlpath = f"{CONTAINER_URI}/{stac_id}.tif"
+        item = create_stac_item_delayed(ds, urlpath)
+        task = write_stac_item_to_storage(item, storage_options)
+        tasks.append(task)
+
+    # Execute tasks
+    results = client.compute(tasks, sync=True)
+
+    if not isinstance(results, list):
+        print(f"Error processing STAC items: {results}")
+
+    print(f"Completed processing {len(results)} STAC items.")  # type: ignore
+
+    client.close()
+
+
+def create_collection_with_items():
+    client = Client(n_workers=4, threads_per_worker=1)
+    summarize_dask_cluster(client)
+
+    fs = fsspec.filesystem("az", **storage_options)
+    files = list(fs.glob(f"{STAC_ITEM_CONTAINER}/*.json"))
+
+    # Create a Dask bag from the list of files
+    bag = db.from_sequence(files, npartitions=10)
+
+    # Map the read_stac_item_from_storage function over the bag
+    items_bag = bag.map(lambda file: read_stac_item_from_storage(file, fs))
+
+    def validate(item):
+        if not isinstance(item, Item):
+            raise ValueError(f"Item is not a Pystac.Item: {item}")
+        if not item.validate():
+            raise ValueError(f"Invalid item: {item}")
+        return item
+
+    items_bag = items_bag.map(validate)
+
+    # Compute the bag to get the list of pystac.Item objects
+    items = client.compute(items_bag, sync=True, retries=3)
+
     stac_io = DefaultStacIO()  # CoCliCoStacIO()
-    layout = CoCliCoCOGLayout()
+    layout = COGLayout()
 
     collection = create_collection()
 
-    fs = fsspec.filesystem("az", **storage_options)
-    paths = fs.glob(f"{CONTAINER_URI}/*.tif")
-    tiles = group_tif_files_by_tile(paths)
-
-    for tile_id, band_paths in tiles.items():
-        ds = load_bands_to_dataset(band_paths, storage_options)
-
-        # Create a STAC item for the combined dataset
-        urlpath = f"{CONTAINER_URI}/{tile_id}.tif"
-        item = create_cog_item(
-            ds,
-            urlpath,
-            storage_options=storage_options,
-            nodata=NODATA_VALUE,
-            data_type=DATA_TYPE,
-            scale_factor=SCALE_FACTOR,
-            unit=UNIT,
-        )
-
+    for item in items:
         collection.add_item(item)
+
     collection.update_extent_from_items()
 
-    items = list(collection.get_all_items())
-    items_as_json = [i.to_dict() for i in items]
-    item_extents = stac_geoparquet.to_geodataframe(items_as_json)
-
-    with fsspec.open(GEOPARQUET_STAC_ITEMS_HREF, mode="wb", **storage_options) as f:
-        item_extents.to_parquet(f)
-
-    snapshot_pp = PathParser(
-        GEOPARQUET_STAC_ITEMS_HREF, account_name=STORAGE_ACCOUNT_NAME
+    collection = add_gpq_snapshot(
+        collection, GEOPARQUET_STAC_ITEMS_HREF, storage_options
     )
-    with fsspec.open(snapshot_pp.to_cloud_uri(), mode="wb", **storage_options) as f:
-        item_extents.to_parquet(f)
-
-    gpq_items_asset = pystac.Asset(
-        snapshot_pp.to_https_url(),
-        title="GeoParquet STAC items",
-        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
-        media_type=PARQUET_MEDIA_TYPE,
-        roles=["metadata"],
-    )
-    collection.add_asset("geoparquet-stac-items", gpq_items_asset)
 
     catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
 
@@ -346,3 +521,12 @@ if __name__ == "__main__":
         dest_href=str(STAC_DIR),
         stac_io=stac_io,
     )
+
+
+def main():
+    # create_stac_items()
+    create_collection_with_items()
+
+
+if __name__ == "__main__":
+    main()

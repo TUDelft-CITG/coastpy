@@ -4,17 +4,16 @@ import antimeridian
 import geopandas as gpd
 import pandas as pd
 import shapely
-from geopandas import GeoDataFrame
 from shapely.geometry import LineString, box
 
 
 def create_buffer_zone(
-    gdf: GeoDataFrame,
+    gdf: gpd.GeoDataFrame,
     planar_crs: int | None = 3857,
     buffer_factor: float = 1.5,
     max_distance: float = 20000,
     use_utm: bool = False,
-) -> GeoDataFrame:
+) -> gpd.GeoDataFrame:
     """
     Create a buffer zone around geometries in a GeoDataFrame.
 

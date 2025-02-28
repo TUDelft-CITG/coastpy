@@ -12,20 +12,17 @@ import enum
 from typing import Any, TypeVar
 
 import dask
-import pystac
-
-# NOTE: until query planning is enabled in Dask GeoPandas
-dask.config.set({"dataframe.query-planning": False})
 import dask_geopandas
 import fsspec
-import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyproj
+import pystac
+import pystac.extensions.projection
 import pystac.utils
 import shapely.geometry
 from pystac.asset import Asset
-from pystac.extensions import projection
+from pystac.extensions.projection import ProjectionExtension
 from shapely.ops import transform
 
 T = TypeVar("T", pystac.Collection, pystac.Item)
@@ -118,7 +115,6 @@ def generate(
         or infer_datetime != InferDatetimeOptions.no
         or proj is True
     ):
-        # NOTE: gather spatial partitions has been temporarily disabled
         data = dask_geopandas.read_parquet(
             uri, storage_options=storage_options, gather_spatial_partitions=False
         )
@@ -128,44 +124,44 @@ def generate(
     item.properties["table:columns"] = columns
 
     if proj is True:
-        proj = get_proj(data)
-    proj = proj or {}
+        if data is not None:
+            maybe_crs = data.spatial_partitions.crs
+            if maybe_crs:
+                proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
+                maybe_epsg = maybe_crs.to_epsg()
+                if maybe_epsg:
+                    proj_ext.epsg = maybe_epsg
+                else:
+                    proj_ext.wkt2 = maybe_crs.to_wkt()
+            else:
+                raise ValueError("No CRS found in the dataset.")
 
-    # TODO: Add schema when published
-    if SCHEMA_URI not in item.stac_extensions:
-        item.stac_extensions.append(SCHEMA_URI)
-    if proj and projection.SCHEMA_URI not in item.stac_extensions:
-        item.stac_extensions.append(projection.SCHEMA_URI)
+    elif isinstance(proj, dict) and proj:
+        proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
+        for key, value in proj.items():
+            setattr(proj_ext, key, value)
 
-    extra_proj = {}
-    if infer_bbox:
-        spatial_partitions = data.spatial_partitions  # type: ignore
+    if infer_bbox and data is not None:
+        bbox = data.spatial_partitions.unary_union.bounds
+        proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
+        proj_ext.bbox = bbox
 
-        if spatial_partitions is None:
-            msg = "No spatial partitions found in the dataset."
-            raise ValueError(msg)
-
-        src_crs = spatial_partitions.crs.to_epsg()
+        # Transform bbox to EPSG:4326 for STAC compliance
+        src_crs = data.spatial_partitions.crs.to_epsg()
         tf = pyproj.Transformer.from_crs(src_crs, 4326, always_xy=True)
+        bbox_transformed = transform(tf.transform, shapely.geometry.box(*bbox))
+        item.bbox = list(bbox_transformed.bounds)
 
-        bbox = spatial_partitions.unary_union.bounds
-        # NOTE: bbox of unary union will be stored under proj extension as projected
-        extra_proj["proj:bbox"] = bbox
+    if infer_geometry and data is not None:
+        geometry = data.unary_union.compute()
+        proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
+        proj_ext.geometry = shapely.geometry.mapping(geometry)
 
-        # NOTE: bbox will be stored in pystsac.Item.bbox in EPSG:4326
-        bbox = transform(tf.transform, shapely.geometry.box(*bbox))
-        item.bbox = list(bbox.bounds)
-
-    if infer_geometry:
-        # NOTE: geom  under proj extension as projected
-        geometry = data.unary_union.compute()  # type: ignore
-        extra_proj["proj:geometry"] = shapely.geometry.mapping(geometry)
-
-        # NOTE: geometry will be stored in pystsac.Item.geometry in EPSG:4326
-        src_crs = data.spatial_partitions.crs.to_epsg()  # type: ignore
+        # Transform geometry to EPSG:4326 for STAC compliance
+        src_crs = data.spatial_partitions.crs.to_epsg()
         tf = pyproj.Transformer.from_crs(src_crs, 4326, always_xy=True)
-        geometry = transform(tf.transform, geometry)
-        item.geometry = shapely.geometry.mapping(geometry)
+        geometry_transformed = transform(tf.transform, geometry)
+        item.geometry = shapely.geometry.mapping(geometry_transformed)
 
     if infer_bbox and item.geometry is None:
         # If bbox is set then geometry must be set as well.
@@ -176,8 +172,9 @@ def generate(
     if infer_geometry and item.bbox is None:
         item.bbox = shapely.geometry.shape(item.geometry).bounds  # type: ignore
 
-    if proj or extra_proj:
-        item.properties.update(**extra_proj, **proj)
+    # TODO: Add schema when published
+    if SCHEMA_URI not in item.stac_extensions:
+        item.stac_extensions.append(SCHEMA_URI)
 
     if infer_datetime == InferDatetimeOptions.no:
         if datetime is None:
@@ -216,7 +213,7 @@ def generate(
 
     if infer_datetime == InferDatetimeOptions.range:
         values = dask.compute(data[datetime_column].min(), data[datetime_column].max())  # type: ignore
-        values = np.array(pd.Series(values).dt.to_pydatetime())
+        values = pd.Series(values).dt.to_pydatetime().tolist()
         item.common_metadata.start_datetime = values[0]
         item.common_metadata.end_datetime = values[1]
         # NOTE: consider if its good practice to set datetime to midpoint when range is set
@@ -242,23 +239,6 @@ def generate(
         item.validate()
 
     return item
-
-
-def get_proj(ds) -> dict:
-    """
-    Read projection information from the dataset.
-    """
-    # Use geopandas to get the proj info
-    proj = {}
-    maybe_crs = ds.geometry.crs
-    if maybe_crs:
-        maybe_epsg = ds.geometry.crs.to_epsg()
-        if maybe_epsg:
-            proj["proj:epsg"] = maybe_epsg
-        else:
-            proj["proj:wkt2"] = ds.geometry.crs.to_wkt()
-
-    return proj
 
 
 def get_columns(schema: pa.Schema, prefix: str = "") -> list:

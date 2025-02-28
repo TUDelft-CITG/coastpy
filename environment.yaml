@@ -1,7 +1,6 @@
 name: coastal
 channels:
   - conda-forge
-  - defaults
 
 dependencies:
   # Basic tools
@@ -54,6 +53,7 @@ dependencies:
   - cchardet
   - fsspec
   - intake
+  - msgspec
   - netcdf4
   - numcodecs
   - numpy
@@ -66,7 +66,7 @@ dependencies:
   - scikit-learn
   - scipy
   - xarray
-  - zarr
+  - zarr # >3.0
 
   # Plotting libraries
   - descartes
@@ -80,12 +80,13 @@ dependencies:
   # Cloud
   - adlfs
   - gcsfs
+  - obstore
 
   # Spatial libraries
   - cartopy
   - contextily
-  - dask <2025.1.0
-  - dask-geopandas <0.4.3
+  - dask<2025.1.0
+  - dask-geopandas<0.4.3
   - dask-jobqueue
   - distributed
   - esda
@@ -99,7 +100,7 @@ dependencies:
   - odc-stac
   - planetary-computer
   - pooch
-  - pystac
+  - pystac>=1.12.1
   - rasterio
   - rioxarray
   - stackstac
@@ -112,6 +113,7 @@ dependencies:
       - antimeridian
       - coastpy
       - duckdb
+      - imagecodecs
       - 'ibis-framework[duckdb,geospatial]'
       - more-itertools
       - xvec

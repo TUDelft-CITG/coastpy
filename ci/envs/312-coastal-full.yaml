@@ -1,7 +1,6 @@
 name: coastal-full
 channels:
   - conda-forge
-  - defaults
 
 dependencies:
   # Basic tools
@@ -110,6 +109,7 @@ dependencies:
   - boto3
   - gcsfs
   - google-cloud-storage
+  - obstore
   - s3fs
 
   # Plotting libraries
@@ -128,8 +128,8 @@ dependencies:
   - cartopy
   - cfgrib
   - contextily
-  - dask <2025.1.0
-  - dask-geopandas <0.4.3
+  - dask<2025.1.0
+  - dask-geopandas<0.4.3
   - dask-image
   - dask-jobqueue
   - datacube
@@ -165,7 +165,7 @@ dependencies:
   - pyarrow
   - pyod
   - pyogrio
-  - pystac
+  - pystac>=1.12.1
   - rasterio
   - rio-cogeo
   - rio-tiler
@@ -180,25 +180,26 @@ dependencies:
   - xarray
   - xarray-spatial
   - xvec
-  - zarr
+  - zarr # >3.0
   - zstandard
 
-  # Machine learning libraries
+  # Deep learning / ML libraries
+  - libpng # for torchvision
+  - pytorch::pytorch
+  # - pytorch::torchvision # install with pip until https://github.com/pytorch/vision/issues/8889
+  - torchgeo
+  - timm>=0.9
+  - lightning
+  - albumentations
   - wandb
   - xgboost
-  # Some of the ML libs below are tricky, so they are commented
   # - dask-ml
-  - lightning
-  - pytorch::pytorch
   # - tensorboard
-  - timm>=0.9
-  - torchgeo
-  - pytorch::torchvision
-  - albumentations
 
   - pip:
       - antimeridian
       - duckdb  # pypi has more recent releases
+      - imagecodecs
       - 'ibis-framework[duckdb,geospatial]'
       - movingpandas
       - more-itertools
@@ -207,6 +208,7 @@ dependencies:
       - coloredlogs
       - graphviz
       - coiled
+      - torchvision
       # - coastpy  # probably better to install in dev mode (pip install -e .)
     # - dea-tools
     # - stactools-geoparquet-items

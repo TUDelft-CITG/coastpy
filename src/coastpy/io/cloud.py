@@ -7,7 +7,7 @@ import pandas as pd
 import xarray as xr
 from odc.geo.cog import save_cog_with_dask, to_cog
 
-from coastpy.utils.xarray import get_nodata, set_nodata
+from coastpy.utils.xarray_utils import get_nodata, set_nodata
 
 
 def write_block(

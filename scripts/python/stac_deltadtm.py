@@ -7,9 +7,9 @@ from typing import Any
 import fsspec
 import pystac
 import pystac.media_type
+import pystac.utils
 import rasterio
 import shapely
-import stac_geoparquet
 import xarray as xr
 
 # uncomment these lines if you do not have coclicodata in development mode installed
@@ -33,6 +33,7 @@ from stactools.core.utils import antimeridian
 from tqdm import tqdm
 
 from coastpy.io.utils import PathParser
+from coastpy.stac.item import add_gpq_snapshot
 
 # Load the environment variables from the .env file
 load_dotenv(override=True)
@@ -59,7 +60,7 @@ ASSET_EXTRA_FIELDS = {
 # Container and URI configuration
 VERSION = "v1.1"
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
-DATETIME_DATA_CREATED = datetime.datetime(2023, 10, 30, tzinfo=datetime.UTC)
+DATETIME_DATA_CREATED = pystac.utils.now_in_utc()
 CONTAINER_NAME = "deltares-delta-dtm"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{VERSION}"
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
@@ -70,8 +71,6 @@ NODATA_VALUE = -9999
 RESOLUTION = 30
 DATA_TYPE = raster.DataType.FLOAT32
 UNIT = "m"
-
-PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 
 # NOTE: Since December 2024 we have changed to https hrefs instead of az blob storage paths
 EXAMPLE_HREF = "https://coclico.blob.core.windows.net/deltares-delta-dtm/v1.1/DeltaDTM_v1_1_N03W052.tif"
@@ -267,29 +266,9 @@ if __name__ == "__main__":
 
     collection.update_extent_from_items()
 
-    items = list(collection.get_all_items())
-    items_as_json = [i.to_dict() for i in items]
-    item_extents = stac_geoparquet.to_geodataframe(items_as_json)
-
-    with fsspec.open(GEOPARQUET_STAC_ITEMS_HREF, mode="wb", **storage_options) as f:
-        item_extents.to_parquet(f)
-
-    snapshot_pp = PathParser(
-        GEOPARQUET_STAC_ITEMS_HREF, account_name=STORAGE_ACCOUNT_NAME
+    collection = add_gpq_snapshot(
+        collection, GEOPARQUET_STAC_ITEMS_HREF, storage_options
     )
-    with fsspec.open(snapshot_pp.to_cloud_uri(), mode="wb", **storage_options) as f:
-        item_extents.to_parquet(f)
-
-    gpq_items_asset = pystac.Asset(
-        snapshot_pp.to_https_url(),
-        title="GeoParquet STAC items",
-        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
-        media_type=PARQUET_MEDIA_TYPE,
-        roles=["metadata"],
-    )
-    gpq_items_asset.common_metadata.created = DATETIME_DATA_CREATED
-    collection.add_asset("geoparquet-stac-items", gpq_items_asset)
-
     # Currently this is a link for testing purpose. When the data is available on the WMS
     # server it will be updated here.
     collection.add_link(

@@ -6,7 +6,7 @@ from collections.abc import Callable
 import numpy as np
 import xarray as xr
 
-from coastpy.utils.xarray import set_nodata
+from coastpy.utils.xarray_utils import set_nodata
 
 # Define logging
 logger = logging.getLogger(__name__)

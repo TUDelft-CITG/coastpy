@@ -21,11 +21,11 @@ from coastpy.geo.transect import generate_transects_from_coastline
 from coastpy.io.partitioner import QuadKeyEqualSizePartitioner
 from coastpy.io.utils import rm_from_storage
 from coastpy.utils.config import configure_instance
-from coastpy.utils.dask import (
+from coastpy.utils.dask_utils import (
     DaskClientManager,
     silence_shapely_warnings,
 )
-from coastpy.utils.pandas import add_attributes_from_gdfs
+from coastpy.utils.pandas_utils import add_attributes_from_gdfs
 
 load_dotenv(override=True)
 

@@ -5,7 +5,6 @@ from typing import Any
 
 import fsspec
 import pystac
-import stac_geoparquet
 import tqdm
 from dotenv import load_dotenv
 from pystac.extensions.item_assets import ItemAssetsExtension
@@ -14,9 +13,10 @@ from pystac.extensions.version import VersionExtension
 from pystac.provider import ProviderRole
 from pystac.stac_io import DefaultStacIO
 
-from coastpy.io.utils import PathParser
 from coastpy.libs import stac_table
+from coastpy.libs.stac_table import InferDatetimeOptions
 from coastpy.stac import ParquetLayout
+from coastpy.stac.item import add_gpq_snapshot, create_tabular_item
 
 # Load the environment variables from the .env file
 load_dotenv()
@@ -268,80 +268,6 @@ def create_collection(
     return collection
 
 
-def create_item(
-    urlpath: str,
-    storage_options: dict[str, Any] | None = None,
-    properties: dict[str, Any] | None = None,
-    item_extra_fields: dict[str, Any] | None = None,
-    asset_extra_fields: dict[str, Any] | None = None,
-) -> pystac.Item:
-    """Create a STAC Item"""
-
-    if item_extra_fields is None:
-        item_extra_fields = {}
-
-    if properties is None:
-        properties = {}
-
-    pp = PathParser(urlpath, account_name=STORAGE_ACCOUNT_NAME)
-
-    template = pystac.Item(
-        id=pp.stac_item_id,
-        properties=properties,
-        geometry=None,
-        bbox=None,
-        datetime=DATETIME_DATA_CREATED,
-        stac_extensions=[],
-    )
-    template.common_metadata.created = DATETIME_STAC_CREATED
-
-    item = stac_table.generate(
-        uri=pp.to_cloud_uri(),
-        template=template,
-        infer_bbox=True,
-        proj=True,
-        infer_geometry=False,
-        infer_datetime=stac_table.InferDatetimeOptions.no,
-        datetime_column=None,
-        metadata_created=DATETIME_STAC_CREATED,
-        datetime=DATETIME_DATA_CREATED,
-        count_rows=True,
-        asset_key="data",
-        asset_href=pp.to_cloud_uri(),
-        asset_title=ASSET_TITLE,
-        asset_description=ASSET_DESCRIPTION,
-        asset_media_type=PARQUET_MEDIA_TYPE,
-        asset_roles=["data"],
-        asset_extra_fields=asset_extra_fields,
-        storage_options=storage_options,
-        validate=False,
-    )
-    assert isinstance(item, pystac.Item)
-
-    # add descriptions to item properties
-    if "table:columns" in ASSET_EXTRA_FIELDS and "table:columns" in item.properties:
-        source_lookup = {
-            col["name"]: col for col in ASSET_EXTRA_FIELDS["table:columns"]
-        }
-
-    for target_col in item.properties["table:columns"]:
-        source_col = source_lookup.get(target_col["name"])
-        if source_col:
-            target_col.setdefault("description", source_col.get("description"))
-
-    # Optionally add an HTTPS link if the URI uses a 'cloud protocol'
-    if not item.assets["data"].href.startswith("https://"):
-        item.add_link(
-            pystac.Link(
-                rel="alternate",
-                target=pp.to_https_url(),
-                title="HTTPS access",
-                media_type=PARQUET_MEDIA_TYPE,
-            )
-        )
-    return item
-
-
 if __name__ == "__main__":
     storage_options = {"account_name": "coclico", "credential": sas_token}
     fs, token, [root] = fsspec.get_fs_token_paths(
@@ -361,32 +287,28 @@ if __name__ == "__main__":
     collection.validate_all()
 
     for uri in tqdm.tqdm(uris, desc="Processing files"):
-        item = create_item(uri, storage_options=storage_options)
+        item = create_tabular_item(
+            urlpath=uri,
+            asset_title=ASSET_TITLE,
+            asset_description=ASSET_DESCRIPTION,
+            storage_options=storage_options,
+            properties=None,
+            item_extra_fields=None,
+            asset_extra_fields=None,
+            datetime=DATETIME_DATA_CREATED,
+            infer_datetime=InferDatetimeOptions.no,
+            alternate_links={"cloud": True},
+        )
+
         item.validate()
+
         collection.add_item(item)
 
     collection.update_extent_from_items()
 
-    items = list(collection.get_all_items())
-    items_as_json = [i.to_dict() for i in items]
-    item_extents = stac_geoparquet.to_geodataframe(items_as_json)
-
-    snapshot_pp = PathParser(
-        GEOPARQUET_STAC_ITEMS_HREF, account_name=STORAGE_ACCOUNT_NAME
+    collection = add_gpq_snapshot(
+        collection, GEOPARQUET_STAC_ITEMS_HREF, storage_options
     )
-    with fsspec.open(snapshot_pp.to_cloud_uri(), mode="wb", **storage_options) as f:
-        item_extents.to_parquet(f)
-
-    gpq_items_asset = pystac.Asset(
-        snapshot_pp.to_https_url(),
-        title="GeoParquet STAC items",
-        description="Snapshot of the collection's STAC items exported to GeoParquet format.",
-        media_type=PARQUET_MEDIA_TYPE,
-        roles=["metadata"],
-    )
-    gpq_items_asset.common_metadata.created = DATETIME_DATA_CREATED
-    collection.add_asset("geoparquet-stac-items", gpq_items_asset)
-
     # TODO: there should be a cleaner method to remove the previous stac catalog and its items
     try:
         if catalog.get_child(collection.id):

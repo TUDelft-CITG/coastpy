@@ -3,11 +3,13 @@ import datetime
 import hashlib
 import logging
 import pathlib
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urlsplit
+from urllib.parse import urlparse
 
 import fsspec
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import xarray as xr
 from pyproj import Transformer
@@ -18,284 +20,291 @@ from shapely.ops import transform
 logger = logging.getLogger(__name__)
 
 
-def is_file(urlpath: str | pathlib.Path) -> bool:
+def is_file(pathlike: str | pathlib.Path) -> bool:
     """
-    Determine if a urlpath is a filesystem path by using urlsplit.
-
-    Args:
-        path (str): The path to check.
-
-    Returns:
-        bool: True if it's a local file path, False otherwise.
+    Determine if a pathlike is a filesystem path by the protocol.
     """
-    parsed = urlsplit(str(urlpath))
-
-    return parsed.scheme in ["", "file"]
+    return fsspec.utils.get_protocol(pathlike) == "file"
 
 
 @dataclasses.dataclass
 class PathParser:
-    """
-    Parses cloud storage paths into components, supporting multiple protocols.
+    """A robust parser for local file paths, HTTPS URLs, and Azure cloud storage URIs."""
 
-    Attributes:
-        urlpath (str): Full URL or URI to parse.
-        scheme (str): Protocol from the URL (e.g., "https", "az", "gs", "s3").
-        container (str): Storage container, bucket, or top-level directory.
-        prefix (str | None): Path prefix inside the container/bucket.
-        name (str): File name including its extension.
-        suffix (str): File extension (e.g., ".parquet", ".tif").
-        stac_item_id (str): Identifier for STAC, derived from the file name.
-        base_url (str): Base HTTPS URL for accessing the resource.
-        base_uri (str): Base URI for the cloud storage provider.
-        href (str): Full HTTPS URL for accessing the resource.
-        uri (str): Full URI for cloud-specific access.
-        account_name (str | None): Account name for cloud storage (required for Azure).
-        path (str): Full path within the container, excluding the container name.
-    """
+    original_path: str  # Input path (local, HTTPS, or cloud URI)
+    account_name: str = ""  # Required for Azure (az://)
+    band: str = ""  # Band information (e.g., "nir", "green")
+    resolution: str = ""  # Resolution (e.g., "10m", "30m")
 
-    urlpath: str
-    scheme: str = ""
-    container: str = ""
-    path: str = ""
-    name: str = ""
-    suffix: str = ""
-    stac_item_id: str = ""
-    https_url: str = ""
-    cloud_uri: str = ""
-    account_name: str | None = None
-    cloud_protocol: str = ""
-    base_dir: str | pathlib.Path = ""
-    band: str = ""
-    resolution: str = ""
-    _base_https_url: str = ""
-    _base_cloud_uri: str = ""
-
-    SUPPORTED_PROTOCOLS = {"https", "az", "gs", "s3"}
-    DEFAULT_BASE_DIR = pathlib.Path.home() / "data" / "tmp"
+    # Internal attributes for path management
+    _protocol: str = ""  # Internal protocol (file, https, az)
+    _https_netloc: str = ""  # Standardized HTTPS base domain
+    _cloud_netloc: str = ""  # Cloud provider URI prefix (az://)
+    _bucket: str = ""  # Cloud storage bucket/container
+    _key: str = ""  # Path inside the bucket
+    _directory: Path = Path()  # Local parent directory
+    _stem: str = ""  # Base filename (without suffix)
+    _suffix: str = ""  # File extension (e.g., .tif)
 
     def __post_init__(self):
-        if is_file(self.urlpath):
-            self._parse_path()
-        else:
-            self._parse_url()
+        """Automatically parse the given path based on its protocol."""
+        self.protocol = fsspec.utils.get_protocol(self.original_path)  # Triggers setter
 
-    def _parse_url(self):
-        parsed = urlparse(self.urlpath)
+    @property
+    def protocol(self) -> str:
+        """Getter for protocol."""
+        return self._protocol
 
-        # Basic parsing
-        self.scheme = parsed.scheme
-        self.name = parsed.path.split("/")[-1]
-        self.suffix = f".{self.name.split('.')[-1]}"
-        self.stac_item_id = self._extract_stac_item_id(self.name)
-
-        if not self.base_dir:
-            self.base_dir = self.DEFAULT_BASE_DIR
-
-        # Check for supported protocols
-        if self.scheme not in self.SUPPORTED_PROTOCOLS:
-            msg = f"Unsupported protocol: {self.scheme}"
-            raise ValueError(msg)
-
-        # Protocol-specific parsing
-        if self.scheme == "https":
-            self.container = parsed.path.split("/")[1]
-            self._base_https_url = (
-                self.scheme + "://" + parsed.netloc + "/" + self.container
-            )
-            self.path = "/".join(parsed.path.split("/")[2:])
-
-            if "windows" in self._base_https_url:
-                if not self.cloud_protocol:
-                    self.cloud_protocol = "az"
-            elif "google" in self._base_https_url:
-                if not self.cloud_protocol:
-                    self.cloud_protocol = "gs"
-            elif "amazon" in self._base_https_url:  # noqa: SIM102
-                if not self.cloud_protocol:
-                    self.cloud_protocol = "s3"
-
-        elif self.scheme in {"az", "gs", "s3"}:
-            self.path = parsed.path.lstrip("/")  # Remove leading slash
-            self.container = parsed.netloc
-            self.cloud_protocol = self.scheme
-
-            if self.scheme == "az":
-                if not self.account_name:
-                    msg = "For 'az://' URIs, 'account_name' must be provided."
-                    raise ValueError(msg)
-                self._base_https_url = f"https://{self.account_name}.blob.core.windows.net/{self.container}"
-            elif self.scheme == "gs":
-                self._base_https_url = (
-                    f"https://storage.googleapis.com/{self.container}"
-                )
-            elif self.scheme == "s3":
-                self._base_https_url = f"https://{self.container}.s3.amazonaws.com"
-
-    def _extract_stac_item_id(self, filename: str) -> str:
-        """
-        Extracts the stac_item_id from a filename, optionally removing a band prefix.
-
-        Args:
-            filename (str): The filename to process.
-
-        Returns:
-            str: The extracted stac_item_id.
-        """
-        if self.band and filename.startswith(self.band + "_"):
-            return filename[len(self.band) + 1 :]  # Remove band prefix
-        return filename.split(".")[0]  # Default behavio
+    @protocol.setter
+    def protocol(self, new_protocol: str):
+        """Setter for protocol. Updates attributes dynamically when protocol changes."""
+        self._protocol = new_protocol
+        self._parse_path()  # Re-parse with updated protocol
 
     def _parse_path(self):
-        path = pathlib.Path(self.urlpath)
+        """Parses the path into components based on protocol."""
+        parsed = urlparse(self.original_path)
 
-        if not self.base_dir:
-            msg = "For local file paths, 'base_dir' must be provided."
-            raise ValueError(msg)
+        if self.protocol == "file":
+            self._parse_local_path()
+        elif self.protocol in {"https", "az"}:
+            self._parse_azure_path(parsed)
+        else:
+            raise ValueError(f"Unsupported protocol: {self.protocol}")
 
-        if not self.cloud_protocol:
-            msg = "For local file paths, 'cloud_protocol' must be provided."
-            raise ValueError(msg)
+    def _parse_local_path(self):
+        """Extracts components for local file paths."""
+        # NOTE: this will also set the filename and suffix
+        self.directory = self.original_path
 
-        path = path.relative_to(self.base_dir)
-        parts = path.parts
+        # Reset cloud attributes
+        self._bucket = ""
+        self._key = ""
+        self._cloud_netloc = ""
+        self._https_netloc = ""
 
-        if len(parts) < 2:
-            msg = "Local file paths must have at least two components."
-            raise ValueError(msg)
+    def _parse_azure_path(self, parsed):
+        """Extracts components for Azure cloud storage paths."""
+        # Setting self.key will also set the filename and suffix
+        self.key = parsed.path.lstrip("/")  # Remove leading slash
 
-        self.container = parts[0]
-        self.path = "/".join(parts[1:])
-        self.name = path.name
-        self.suffix = f".{path.suffix}"
-        self.stac_item_id = self._extract_stac_item_id(path.stem)
+        if self.protocol == "https":
+            # Extract account_name and enforce proper parsing
+            if "blob.core.windows.net" not in parsed.netloc:
+                raise ValueError("Invalid Azure HTTPS URL format.")
 
-        if self.cloud_protocol == "az":
-            if not self.account_name:
-                msg = "For 'az://' URIs, 'account_name' must be provided."
-                raise ValueError(msg)
-            self._base_https_url = (
-                f"https://{self.account_name}.blob.core.windows.net/{self.container}"
+            self.account_name = parsed.netloc.split(".")[0]
+            self._bucket, self._key = self._key.split("/", 1)
+            self._cloud_netloc = "az://"
+            self._https_netloc = f"https://{self.account_name}.blob.core.windows.net"
+
+        elif self.protocol == "az":
+            # Cloud URI format: az://<bucket>/<key>
+            self._bucket = parsed.netloc
+            # This will also set the filename and suffix
+            self.key = parsed.path.lstrip("/")
+            self._cloud_netloc = "az://"
+
+            # Allow account_name to be set later for HTTPS conversion
+            if self.account_name:
+                self._https_netloc = (
+                    f"https://{self.account_name}.blob.core.windows.net"
+                )
+
+    @property
+    def bucket(self) -> str:
+        """Getter for bucket/container name."""
+        return self._bucket
+
+    @bucket.setter
+    def bucket(self, new_bucket: str):
+        """Setter for bucket. Ensures attributes remain consistent."""
+        self._bucket = new_bucket
+
+    @property
+    def key(self) -> str:
+        """Returns the directory portion of the key if a filename exists, otherwise returns the full key.
+
+        Returns:
+            str: The directory portion of the key, or the full key if no filename exists.
+        """
+        return self._key
+
+    @key.setter
+    def key(self, new_key: str):
+        """Sets the key, ensuring the filename (if present) is stored separately.
+
+        Args:
+            new_key (str): The new key path (can be a full path with filename or just a directory).
+        """
+        if "." in Path(new_key).name:  # If it has an extension, treat it as a filename
+            self._key = (
+                "/".join(new_key.split("/")[:-1]) if "/" in new_key else ""
+            )  # Directory portion
+            self._stem = Path(new_key).stem  # Extract filename stem
+            self._suffix = Path(new_key).suffix  # Extract file extension
+        else:
+            self._key = new_key  # Entire key is just a directory
+
+    @property
+    def directory(self) -> Path:
+        """Returns the directory portion of the key if a filename exists, otherwise returns the full key.
+
+        Returns:
+            Path: The directory portion of the key, or the full key if no filename exists.
+        """
+        return self._directory
+
+    @directory.setter
+    def directory(self, new_directory: str):
+        """Sets the directory, ensuring the filename (if present) is stored separately.
+
+        Args:
+            new_directory (str): The new key path (can be a full path with filename or just a directory).
+        """
+        path = Path(new_directory)
+        if path.suffix:  # If it has a suffix, treat it as a filename
+            self._directory = path.parent  # Directory portion
+            self._stem = path.stem  # Extract filename stem
+            self._suffix = path.suffix  # Extract file extension
+        else:
+            self._directory = path  # Entire key is just a directory
+
+    @property
+    def filename(self) -> str:
+        """Dynamically constructs the filename based on band and resolution."""
+        name_parts = [self._stem]
+        if self.band:
+            name_parts.append(self.band)
+        if self.resolution:
+            name_parts.append(self.resolution)
+
+        return f"{'_'.join(name_parts)}{self._suffix}"
+
+    @property
+    def https_netloc(self) -> str:
+        """Getter for HTTPS netloc."""
+        return self._https_netloc
+
+    @property
+    def cloud_netloc(self) -> str:
+        """Getter for Cloud netloc."""
+        return self._cloud_netloc
+
+    @property
+    def stac_item_id(self) -> str:
+        if self.band and self._stem.startswith(self.band + "_"):
+            return self._stem[len(self.band) + 1 :]
+        return self._stem
+
+    def _update_attributes(self, **kwargs):
+        """Updates multiple attributes dynamically based on provided kwargs."""
+        if "protocol" in kwargs:
+            self.protocol = kwargs["protocol"]
+        if "bucket" in kwargs:
+            self.bucket = kwargs["bucket"]
+        if "key" in kwargs:
+            self.key = kwargs["key"]
+        if "account_name" in kwargs:
+            self.account_name = kwargs["account_name"]
+        if "band" in kwargs:
+            self.band = kwargs["band"]
+        if "resolution" in kwargs:
+            self.resolution = kwargs["resolution"]
+
+    def to_https_url(self, **kwargs) -> str:
+        """Constructs a valid Azure HTTPS URL from cloud components."""
+        self._update_attributes(**kwargs)
+
+        if not self.bucket:
+            raise ValueError("Cannot generate HTTPS URL. Bucket is missing.")
+
+        if not self.account_name:
+            raise ValueError(
+                "Azure requires an `account_name` for HTTPS URLs. "
+                "Provide one via `to_https_url(account_name='...')`"
             )
 
-        elif self.cloud_protocol == "gs":
-            self._base_https_url = f"https://storage.googleapis.com/{self.container}"
+        # Correctly construct the URL, ensuring no extra `/`
+        key_part = f"{self.key}/" if self.key else ""
+        return f"https://{self.account_name}.blob.core.windows.net/{self.bucket}/{key_part}{self.filename}"
 
-        elif self.cloud_protocol == "s3":
-            self._base_https_url = f"https://{self.container}.s3.amazonaws.com"
+    def to_cloud_uri(self, **kwargs) -> str:
+        """Constructs a valid Azure cloud URI."""
+        self._update_attributes(**kwargs)
 
-    def to_filepath(
-        self, base_dir: pathlib.Path | str | None = None, capitalize=False
-    ) -> pathlib.Path:
-        "Convert to local file path."
-        if base_dir is None:
-            base_dir = self.base_dir
+        if not self.bucket:
+            raise ValueError("Cannot generate cloud URI. Bucket is missing.")
 
-        name_parts = [self.name.split(".")[0]]
-        if self.band:
-            name_parts.append(self.band)
-        if self.resolution:
-            name_parts.append(self.resolution)
-        name_with_band_and_res = "_".join(name_parts)
+        # Correctly construct the URI, ensuring no extra `/`
+        key_part = f"{self.key}/" if self.key else ""
+        return f"{self.cloud_netloc}{self.bucket}/{key_part}{self.filename}"
 
-        if capitalize:
-            name_with_band_and_res = name_with_band_and_res.upper()
-
-        name_with_band_and_res += self.suffix
-
-        path_parts = self.path.rsplit("/", 1)
-        path_with_band_and_res = (
-            f"{path_parts[0]}/{name_with_band_and_res}"
-            if len(path_parts) > 1
-            else name_with_band_and_res
-        )
-
-        return pathlib.Path(base_dir) / self.container / path_with_band_and_res
-
-    def _construct_url(self, base_url: str, capitalize: bool = False) -> str:
-        "Construct URL or URI."
-        name_parts = [self.name.split(".")[0]]
-
-        if self.band:
-            name_parts.append(self.band)
-
-        if self.resolution:
-            name_parts.append(self.resolution)
-
-        file_name = "_".join(name_parts)
-
-        if capitalize:
-            file_name = file_name.upper()
-
-        file_name += self.suffix
-
-        return f"{base_url}/{self.path.rsplit('/', 1)[0]}/{file_name}"
-
-    def to_https_url(self, capitalize: bool = False) -> str:
-        "Convert to HTTPS URL."
-        return self._construct_url(self._base_https_url, capitalize=capitalize)
-
-    def to_cloud_uri(self, capitalize=False) -> str:
-        "Convert to cloud storage URI."
-        return self._construct_url(
-            self.cloud_protocol + "://" + self.container, capitalize=capitalize
-        )
+    def to_filepath(self, directory: str | Path = "") -> str:
+        """Converts to a local file path."""
+        directory = Path(directory) if directory else self.directory
+        return str(self.directory / self.filename)
 
 
-def extract_datetimes(
+def get_datetimes(
     data: pd.DataFrame | gpd.GeoDataFrame | xr.Dataset | xr.DataArray,
-) -> dict[str, datetime.datetime | None]:
+) -> dict[str, datetime.datetime | None] | None:
     """
-    Extract datetime information (datetime, start_datetime, end_datetime) from a dataset.
+    Get datetime information (datetime, start_datetime, end_datetime) from various data structures.
+
+    Supports:
+    - Pandas DataFrames / GeoDataFrames with 'datetime' or 'start_datetime' and 'end_datetime' columns.
+    - xarray Datasets and DataArrays with time coordinates, attributes, or metadata in data variables.
 
     Args:
-        data: Input dataset (pandas DataFrame, GeoDataFrame, or xarray object).
+        data: Input dataset.
 
     Returns:
-        dict[str, datetime | None]: Dictionary with keys 'datetime', 'start_datetime', and 'end_datetime'.
-
-    Raises:
-        ValueError: If datetime information cannot be determined.
+        Dict[str, Optional[datetime.datetime]]: Dictionary with keys:
+            - 'datetime': A representative timestamp.
+            - 'start_datetime': The earliest time found (if applicable).
+            - 'end_datetime': The latest time found (if applicable).
     """
     # Handle pandas DataFrame or GeoDataFrame
     if isinstance(data, (pd.DataFrame | gpd.GeoDataFrame)):
-        # Check for 'start_datetime' and 'end_datetime' columns
-        if "start_datetime" in data.columns and "end_datetime" in data.columns:
-            start_datetime = pd.Timestamp(data["start_datetime"].min()).to_pydatetime()  # type: ignore
-            end_datetime = pd.Timestamp(data["end_datetime"].max()).to_pydatetime()  # type: ignore
+        if {"start_datetime", "end_datetime"}.issubset(data.columns):
+            start_datetime = pd.Timestamp(
+                str(data["start_datetime"].min())
+            ).to_pydatetime()
+            end_datetime = pd.Timestamp(str(data["end_datetime"].max())).to_pydatetime()
             return {
                 "datetime": start_datetime,
                 "start_datetime": start_datetime,
                 "end_datetime": end_datetime,
             }
-        # Check for a single 'datetime' column
         elif "datetime" in data.columns:
             datetime_value = pd.Timestamp(data["datetime"].iloc[0]).to_pydatetime()
             return {
                 "datetime": datetime_value,
-                "start_datetime": None,
-                "end_datetime": None,
             }
 
     # Handle xarray Dataset or DataArray
     elif isinstance(data, (xr.Dataset | xr.DataArray)):
-        # Check for a time dimension
-        if "time" in data.dims:
+        # Check for a time coordinate
+        if "time" in data.coords:
             time_values = data.coords["time"].values
-            if len(time_values) > 1:
+            if time_values.size > 1:
                 return {
                     "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
-                    "start_datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
-                    "end_datetime": pd.Timestamp(time_values[-1]).to_pydatetime(),
+                    "start_datetime": pd.Timestamp(time_values.min()).to_pydatetime(),
+                    "end_datetime": pd.Timestamp(time_values.max()).to_pydatetime(),
                 }
             else:
+                # Ensure time_values is always treated as an array
+                if np.isscalar(time_values):
+                    time_values = np.array([time_values])
+
                 return {
-                    "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),
-                    "start_datetime": None,
-                    "end_datetime": None,
+                    "datetime": pd.Timestamp(time_values[0]).to_pydatetime(),  # type: ignore
                 }
-        # Check for start and end datetime attributes
-        if "start_datetime" in data.attrs and "end_datetime" in data.attrs:
+
+        # Check for global attributes with datetime info
+        if {"start_datetime", "end_datetime"}.issubset(data.attrs):
             return {
                 "datetime": pd.Timestamp(data.attrs["start_datetime"]).to_pydatetime(),
                 "start_datetime": pd.Timestamp(
@@ -305,18 +314,19 @@ def extract_datetimes(
                     data.attrs["end_datetime"]
                 ).to_pydatetime(),
             }
-        # Check for a single datetime attribute
         if "datetime" in data.attrs:
             return {
                 "datetime": pd.Timestamp(data.attrs["datetime"]).to_pydatetime(),
-                "start_datetime": None,
-                "end_datetime": None,
             }
 
-        # Check for datetime attributes in variables
+        # Handle datasets where datetime is in variable attributes
         start_times = []
         end_times = []
-        for var in data.data_vars.values():
+        data_vars_to_check = (
+            data.data_vars.values() if isinstance(data, xr.Dataset) else [data]
+        )
+
+        for var in data_vars_to_check:
             if "start_datetime" in var.attrs:
                 start_times.append(
                     pd.Timestamp(var.attrs["start_datetime"]).to_pydatetime()
@@ -325,6 +335,7 @@ def extract_datetimes(
                 end_times.append(
                     pd.Timestamp(var.attrs["end_datetime"]).to_pydatetime()
                 )
+
         if start_times and end_times:
             return {
                 "datetime": min(start_times),
@@ -332,8 +343,77 @@ def extract_datetimes(
                 "end_datetime": max(end_times),
             }
 
-    # Raise error if no datetime information is found
-    raise ValueError("Unable to determine datetime information from the dataset.")
+    else:
+        return None
+
+
+def merge_time_attrs(
+    times: list[dict[str, datetime.datetime | None] | None],
+) -> dict[str, datetime.datetime | None] | None:
+    """
+    Merges time attributes, computing min/max where applicable.
+
+    Args:
+        times (List[Optional[Dict[str, Optional[datetime]]]]): List of datetime metadata dictionaries.
+
+    Returns:
+        Optional[Dict[str, datetime]]: Aggregated time attributes or None if no valid datetimes are found.
+    """
+    dt = [t["datetime"] for t in times if t and t.get("datetime") is not None]
+    start = [
+        t["start_datetime"] for t in times if t and t.get("start_datetime") is not None
+    ]
+    end = [t["end_datetime"] for t in times if t and t.get("end_datetime") is not None]
+
+    r = {
+        "datetime": min(dt) if dt else None,  # type: ignore
+        "start_datetime": min(start) if start else None,  # type: ignore
+        "end_datetime": max(end) if end else None,  # type: ignore
+    }
+
+    # Filter out keys with None values
+    r = {k: v for k, v in r.items() if v is not None}
+
+    return r if r else None
+
+
+def update_time_coord(
+    ds: xr.Dataset, times: dict[str, datetime.datetime | None] | None
+) -> xr.Dataset:
+    """
+    Updates or adds time-related coordinates in an Xarray dataset.
+    Strictly for spatiostatic data—does not modify the dimensional structure.
+
+    Args:
+        ds (xr.Dataset): Input dataset.
+        times (Dict[str, Optional[datetime.datetime]]): Dictionary containing:
+            - "datetime": Representative timestamp.
+            - "start_datetime": Earliest valid time.
+            - "end_datetime": Latest valid time.
+
+    Returns:
+        xr.Dataset: Dataset with updated time-related coordinates.
+
+    Raises:
+        ValueError: If the dataset has a time dimension longer than 1.
+    """
+    if not times:
+        return ds  # No time metadata, return unchanged
+
+    times["time"] = times.pop("datetime")
+
+    valid_times = {k: v for k, v in times.items() if v is not None}
+    if not valid_times:
+        return ds  # No valid time values, return unchanged
+
+    # Validate that dataset is spatiostatic (no time dimension > 1)
+    if "time" in ds.dims and ds.sizes["time"] > 1:
+        raise ValueError(
+            "Dataset has a time dimension with multiple steps, expected spatiostatic data."
+        )
+
+    # Assign time metadata as coordinates (without adding a dimension)
+    return ds.assign_coords(valid_times)
 
 
 def short_id(seed: str, length: int = 6) -> str:
@@ -515,13 +595,16 @@ def name_data(
         if isinstance(include_time, str):
             time_part = include_time
         elif isinstance(include_time, bool):
-            datetime_info = extract_datetimes(data)
-            if datetime_info["start_datetime"] and datetime_info["end_datetime"]:
-                start = datetime_to_str(
-                    datetime_info["start_datetime"], timespec="days"
-                )
-                end = datetime_to_str(datetime_info["end_datetime"], timespec="days")
-                time_part = f"{start}_{end}"
+            datetime_info = get_datetimes(data)
+            if datetime_info is not None:
+                if datetime_info["start_datetime"] and datetime_info["end_datetime"]:
+                    start = datetime_to_str(
+                        datetime_info["start_datetime"], timespec="days"
+                    )
+                    end = datetime_to_str(
+                        datetime_info["end_datetime"], timespec="days"
+                    )
+                    time_part = f"{start}_{end}"
             else:
                 time_part = datetime_to_str(datetime_info["datetime"], timespec="auto")  # type: ignore
         else:

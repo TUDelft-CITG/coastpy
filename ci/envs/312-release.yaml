@@ -1,7 +1,6 @@
 name: 312-release
 channels:
   - conda-forge
-  - defaults
 
 dependencies:
   - python=3.12
@@ -20,7 +19,7 @@ dependencies:
   - poetry
   - pyarrow
   - pyproj
-  - pystac
+  - pystac>=1.12.1
   - python-dotenv
   - rasterio
   - rioxarray
