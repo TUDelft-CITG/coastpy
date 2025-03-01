@@ -220,7 +220,7 @@ def create_cog_item(
             item.stac_extensions.append(ext)
 
     proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
-    proj_ext.epsg = int(dataset.rio.crs.to_epsg())
+    proj_ext.code = int(dataset.rio.crs.to_epsg())
     proj_ext.shape = [dataset.sizes["y"], dataset.sizes["x"]]
     proj_ext.transform = list(dataset.rio.transform())
     proj_ext.bbox = dataset.rio.bounds()
@@ -349,7 +349,7 @@ def add_cog_asset(
     item.add_asset(asset_key, asset)
 
     proj_ext = ProjectionExtension.ext(asset, add_if_missing=True)
-    proj_ext.epsg = int(data.rio.crs.to_epsg())
+    proj_ext.code = int(data.rio.crs.to_epsg())
     proj_ext.shape = shape
     proj_ext.transform = transform
     proj_ext.bbox = bbox
