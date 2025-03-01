@@ -220,7 +220,7 @@ def create_cog_item(
             item.stac_extensions.append(ext)
 
     proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
-    proj_ext.code = int(dataset.rio.crs.to_epsg())
+    proj_ext.epsg = int(dataset.rio.crs.to_epsg())
     proj_ext.shape = [dataset.sizes["y"], dataset.sizes["x"]]
     proj_ext.transform = list(dataset.rio.transform())
     proj_ext.bbox = dataset.rio.bounds()
@@ -349,7 +349,7 @@ def add_cog_asset(
     item.add_asset(asset_key, asset)
 
     proj_ext = ProjectionExtension.ext(asset, add_if_missing=True)
-    proj_ext.code = int(data.rio.crs.to_epsg())
+    proj_ext.epsg = int(data.rio.crs.to_epsg())
     proj_ext.shape = shape
     proj_ext.transform = transform
     proj_ext.bbox = bbox
@@ -497,170 +497,6 @@ def create_tabular_item(
                 )
 
     return item
-
-
-if __name__ == "__main__":
-    import os
-    import pathlib
-
-    import dotenv
-    import geopandas as gpd
-    import odc
-    import odc.geo
-    import pystac
-    import shapely
-    from rasterio.enums import Resampling
-
-    from coastpy.eo.typology import TypologyCollection
-    from coastpy.io.utils import name_data
-    from coastpy.stac.layouts import COGLayout
-
-    def create_collection() -> pystac.Collection:
-        extent = pystac.Extent(
-            pystac.SpatialExtent([[-180.0, 90.0, 180.0, -90.0]]),
-            pystac.TemporalExtent([[pystac.utils.now_in_utc(), None]]),
-        )
-
-        collection = pystac.Collection(
-            id="typology-train-cube",
-            title="Typology Train Cube",
-            description="A collection of coastal typology training data.",
-            extent=extent,
-            catalog_type=pystac.CatalogType.RELATIVE_PUBLISHED,
-        )
-        return collection
-
-    dotenv.load_dotenv()
-    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-    storage_options = {"account_name": "coclico", "sas_token": sas_token}
-
-    TRANSECT_ATTRIBUTES = [
-        "transect_id",
-        "lon",
-        "lat",
-        "utm_epsg",
-        "continent",
-        "country",
-        "common_region_name",
-        "bearing",
-        "dist_b0",
-        "dist_b30",
-        "dist_b60",
-        "dist_b90",
-        "dist_b120",
-        "dist_b150",
-        "dist_b180",
-        "dist_b210",
-        "dist_b240",
-        "dist_b270",
-        "dist_b300",
-        "dist_b330",
-        "uuid",
-        "user",
-        "shore_type",
-        "coastal_type",
-        "landform_type",
-        "is_built_environment",
-        "has_defense",
-        "datetime_created",
-        "datetime_updated",
-        "is_challenging",
-        "comment",
-        "link",
-        "confidence",
-        "is_validated",
-    ]
-
-    TARGET_AXIS = "horizontal-right-aligned"
-    RESAMPLING = Resampling.cubic
-    TRANSECT_LENGTH = 2000
-    OFFSET_DISTANCE = 200
-    RESOLUTION = 10
-    y_shape = int((OFFSET_DISTANCE * 2) / RESOLUTION)
-    x_shape = int(TRANSECT_LENGTH / RESOLUTION)
-
-    transects = gpd.read_parquet(
-        "/Users/calkoen/data/tmp/typology/train/transect.parquet"
-    )
-
-    for i in range(len(transects)):
-        transect = transects.iloc[[i]]
-        transect_properties = transect[TRANSECT_ATTRIBUTES].iloc[0].to_dict()
-        transect_properties["datetime_created"] = transect_properties[
-            "datetime_created"
-        ].isoformat()
-        transect_properties["datetime_updated"] = transect_properties[
-            "datetime_updated"
-        ].isoformat()
-
-        # Define region of interest based on buffered transects
-        region_of_interest = gpd.GeoDataFrame(
-            geometry=[
-                shapely.box(
-                    *gpd.GeoSeries.from_xy(transect.lon, transect.lat, crs=4326)
-                    .to_crs(transect.utm_epsg.item())
-                    .buffer(1500)
-                    .to_crs(4326)
-                    .total_bounds
-                )
-            ],
-            crs=4326,
-        )
-
-        coastal_zone = odc.geo.geom.Geometry(
-            region_of_interest.geometry.item(), crs=region_of_interest.crs
-        )
-
-        ds = (
-            TypologyCollection()
-            .search(region_of_interest, sas_token=sas_token)
-            .load()
-            .execute()
-        )
-        ds = ds.compute()
-
-        chip = TypologyCollection.chip_from_transect(
-            ds,
-            transect,
-            y_shape,
-            x_shape,
-            RESAMPLING,
-            rotate=True,
-            target_axis=TARGET_AXIS,
-            offset_distance=OFFSET_DISTANCE,
-            resolution=RESOLUTION,
-        )
-
-        OUT_STORAGE = "/Users/calkoen/data/tmp/typology/train/release/2025-02-02"
-        STAC_DIR = pathlib.Path("/Users/calkoen/data/tmp/typology/stac")
-
-        pathlike = name_data(chip, prefix=OUT_STORAGE)
-
-        pp = PathParser(pathlike, account_name="coclico")
-        for var_name, var in chip.data_vars.items():
-            pp.band = var_name
-            pp.resolution = "10m"
-            pathlike2 = AssetProtocol.FILE.get_uri(pp, OUT_STORAGE)
-            var.rio.to_raster(pathlike2)
-
-        collection = create_collection()
-
-        item = create_cog_item(
-            chip,
-            pathlike,
-            properties=transect_properties,
-            protocol=AssetProtocol.FILE,
-            storage_options=storage_options,
-            resolution=10,
-        )
-        item.validate()
-
-        collection.add_item(item)
-
-        layout = COGLayout()
-        collection.normalize_hrefs(str(STAC_DIR / collection.id), layout)
-
-        collection.save()
 
 
 def add_gpq_snapshot(
