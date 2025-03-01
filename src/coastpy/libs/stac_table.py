@@ -1,7 +1,5 @@
-# NOTE: this is copied from Tom Augspurger' stac-table repository. We had to adopt some
-# change some parts and installing the package on remote machines from gh was a bit tedious.
-# Try to keep this code in sync with the original and remove this note when the package
-# can be installed. Also please acknowledge the original author.
+# NOTE: This is inspired on https://github.com/stac-utils/stac-table, but that library
+# is archived.
 """
 Generate STAC Collections for tabular datasets.
 """

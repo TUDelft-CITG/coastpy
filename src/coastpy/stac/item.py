@@ -2,6 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+import antimeridian
 import fsspec
 import pystac
 import pystac.catalog
@@ -17,6 +18,7 @@ from pystac.extensions.eo import Band, EOExtension
 from pystac.extensions.projection import ProjectionExtension
 from pystac.extensions.raster import DataType, RasterBand, RasterExtension
 from shapely.geometry import Polygon, box, mapping
+from shapely.validation import make_valid
 
 from coastpy.io.utils import PathParser, get_datetimes
 from coastpy.libs.stac_table import InferDatetimeOptions, generate
@@ -161,11 +163,23 @@ def create_cog_item(
     crs = dataset.rio.crs
     if is_rotated(dataset):
         bbox = get_rotated_bbox(dataset)  # Use accurate method for rotated rasters
-        geometry = mapping(Polygon.from_bounds(*bbox))
+        geometry = Polygon.from_bounds(*bbox)
     else:
         bounds = dataset.rio.bounds()  # Use default method for non-rotated rasters
         bbox = list(rasterio.warp.transform_bounds(crs, "EPSG:4326", *bounds))
-        geometry = mapping(box(*bbox))
+        geometry = shapely.geometry.shape(antimeridian.fix_shape(mapping(box(*bbox))))
+        geometry = make_valid(geometry)
+
+    # NOTE: credits to stac-packages sentinel2 for the following code snippet and antimeridian
+    # sometimes, antimeridian and/or polar crossing scenes on some platforms end up
+    # with geometries that cover the inverse area that they should, so nearly the
+    # entire globe. This has been seen to have different behaviors on different
+    # architectures and dependent library versions. To prevent these errors from
+    # resulting in a wildly-incorrect geometry, we fail here if the geometry
+    # is unreasonably large. Typical areas will no greater than 3, whereas an
+    # incorrect globe-covering geometry will have an area for 61110.
+    if (ga := geometry.area) > 100:
+        raise Exception(f"Area of geometry is {ga}, which is too large to be correct.")
 
     # Extract datetime information
     datetimes = get_datetimes(dataset)
@@ -191,7 +205,7 @@ def create_cog_item(
     # Create STAC item
     item = pystac.Item(
         id=stac_id,
-        geometry=geometry,
+        geometry=shapely.geometry.mapping(geometry),
         bbox=bbox,  # type: ignore
         datetime=dt,
         properties=properties,
@@ -205,6 +219,13 @@ def create_cog_item(
         for ext in extra_extensions:
             item.stac_extensions.append(ext)
 
+    proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
+    proj_ext.epsg = int(dataset.rio.crs.to_epsg())
+    proj_ext.shape = [dataset.sizes["y"], dataset.sizes["x"]]
+    proj_ext.transform = list(dataset.rio.transform())
+    proj_ext.bbox = dataset.rio.bounds()
+    proj_ext.geometry = shapely.geometry.mapping(shapely.geometry.box(*proj_ext.bbox))
+
     # Handle dataset vs. data array
     if isinstance(dataset, xr.Dataset):
         for var_name, var in dataset.data_vars.items():
@@ -217,8 +238,7 @@ def create_cog_item(
 
             asset_href = protocol.get_uri(pp)
 
-            if nodata is None:
-                var_nodata = get_nodata(var)
+            var_nodata = get_nodata(var) if nodata is None else nodata
 
             item = add_cog_asset(
                 item,
@@ -237,8 +257,7 @@ def create_cog_item(
     else:
         asset_href = protocol.get_uri(pp)
 
-        if nodata is None:
-            var_nodata = get_nodata(dataset)
+        var_nodata = get_nodata(dataset) if nodata is None else nodata
 
         add_cog_asset(
             item,
