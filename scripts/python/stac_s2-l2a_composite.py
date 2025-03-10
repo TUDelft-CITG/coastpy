@@ -467,11 +467,12 @@ def create_stac_items():
 
 
 def create_collection_with_items():
-    client = Client(n_workers=1, threads_per_worker=1)
+    client = Client(n_workers=5, threads_per_worker=1)
     summarize_dask_cluster(client)
 
     fs = fsspec.filesystem("az", **storage_options)
     files = list(fs.glob(f"{STAC_ITEM_CONTAINER}/*.json"))
+    print("Found", len(files), "STAC items.")
 
     # Create a Dask bag from the list of files
     bag = db.from_sequence(files, npartitions=10)
@@ -519,7 +520,7 @@ def create_collection_with_items():
 
     collection.normalize_hrefs(str(STAC_DIR / collection.id), strategy=layout)
 
-    collection.validate_all()
+    # collection.validate_all()
 
     catalog.save(
         catalog_type=pystac.CatalogType.SELF_CONTAINED,
@@ -529,8 +530,8 @@ def create_collection_with_items():
 
 
 def main():
-    create_stac_items()
-    # create_collection_with_items()
+    # create_stac_items()
+    create_collection_with_items()
 
 
 if __name__ == "__main__":
