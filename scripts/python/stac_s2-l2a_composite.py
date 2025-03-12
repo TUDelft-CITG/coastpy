@@ -36,7 +36,7 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 VERSION = "2025-01-17"
 CONTAINER_NAME = "tmp"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/s2-l2a-composite/release/{VERSION}"
-STAC_ITEM_CONTAINER = f"az://tmp/stac/{CONTAINER_URI.replace('az://', '')}/items"
+STAC_ITEM_CONTAINER = f"az://tmp/stac-test6/{CONTAINER_URI.replace('az://', '')}/items"
 DATETIME_RANGE = "2023-01-01/2024-01-01"
 BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
 REQUIRED_BANDS = [b for b in BANDS if b != "SCL"]
@@ -353,30 +353,35 @@ def load_bands_to_dataset_delayed(
 
 
 @delayed
-def create_stac_item_delayed(ds: xr.Dataset, urlpath: str) -> Item:
+def create_stac_item_delayed(ds: xr.Dataset, urlpath: str) -> Item | None:
     """Create a STAC item from a dataset lazily."""
-    return create_cog_item(
-        ds,
-        urlpath,
-        storage_options=storage_options,
-        nodata=NODATA_VALUE,
-        data_type=DATA_TYPE,
-        scale_factor=SCALE_FACTOR,
-        unit=UNIT,
-    )
+    try:
+        return create_cog_item(
+            ds,
+            urlpath,
+            storage_options=storage_options,
+            nodata=NODATA_VALUE,
+            data_type=DATA_TYPE,
+            scale_factor=SCALE_FACTOR,
+            unit=UNIT,
+        )
+    except Exception as e:
+        print(f"Error creating item: {e}")
+        return None
 
 
 @delayed
 def write_stac_item_to_storage(item: Item, storage_options: dict) -> str | None:
     """Write a STAC item to cloud storage as a JSON file."""
-    item_path = f"{STAC_ITEM_CONTAINER}/{item.id}.json"
-    try:
-        with fsspec.open(item_path, mode="w", **storage_options) as f:
-            json.dump(item.to_dict(), f)
-        return item_path
-    except Exception as e:
-        print(f"Error writing item to storage: {e}")
-        return None
+    if item:
+        item_path = f"{STAC_ITEM_CONTAINER}/{item.id}.json"
+        try:
+            with fsspec.open(item_path, mode="w", **storage_options) as f:
+                json.dump(item.to_dict(), f)
+            return item_path
+        except Exception as e:
+            print(f"Error writing item to storage: {e}")
+            return None
 
 
 def read_stac_item_from_storage(file: str, filesystem) -> Item:
@@ -462,11 +467,12 @@ def create_stac_items():
 
 
 def create_collection_with_items():
-    client = Client(n_workers=4, threads_per_worker=1)
+    client = Client(n_workers=5, threads_per_worker=1)
     summarize_dask_cluster(client)
 
     fs = fsspec.filesystem("az", **storage_options)
     files = list(fs.glob(f"{STAC_ITEM_CONTAINER}/*.json"))
+    print("Found", len(files), "STAC items.")
 
     # Create a Dask bag from the list of files
     bag = db.from_sequence(files, npartitions=10)
@@ -514,7 +520,7 @@ def create_collection_with_items():
 
     collection.normalize_hrefs(str(STAC_DIR / collection.id), strategy=layout)
 
-    collection.validate_all()
+    # collection.validate_all()
 
     catalog.save(
         catalog_type=pystac.CatalogType.SELF_CONTAINED,

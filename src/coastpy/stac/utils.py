@@ -1,6 +1,7 @@
 import itertools
 import logging
 import operator
+from contextlib import suppress
 
 import fsspec
 import geopandas as gpd
@@ -75,6 +76,18 @@ def stackstac_to_dataset(stack: xr.DataArray) -> xr.Dataset:
     return ds
 
 
+def get_alternate_href(links):
+    """Extracts the 'alternate' href from a list of STAC links."""
+    if not isinstance(links, list | tuple):
+        return None  # Return None if links are missing or not iterable
+
+    for link in links:
+        if isinstance(link, dict) and link.get("rel") == "alternate" and "href" in link:
+            return link["href"]
+
+    return None  # Default return if no alternate href is found
+
+
 def read_snapshot(collection, columns=None, add_href=True, storage_options=None):
     """
     Reads the extent of items from a STAC collection and returns a GeoDataFrame with specified columns.
@@ -88,6 +101,7 @@ def read_snapshot(collection, columns=None, add_href=True, storage_options=None)
     Returns:
         GeoDataFrame containing the specified columns.
     """
+
     # Set default storage options
     if storage_options is None:
         storage_options = {"account_name": "coclico"}
@@ -118,10 +132,13 @@ def read_snapshot(collection, columns=None, add_href=True, storage_options=None)
             and "data" in first_assets
             and len(first_assets) == 1
         ):
-            # Single asset under "data"
+            # Extract primary href from assets
             extents["href"] = extents["assets"].apply(
                 lambda x: x.get("data", {}).get("href")
             )
+
+            with suppress(KeyError):
+                extents["alternate_href"] = extents["links"].apply(get_alternate_href)
         else:
             # Multiple assets
             def extract_hrefs(assets_dict):

@@ -1,3 +1,6 @@
+# NOTE: This is inspired on OpenDataCube' calculate indices, but that didn't work for
+# data on Planetary Computer because the bands are named differently.
+
 import inspect
 import logging
 import re

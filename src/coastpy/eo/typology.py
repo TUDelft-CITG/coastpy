@@ -399,7 +399,13 @@ def load_stac_gpq_item_xr(
                 "collection",
                 "created",
                 "datetime",
-            ]
+                "proj:code",
+                "proj:shape",
+                "proj:transform",
+                "proj:bbox",
+                "proj:geometry",
+            ],
+            errors="ignore",
         )
         # Add the remaining metadata as coordinates
         meta = stac_gpq_item.iloc[0].to_dict()
