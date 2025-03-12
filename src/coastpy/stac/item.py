@@ -442,8 +442,7 @@ def create_tabular_item(
     )
     template.common_metadata.created = pystac.utils.now_in_utc()
 
-    if infer_datetime != InferDatetimeOptions.no:
-        datetime_column = "datetime"
+    datetime_column = "datetime" if infer_datetime != InferDatetimeOptions.no else None
 
     item = generate(
         uri=AssetProtocol.CLOUD.get_uri(pp),
