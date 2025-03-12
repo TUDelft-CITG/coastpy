@@ -4,6 +4,7 @@ import re
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
 from enum import Enum
 
 import fsspec
@@ -57,6 +58,7 @@ class TileLogger:
                 "status": Status.PENDING.value,
                 "bands": bands_col,
                 "retries": 0,
+                "priority": 0,
                 "datetime": pd.Timestamp.utcnow().isoformat(),
                 "message": "",
             }
@@ -142,6 +144,22 @@ class TileLogger:
                 print(f"Warning: Could not parse file {f}: {e}")
 
         return tiles
+
+    def update_priorities(
+        self, condition_fn: Callable[[pd.DataFrame], pd.Series], priority: int
+    ) -> None:
+        """
+        Update priorities in the log DataFrame based on a given condition.
+
+        Args:
+            condition_fn (Callable[[pd.DataFrame], pd.Series]): A function that returns a boolean mask.
+            priority (int): The priority level to assign.
+
+        Example:
+            # Set priority for European tiles except Norway & Sweden
+            logger.update_priorities(lambda df: df["country"].isin(EUROPE) & ~df["country"].isin(["NO", "SE"]), 10)
+        """
+        self.df.loc[condition_fn(self.df), "priority"] = priority
 
     def update(
         self, urlpath: str, status: Status, message: str = "", dt: str | None = None
@@ -230,13 +248,19 @@ class TileLogger:
                     self.now_to_isoformat(),
                 )
 
-    def sample(self, n: int, statuses: list[Status] | None = None) -> list[str]:
+    def sample(
+        self,
+        n: int,
+        statuses: list[Status] | None = None,
+        min_priority: int | None = None,
+    ) -> list[str]:
         """
-        Sample up to `n` IDs with specified statuses.
+        Sample up to `n` IDs with specified statuses, prioritizing higher-priority items while keeping randomness within groups.
 
         Args:
             n (int): Number of IDs to sample.
             statuses (List[Status], optional): Statuses to sample from. Defaults to [PENDING].
+            min_priority (int, optional): Minimum priority threshold. Defaults to highest available priority.
 
         Returns:
             List[str]: Sampled IDs.
@@ -245,6 +269,8 @@ class TileLogger:
             ValueError: If no items are available with the given statuses.
         """
         statuses = statuses or [Status.PENDING]
+
+        # Filter based on statuses and ensure only provided `ids` are considered
         filtered = self.df[
             (self.df["status"].isin([s.value for s in statuses]))
             & (self.df.index.isin(self.ids))
@@ -253,7 +279,45 @@ class TileLogger:
         if filtered.empty:
             raise ValueError(f"No items with statuses: {[s.value for s in statuses]}")
 
-        return filtered.sample(n=min(n, len(filtered))).index.tolist()
+        # If min_priority is not set, determine the highest available priority
+        if min_priority is None:
+            min_priority = filtered["priority"].max()
+
+        # Apply priority filter
+        filtered = filtered[filtered["priority"] >= min_priority]
+
+        if filtered.empty:
+            raise ValueError(f"No items remaining with priority >= {min_priority}")
+
+        # Randomize within priority groups
+        filtered = filtered.sample(frac=1, random_state=42)
+
+        # Select up to `n` items
+        sampled = filtered.head(n).index.tolist()
+
+        return sampled
+
+    def get_active_priority(self, statuses: list[Status] | None = None) -> int | None:
+        """
+        Returns the highest priority level that still has pending tiles.
+
+        Args:
+            statuses (List[Status], optional): Statuses to consider. Defaults to [PENDING].
+
+        Returns:
+            int | None: The highest active priority level, or None if no tiles remain.
+        """
+        statuses = statuses or [Status.PENDING]
+
+        active = self.df[
+            (self.df["status"].isin([s.value for s in statuses]))
+            & (self.df.index.isin(self.ids))
+        ]
+
+        if active.empty:
+            return None  # No remaining tiles
+
+        return active["priority"].max()
 
     def read(self) -> None:
         """Load the log from storage."""
@@ -347,6 +411,7 @@ class ParquetLogger:
                 "id": list(missing_ids),
                 "status": Status.PENDING.value,
                 "retries": 0,
+                "priority": 0,
                 "datetime": pd.Timestamp.utcnow().isoformat(),
                 "message": "",
             }
@@ -384,6 +449,22 @@ class ParquetLogger:
             )
         elif status == Status.SUCCESS:
             self.df.at[tile_id, "retries"] = 0
+
+    def update_priorities(
+        self, condition_fn: Callable[[pd.DataFrame], pd.Series], priority: int
+    ) -> None:
+        """
+        Update priorities in the log DataFrame based on a given condition.
+
+        Args:
+            condition_fn (Callable[[pd.DataFrame], pd.Series]): A function that returns a boolean mask.
+            priority (int): The priority level to assign.
+
+        Example:
+            # Set priority for European tiles except Norway & Sweden
+            logger.update_priorities(lambda df: df["country"].isin(EUROPE) & ~df["country"].isin(["NO", "SE"]), 10)
+        """
+        self.df.loc[condition_fn(self.df), "priority"] = priority
 
     def bulk_update(self, results: list[tuple[str, Status, str, str]]) -> None:
         """Bulk update the log with multiple results."""
@@ -428,13 +509,19 @@ class ParquetLogger:
         for tile_id in to_reset:
             self.update(tile_id, Status.PENDING, "", self.now_to_isoformat())
 
-    def sample(self, n: int, statuses: list[Status] | None = None) -> list[str]:
+    def sample(
+        self,
+        n: int,
+        statuses: list[Status] | None = None,
+        min_priority: int | None = None,
+    ) -> list[str]:
         """
-        Sample up to `n` IDs with specified statuses.
+        Sample up to `n` IDs with specified statuses, prioritizing higher-priority items while keeping randomness within groups.
 
         Args:
             n (int): Number of IDs to sample.
             statuses (List[Status], optional): Statuses to sample from. Defaults to [PENDING].
+            min_priority (int, optional): Minimum priority threshold. Defaults to highest available priority.
 
         Returns:
             List[str]: Sampled IDs.
@@ -443,12 +530,55 @@ class ParquetLogger:
             ValueError: If no items are available with the given statuses.
         """
         statuses = statuses or [Status.PENDING]
-        filtered = self.df[self.df["status"].isin([s.value for s in statuses])]
+
+        # Filter based on statuses and ensure only provided `ids` are considered
+        filtered = self.df[
+            (self.df["status"].isin([s.value for s in statuses]))
+            & (self.df.index.isin(self.ids))
+        ]
 
         if filtered.empty:
             raise ValueError(f"No items with statuses: {[s.value for s in statuses]}")
 
-        return filtered.sample(n=min(n, len(filtered))).index.tolist()
+        # If min_priority is not set, determine the highest available priority
+        if min_priority is None:
+            min_priority = filtered["priority"].max()
+
+        # Apply priority filter
+        filtered = filtered[filtered["priority"] >= min_priority]
+
+        if filtered.empty:
+            raise ValueError(f"No items remaining with priority >= {min_priority}")
+
+        # Randomize within priority groups
+        filtered = filtered.sample(frac=1, random_state=42)
+
+        # Select up to `n` items
+        sampled = filtered.head(n).index.tolist()
+
+        return sampled
+
+    def get_active_priority(self, statuses: list[Status] | None = None) -> int | None:
+        """
+        Returns the highest priority level that still has pending tiles.
+
+        Args:
+            statuses (List[Status], optional): Statuses to consider. Defaults to [PENDING].
+
+        Returns:
+            int | None: The highest active priority level, or None if no tiles remain.
+        """
+        statuses = statuses or [Status.PENDING]
+
+        active = self.df[
+            (self.df["status"].isin([s.value for s in statuses]))
+            & (self.df.index.isin(self.ids))
+        ]
+
+        if active.empty:
+            return None  # No remaining tiles
+
+        return active["priority"].max()
 
     def read(self) -> None:
         """Load the log from storage."""
