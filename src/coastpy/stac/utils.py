@@ -153,28 +153,3 @@ def read_snapshot(collection, columns=None, add_href=True, storage_options=None)
             extents = pd.concat([extents, hrefs_df], axis=1)
 
     return extents
-
-
-if __name__ == "__main__":
-    import os
-
-    import fsspec
-    import geopandas as gpd
-    import pandas as pd
-    import pystac
-    from dotenv import load_dotenv
-
-    from coastpy.stac.utils import read_snapshot
-
-    load_dotenv()
-
-    # Configure cloud and Dask settings
-    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-    storage_options = {"account_name": "coclico", "sas_token": sas_token}
-
-    coclico_catalog = pystac.Catalog.from_file(
-        "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
-    )
-    collection = coclico_catalog.get_child("gctr")
-    snapshot = read_snapshot(collection, storage_options=storage_options)
-    print("done")
