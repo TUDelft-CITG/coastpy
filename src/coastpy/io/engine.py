@@ -107,9 +107,12 @@ class STACQueryEngine(BaseQueryEngine):
     ) -> None:
         super().__init__(storage_backend=storage_backend)
         self.extents = read_snapshot(
-            stac_collection, columns=["geometry", "assets", "proj:code"], add_href=True
+            stac_collection,
         )
-        self.proj_epsg = self.extents["proj:code"].unique().item()
+        try:
+            self.proj_epsg = self.extents["proj:code"].unique().item()
+        except KeyError:
+            self.proj_epsg = self.extents["proj:epsg"].unique().item()
 
         if columns is None or not columns:
             # NOTE: before we used a wildcard, but that was tricky.. now we will rely on STAC? Also a bit
