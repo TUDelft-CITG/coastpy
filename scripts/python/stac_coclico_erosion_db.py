@@ -42,10 +42,6 @@ COLLECTION_TITLE = (
     "The CoCliCo coastal characteristics database to support erosion analysis"
 )
 
-# Transect and zoom configuration
-TRANSECT_LENGTH = 2000
-ZOOM = 9
-
 DESCRIPTION = """
 This database brings together existing information on erosion and relevant coastal characteristics in a GIS environment, facilitating broad-scale analysis.
 """
@@ -212,10 +208,7 @@ def create_collection(
     providers = [
         pystac.Provider(
             name="Deltares",
-            roles=[
-                ProviderRole.PROCESSOR,
-                ProviderRole.LICENSOR,
-            ],
+            roles=[ProviderRole.PROCESSOR, ProviderRole.HOST],
             url="https://deltares.nl",
         ),
         pystac.Provider(
