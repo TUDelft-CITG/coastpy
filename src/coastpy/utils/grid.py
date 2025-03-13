@@ -3,6 +3,7 @@ import json
 
 import fsspec
 import geopandas as gpd
+import pandas as pd
 import pystac
 import pystac.item
 import pystac.media_type
@@ -147,3 +148,58 @@ def make_coastal_mgrs_grid(
     grid = add_tile_id(grid)
     grid = add_utm_epsg(grid)
     return grid
+
+
+def get_default_processing_priorities(grid: gpd.GeoDataFrame) -> dict[str, int]:
+    """
+    Generate a dictionary mapping tile IDs to processing priorities.
+
+    Processing priority is assigned in descending order as follows:
+    - 10: EU countries except Russia, Sweden, and Norway
+    - 9:  EU countries except Russia
+    - 8:  Remaining European continent (within latitude -70 to 70)
+    - 7:  Rest of the world (within latitude -70 to 70)
+    - 6:  All remaining tiles
+
+    Args:
+        grid (gpd.GeoDataFrame): GeoDataFrame containing grid information with `tile_id` as index.
+
+    Returns:
+        dict[str, int]: Mapping of tile IDs to processing priority.
+    """
+    priority_mapping = {}
+
+    # Ensure necessary columns exist
+    required_columns = {"admin:continents", "admin:countries"}
+    if not required_columns.issubset(grid.columns):
+        raise ValueError(
+            f"Missing required columns: {required_columns - set(grid.columns)}"
+        )
+
+    # Define masks for each priority level
+    eu_mask = grid["admin:continents"].apply(lambda x: "EU" in x)
+    russia_mask = grid["admin:countries"].apply(lambda x: "RU" in x)
+    norway_sweden_mask = grid["admin:countries"].apply(
+        lambda x: any(c in ["NO", "SE"] for c in x)
+    )
+    latitude_mask = grid.index.isin(grid.cx[:, -70:70].index)
+
+    def assign_priority(priority: int, mask: pd.Series):
+        """Assign priority only if the tile ID is not already assigned."""
+        for tid in grid.loc[mask].index:
+            if tid not in priority_mapping:
+                priority_mapping[tid] = priority
+
+    # Assign priorities in descending order, ensuring no overwrites
+    assign_priority(10, eu_mask & ~russia_mask & ~norway_sweden_mask)
+    assign_priority(9, eu_mask & ~russia_mask)
+    assign_priority(8, eu_mask & latitude_mask)
+    assign_priority(7, ~eu_mask & latitude_mask)
+
+    # Assign remaining tiles to lowest priority (6)
+    assigned_ids = set(priority_mapping.keys())
+    remaining_ids = set(grid.index) - assigned_ids
+    for tid in remaining_ids:
+        priority_mapping[tid] = 6
+
+    return priority_mapping

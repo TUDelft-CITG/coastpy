@@ -4,8 +4,8 @@ import re
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Callable
 from enum import Enum
+from re import Pattern
 
 import fsspec
 import pandas as pd
@@ -84,6 +84,7 @@ class TileLogger:
                 "status": Status.PENDING.value,
                 "bands": bands_col,
                 "retries": 0,
+                "priority": 0,
                 "datetime": pd.Timestamp.utcnow().isoformat(),
                 "message": "",
             }
@@ -145,21 +146,31 @@ class TileLogger:
 
         return tiles
 
-    def update_priorities(
-        self, condition_fn: Callable[[pd.DataFrame], pd.Series], priority: int
-    ) -> None:
+    def assign_priority(self, priority_mapping: dict[str, int]) -> "TileLogger":
         """
-        Update priorities in the log DataFrame based on a given condition.
+        Assign priority levels to tiles in a Pandas DataFrame **in place**.
 
         Args:
-            condition_fn (Callable[[pd.DataFrame], pd.Series]): A function that returns a boolean mask.
-            priority (int): The priority level to assign.
+            priority_mapping (dict[str, int]): Dictionary mapping `tile_id` to priority levels.
 
-        Example:
-            # Set priority for European tiles except Norway & Sweden
-            logger.update_priorities(lambda df: df["country"].isin(EUROPE) & ~df["country"].isin(["NO", "SE"]), 10)
+        Example Usage:
+            logger.assign_priority({"tile_001": 10, "tile_002": 8})
         """
-        self.df.loc[condition_fn(self.df), "priority"] = priority
+        if not isinstance(priority_mapping, dict):
+            raise ValueError("Expected a dictionary with {tile_id: priority_level}")
+
+        # Ensure the 'priority' column exists
+        if "priority" not in self.df.columns:
+            self.df["priority"] = 0  # Default priority level
+
+        # Convert dictionary keys to a list for compatibility
+        valid_ids = self.df.index.intersection(list(priority_mapping.keys()))
+
+        # Assign priorities using .map() properly
+        self.df.loc[valid_ids, "priority"] = [
+            priority_mapping[tile] for tile in valid_ids
+        ]
+        return self
 
     def update(
         self, urlpath: str, status: Status, message: str = "", dt: str | None = None
@@ -255,7 +266,7 @@ class TileLogger:
         min_priority: int | None = None,
     ) -> list[str]:
         """
-        Sample up to `n` IDs with specified statuses, prioritizing higher-priority items while keeping randomness within groups.
+        Sample up to `n` IDs with specified statuses, prioritizing higher-priority items first while allowing fallback to lower-priority items if needed.
 
         Args:
             n (int): Number of IDs to sample.
@@ -264,9 +275,6 @@ class TileLogger:
 
         Returns:
             List[str]: Sampled IDs.
-
-        Raises:
-            ValueError: If no items are available with the given statuses.
         """
         statuses = statuses or [Status.PENDING]
 
@@ -277,9 +285,9 @@ class TileLogger:
         ]
 
         if filtered.empty:
-            raise ValueError(f"No items with statuses: {[s.value for s in statuses]}")
+            return []
 
-        # If min_priority is not set, determine the highest available priority
+        # Determine the highest available priority if min_priority is not set
         if min_priority is None:
             min_priority = filtered["priority"].max()
 
@@ -287,37 +295,64 @@ class TileLogger:
         filtered = filtered[filtered["priority"] >= min_priority]
 
         if filtered.empty:
-            raise ValueError(f"No items remaining with priority >= {min_priority}")
+            return []
 
-        # Randomize within priority groups
-        filtered = filtered.sample(frac=1, random_state=42)
+        # Sort by priority (descending) to process higher-priority items first
+        filtered = filtered.sort_values(by="priority", ascending=False)
 
-        # Select up to `n` items
-        sampled = filtered.head(n).index.tolist()
+        # Shuffle within each priority group
+        filtered = filtered.groupby("priority", group_keys=False).apply(
+            lambda x: x.sample(frac=1, random_state=42)
+        )
 
-        return sampled
+        sampled_ids = []
 
-    def get_active_priority(self, statuses: list[Status] | None = None) -> int | None:
+        # Iterate over unique priority levels (highest to lowest)
+        for priority_level in sorted(filtered["priority"].unique(), reverse=True):
+            available_samples = filtered[
+                filtered["priority"] == priority_level
+            ].index.tolist()
+
+            if available_samples:
+                to_sample = min(n - len(sampled_ids), len(available_samples))
+                sampled_ids.extend(available_samples[:to_sample])
+
+            # Stop once we have enough samples
+            if len(sampled_ids) >= n:
+                break
+
+        return sampled_ids
+
+    def n_to_process(
+        self, statuses: list[Status] | None = None, min_priority: int | None = None
+    ) -> int:
         """
-        Returns the highest priority level that still has pending tiles.
+        Get the number of samples to process based on the current status and priority.
 
         Args:
-            statuses (List[Status], optional): Statuses to consider. Defaults to [PENDING].
+            statuses (List[Status], optional): Statuses to sample from. Defaults to [PENDING].
+            min_priority (int, optional): Minimum priority threshold. Defaults to highest available priority.
 
         Returns:
-            int | None: The highest active priority level, or None if no tiles remain.
+            int: Number of tiles still pending processing.
         """
         statuses = statuses or [Status.PENDING]
 
-        active = self.df[
-            (self.df["status"].isin([s.value for s in statuses]))
-            & (self.df.index.isin(self.ids))
-        ]
+        # Filter by status
+        filtered = self.df[self.df["status"].isin([s.value for s in statuses])]
 
-        if active.empty:
-            return None  # No remaining tiles
+        if filtered.empty:
+            return 0
 
-        return active["priority"].max()
+        if min_priority is None:
+            min_priority = filtered["priority"].max()
+
+        if min_priority > filtered["priority"].max():
+            return 0
+
+        filtered = filtered[filtered["priority"] >= min_priority]
+
+        return filtered.shape[0]
 
     def read(self) -> None:
         """Load the log from storage."""
@@ -363,7 +398,7 @@ class ParquetLogger:
     def __init__(
         self,
         log_path: str,
-        pattern: str,
+        pattern: str | Pattern[str],
         ids: list[str] | None = None,
         storage_options: dict[str, str] | None = None,
         add_missing: bool = False,
@@ -390,6 +425,7 @@ class ParquetLogger:
                 "id": self.ids,
                 "status": Status.PENDING.value,
                 "retries": 0,
+                "priority": 0,
                 "datetime": pd.Timestamp.utcnow().isoformat(),
                 "message": "",
             }
@@ -450,21 +486,30 @@ class ParquetLogger:
         elif status == Status.SUCCESS:
             self.df.at[tile_id, "retries"] = 0
 
-    def update_priorities(
-        self, condition_fn: Callable[[pd.DataFrame], pd.Series], priority: int
-    ) -> None:
+    def assign_priority(self, priority_mapping: dict[str, int]) -> None:
         """
-        Update priorities in the log DataFrame based on a given condition.
+        Assign priority levels to tiles in a Pandas DataFrame **in place**.
 
         Args:
-            condition_fn (Callable[[pd.DataFrame], pd.Series]): A function that returns a boolean mask.
-            priority (int): The priority level to assign.
+            priority_mapping (dict[str, int]): Dictionary mapping `tile_id` to priority levels.
 
-        Example:
-            # Set priority for European tiles except Norway & Sweden
-            logger.update_priorities(lambda df: df["country"].isin(EUROPE) & ~df["country"].isin(["NO", "SE"]), 10)
+        Example Usage:
+            logger.assign_priority({"tile_001": 10, "tile_002": 8})
         """
-        self.df.loc[condition_fn(self.df), "priority"] = priority
+        if not isinstance(priority_mapping, dict):
+            raise ValueError("Expected a dictionary with {tile_id: priority_level}")
+
+        # Ensure the 'priority' column exists
+        if "priority" not in self.df.columns:
+            self.df["priority"] = 0  # Default priority level
+
+        # Convert dictionary keys to a list for compatibility
+        valid_ids = self.df.index.intersection(list(priority_mapping.keys()))
+
+        # Assign priorities using .map() properly
+        self.df.loc[valid_ids, "priority"] = [
+            priority_mapping[tile] for tile in valid_ids
+        ]
 
     def bulk_update(self, results: list[tuple[str, Status, str, str]]) -> None:
         """Bulk update the log with multiple results."""
@@ -516,7 +561,7 @@ class ParquetLogger:
         min_priority: int | None = None,
     ) -> list[str]:
         """
-        Sample up to `n` IDs with specified statuses, prioritizing higher-priority items while keeping randomness within groups.
+        Sample up to `n` IDs with specified statuses, prioritizing higher-priority items first while allowing fallback to lower-priority items if needed.
 
         Args:
             n (int): Number of IDs to sample.
@@ -525,9 +570,6 @@ class ParquetLogger:
 
         Returns:
             List[str]: Sampled IDs.
-
-        Raises:
-            ValueError: If no items are available with the given statuses.
         """
         statuses = statuses or [Status.PENDING]
 
@@ -538,9 +580,9 @@ class ParquetLogger:
         ]
 
         if filtered.empty:
-            raise ValueError(f"No items with statuses: {[s.value for s in statuses]}")
+            return []
 
-        # If min_priority is not set, determine the highest available priority
+        # Determine the highest available priority if min_priority is not set
         if min_priority is None:
             min_priority = filtered["priority"].max()
 
@@ -548,37 +590,64 @@ class ParquetLogger:
         filtered = filtered[filtered["priority"] >= min_priority]
 
         if filtered.empty:
-            raise ValueError(f"No items remaining with priority >= {min_priority}")
+            return []
 
-        # Randomize within priority groups
-        filtered = filtered.sample(frac=1, random_state=42)
+        # Sort by priority (descending) to process higher-priority items first
+        filtered = filtered.sort_values(by="priority", ascending=False)
 
-        # Select up to `n` items
-        sampled = filtered.head(n).index.tolist()
+        # Shuffle within each priority group
+        filtered = filtered.groupby("priority", group_keys=False).apply(
+            lambda x: x.sample(frac=1, random_state=42)
+        )
 
-        return sampled
+        sampled_ids = []
 
-    def get_active_priority(self, statuses: list[Status] | None = None) -> int | None:
+        # Iterate over unique priority levels (highest to lowest)
+        for priority_level in sorted(filtered["priority"].unique(), reverse=True):
+            available_samples = filtered[
+                filtered["priority"] == priority_level
+            ].index.tolist()
+
+            if available_samples:
+                to_sample = min(n - len(sampled_ids), len(available_samples))
+                sampled_ids.extend(available_samples[:to_sample])
+
+            # Stop once we have enough samples
+            if len(sampled_ids) >= n:
+                break
+
+        return sampled_ids
+
+    def n_to_process(
+        self, statuses: list[Status] | None = None, min_priority: int | None = None
+    ) -> int:
         """
-        Returns the highest priority level that still has pending tiles.
+        Get the number of samples to process based on the current status and priority.
 
         Args:
-            statuses (List[Status], optional): Statuses to consider. Defaults to [PENDING].
+            statuses (List[Status], optional): Statuses to sample from. Defaults to [PENDING].
+            min_priority (int, optional): Minimum priority threshold. Defaults to highest available priority.
 
         Returns:
-            int | None: The highest active priority level, or None if no tiles remain.
+            int: Number of tiles still pending processing.
         """
         statuses = statuses or [Status.PENDING]
 
-        active = self.df[
-            (self.df["status"].isin([s.value for s in statuses]))
-            & (self.df.index.isin(self.ids))
-        ]
+        # Filter by status
+        filtered = self.df[self.df["status"].isin([s.value for s in statuses])]
 
-        if active.empty:
-            return None  # No remaining tiles
+        if filtered.empty:
+            return 0
 
-        return active["priority"].max()
+        if min_priority is None:
+            min_priority = filtered["priority"].max()
+
+        if min_priority > filtered["priority"].max():
+            return 0
+
+        filtered = filtered[filtered["priority"] >= min_priority]
+
+        return filtered.shape[0]
 
     def read(self) -> None:
         """Load the log from storage."""
