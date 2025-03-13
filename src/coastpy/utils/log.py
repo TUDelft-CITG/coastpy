@@ -29,7 +29,7 @@ class TileLogger:
         self,
         log_path: str,
         ids: list[str],
-        pattern: str,
+        pattern: str | Pattern[str],
         required_bands: list[str] | None = None,
         storage_options: dict[str, str] | None = None,
         add_missing: bool = False,
