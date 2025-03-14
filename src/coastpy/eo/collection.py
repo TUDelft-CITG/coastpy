@@ -679,6 +679,62 @@ class S2Collection(BaseCollection):
         stac_cfg = stac_cfg or self.default_stac_cfg
         super().__init__(catalog_url, collection, stac_cfg)
 
+    def search(
+        self: Self,
+        roi: gpd.GeoDataFrame,
+        date_range: str | None = None,
+        query: dict | None = None,
+        item_limit: int = 300,
+        filter_function: Callable[[list], list] | None = None,
+    ) -> Self:
+        """
+        Perform a STAC search using the API, retrieving items sorted by ascending cloud cover
+        instead of filtering by a strict cloud cover threshold.
+
+        Args:
+            roi (gpd.GeoDataFrame): Region of interest.
+            date_range (str, optional): Date range for the search (ISO8601 format).
+            filter_function (Callable, optional): Function to filter the resulting items.
+            use_geoparquet_fallback (bool): Whether to fallback to STAC GeoParquet.
+            item_limit (int, optional): Maximum number of items to retrieve. Default is 300.
+
+        Returns:
+            Updated collection instance with search results.
+        """
+
+        self.roi = roi
+
+        self.search_params = {
+            "collections": self.collection,
+            "intersects": self.roi.to_crs(4326).geometry.item(),
+            "datetime": date_range,
+            "query": query,
+            "sortby": [{"field": "eo:cloud_cover", "direction": "asc"}],
+            "limit": item_limit,
+        }
+
+        # Attempt STAC API search
+        search = self.catalog.search(
+            **{k: v for k, v in self.search_params.items() if v is not None}
+        )
+        self.items = list(search.items())
+
+        if not self.items:
+            raise ValueError("No items found for the given search parameters.")
+
+        # Apply filter function if provided
+        if filter_function:
+            try:
+                self.items = filter_function(self.items)
+                if not self.items:
+                    raise ValueError("Filter function returned no items.")
+            except Exception as e:
+                raise RuntimeError(f"Error in filter_function: {e}") from e
+
+        # Store data extent
+        self.data_extent = self._compute_data_extent(self.items)
+        return self
+
     @classmethod
     def _add_metadata_from_stac(
         cls, items: list[pystac.Item], ds: xr.Dataset
