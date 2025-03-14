@@ -33,7 +33,7 @@ from coastpy.utils.dask_utils import summarize_dask_cluster
 logging.getLogger("azure").setLevel(logging.WARNING)
 
 # Configuration
-VERSION = "2025-03-10"
+VERSION = "2025-03-13"
 CONTAINER_NAME = "tmp"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/s2-l2a-composite/release/{VERSION}"
 STAC_ITEM_CONTAINER = f"az://tmp/stac-test6/{CONTAINER_URI.replace('az://', '')}/items"

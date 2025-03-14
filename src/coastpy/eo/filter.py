@@ -130,7 +130,9 @@ def filter_and_sort_stac_items(
             )
             return grouped
 
-        spatial_group = df.groupby(group_by, group_keys=False).apply(process_group)
+        spatiotemporal_groups = df.groupby(group_by, group_keys=False).apply(
+            process_group
+        )
 
         def compute_max_avg_cloud(group):
             """Compute the average cloud cover per group and return the max across all groups."""
@@ -139,16 +141,16 @@ def filter_and_sort_stac_items(
 
         # Compute average cloud cover per group
         max_avg_cloud = (
-            spatial_group.groupby(group_by).apply(compute_max_avg_cloud).max()
+            spatiotemporal_groups.groupby(group_by).apply(compute_max_avg_cloud).max()
         )
 
         for threshold, max_items in CLOUD_THRESHOLD_MAPPING.items():  # noqa
             if max_avg_cloud < threshold:
                 break
 
-        final_selection = spatial_group.groupby(group_by, group_keys=False).apply(
-            lambda g: g.sort_values(sort_by).head(max_items)
-        )
+        final_selection = spatiotemporal_groups.groupby(
+            group_by, group_keys=False
+        ).apply(lambda g: g.sort_values(sort_by).head(max_items))
 
         # Reconstruct the filtered list of items
         items = [items[idx] for idx in final_selection.index]
