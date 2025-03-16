@@ -5,6 +5,7 @@ from contextlib import suppress
 
 import fsspec
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import pystac
 import xarray as xr
@@ -78,7 +79,7 @@ def stackstac_to_dataset(stack: xr.DataArray) -> xr.Dataset:
 
 def get_alternate_href(links):
     """Extracts the 'alternate' href from a list of STAC links."""
-    if not isinstance(links, list | tuple):
+    if not isinstance(links, list | tuple | np.ndarray):
         return None  # Return None if links are missing or not iterable
 
     for link in links:
@@ -153,3 +154,29 @@ def read_snapshot(collection, columns=None, add_href=True, storage_options=None)
             extents = pd.concat([extents, hrefs_df], axis=1)
 
     return extents
+
+
+if __name__ == "__main__":
+    import os
+
+    import fsspec
+    import geopandas as gpd
+    import pandas as pd
+    import pystac
+    from dotenv import load_dotenv
+
+    from coastpy.stac.utils import read_snapshot
+
+    load_dotenv()
+
+    # Configure cloud and Dask settings
+    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+    storage_options = {"account_name": "coclico", "sas_token": sas_token}
+
+    coclico_catalog = pystac.Catalog.from_file(
+        "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
+    )
+    collection = coclico_catalog.get_child("gctr")
+
+    snapshot = read_snapshot(collection, storage_options=storage_options)
+    snapshot.head()
