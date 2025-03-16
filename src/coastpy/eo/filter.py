@@ -77,8 +77,8 @@ CLOUD_THRESHOLD_MAPPING: dict[float, int] = {
     15: 10,
     30: 20,
     60: 30,
-    80: 40,
-    100: 50,  # For extreme cases (80-100% cloud)
+    80: 30,
+    100: 30,  # For extreme cases (80-100% cloud)
 }
 
 

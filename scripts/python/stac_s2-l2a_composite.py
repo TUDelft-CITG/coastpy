@@ -528,8 +528,8 @@ def create_collection_with_items():
 
 
 def main():
-    # create_stac_items()
-    create_collection_with_items()
+    create_stac_items()
+    # create_collection_with_items()
 
 
 if __name__ == "__main__":
