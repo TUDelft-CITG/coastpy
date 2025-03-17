@@ -155,6 +155,10 @@ def filter_and_sort_stac_items(
         print(
             f"Unique relative tracks: {spatiotemporal_groups['sat:relative_orbit'].unique()}"
         )
+        minx, miny, maxx, maxy = stac_geoparquet.to_geodataframe(
+            [i.to_dict() for i in items], dtype_backend="pyarrow"
+        ).total_bounds
+        print(f"minx, miny, maxx, maxy = {minx, miny, maxx, maxy}")
 
         for threshold, max_items in CLOUD_THRESHOLD_MAPPING.items():  # noqa
             if max_avg_cloud < threshold:
