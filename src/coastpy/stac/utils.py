@@ -89,7 +89,9 @@ def get_alternate_href(links):
     return None  # Default return if no alternate href is found
 
 
-def read_snapshot(collection, columns=None, add_href=True, storage_options=None):
+def read_snapshot(
+    collection, columns=None, add_href=True, storage_options=None
+) -> gpd.GeoDataFrame:
     """
     Reads the extent of items from a STAC collection and returns a GeoDataFrame with specified columns.
 

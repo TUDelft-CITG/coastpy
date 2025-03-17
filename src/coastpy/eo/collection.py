@@ -63,7 +63,7 @@ class BaseCollection:
         self.items: list | None = None
         self.add_metadata_from_stac: bool = True
         self.dataset: xr.Dataset | None = None
-        self.data_extent: dict | None = None
+        self.data_extent: gpd.GeoDataFrame | None = None
 
         # Mask and scale settings
         self.mask_nodata: bool = False
@@ -176,7 +176,7 @@ class BaseCollection:
         )
 
         # Spatial filter using sjoin
-        snapshot = gpd.sjoin(snapshot, roi[["geometry"]].to_crs(snapshot.crs)).drop(
+        snapshot = gpd.sjoin(snapshot, roi[["geometry"]].to_crs(snapshot.crs)).drop(  # type: ignore
             columns="index_right"
         )
 
@@ -215,6 +215,9 @@ class BaseCollection:
         geobox = kwargs.pop("geobox", None)
 
         if geobox is None and resolution:
+            if self.data_extent is None:
+                raise ValueError("No data extent found. Perform a search first.")
+
             geobox = geobox_from_data_extent(
                 region=self.roi,
                 data_extent=self.data_extent,

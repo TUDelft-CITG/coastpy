@@ -75,10 +75,7 @@ import stac_geoparquet.arrow
 # Define cloud cover bins and corresponding image selection strategy
 CLOUD_THRESHOLD_MAPPING: dict[float, int] = {
     15: 10,
-    30: 20,
-    60: 30,
-    80: 30,
-    100: 30,  # For extreme cases (80-100% cloud)
+    100: 10,
 }
 
 
@@ -143,6 +140,7 @@ def filter_and_sort_stac_items(
         max_avg_cloud = (
             spatiotemporal_groups.groupby(group_by).apply(compute_max_avg_cloud).max()
         )
+        print(f"Max average cloud cover: {max_avg_cloud}")
 
         for threshold, max_items in CLOUD_THRESHOLD_MAPPING.items():  # noqa
             if max_avg_cloud < threshold:
@@ -154,6 +152,7 @@ def filter_and_sort_stac_items(
 
         # Reconstruct the filtered list of items
         items = [items[idx] for idx in final_selection.index]
+        print(f"Number of items: {len(items)}; groups: {len(final_selection)}")
         return items
 
     except Exception as err:

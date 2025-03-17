@@ -16,6 +16,7 @@ class Status(Enum):
 
     PENDING = "pending"
     PROCESSING = "processing"
+    PARTLY = "partly"
     SUCCESS = "success"
     FAILED = "failed"
 
@@ -106,10 +107,12 @@ class TileLogger:
             missing = set(self.required_bands) - bands
             if not missing:
                 self.df.at[tile_id, "status"] = Status.SUCCESS.value
+                self.df.at[tile_id, "bands"] = bands
                 self.df.at[tile_id, "message"] = "All bands processed."
 
             else:
-                self.df.at[tile_id, "status"] = Status.FAILED.value
+                self.df.at[tile_id, "status"] = Status.PARTLY.value
+                self.df.at[tile_id, "bands"] = bands
                 self.df.at[tile_id, "message"] = (
                     f"Missing bands: {', '.join(sorted(missing))}"
                 )
@@ -173,7 +176,12 @@ class TileLogger:
         return self
 
     def update(
-        self, urlpath: str, status: Status, message: str = "", dt: str | None = None
+        self,
+        urlpath: str,
+        status: Status,
+        message: str = "",
+        dt: str | None = None,
+        bands: set[str] | None = None,
     ) -> None:
         """Update the log based on the given URL path."""
         groups = self._extract_groups(urlpath)
@@ -186,22 +194,20 @@ class TileLogger:
         if tile_id not in self.df.index:
             raise KeyError(f"Tile ID '{tile_id}' not found in the log.")
 
-        # Tile-level update
-        if not band:
+        if not bands and not band:
             self.df.at[tile_id, "status"] = status.value
             self.df.at[tile_id, "message"] = message
-        # Band-level update
+
         else:
-            current_bands = self.df.at[tile_id, "bands"] or frozenset()
-            if status == Status.SUCCESS:
-                self.df.at[tile_id, "bands"] = current_bands | {band}
+            current_bands = bands or self.df.at[tile_id, "bands"] or frozenset()
+            self.df.at[tile_id, "bands"] = current_bands
             self._update_tile_status(tile_id)
 
         # Update datetime
         self.df.at[tile_id, "datetime"] = dt
 
         # Add retry logic
-        if status == Status.FAILED:
+        if status == Status.FAILED or status == Status.PARTLY:
             self.df.at[tile_id, "retries"] += 1
             self.df.at[tile_id, "message"] = (
                 f"{message} (retry count: {self.df.at[tile_id, 'retries']})"
@@ -235,12 +241,15 @@ class TileLogger:
             if self.required_bands:
                 missing_bands = set(self.required_bands) - bands
                 if not missing_bands:
-                    self.update(tile_id, Status.SUCCESS, "All bands processed.")
+                    self.update(
+                        tile_id, Status.SUCCESS, "All bands processed.", bands=bands
+                    )
                 else:
                     self.update(
                         tile_id,
-                        Status.FAILED,
+                        Status.PARTLY,
                         f"Missing bands: {', '.join(sorted(missing_bands))}",
+                        bands=bands,
                     )
             else:
                 # No bands required; mark tile as success
