@@ -131,8 +131,6 @@ def filter_and_sort_stac_items(
             process_group
         )
 
-        print(f"Groups: {spatiotemporal_groups.groupby(group_by).groups}")
-
         def compute_max_avg_cloud(group):
             """Compute the average cloud cover per group and return the max across all groups."""
             top_10 = group.sort_values(sort_by).head(10)
