@@ -140,7 +140,21 @@ def filter_and_sort_stac_items(
         max_avg_cloud = (
             spatiotemporal_groups.groupby(group_by).apply(compute_max_avg_cloud).max()
         )
+        mean_avg_cloud = (
+            spatiotemporal_groups.groupby(group_by).apply(compute_max_avg_cloud).mean()
+        )
+        median_avg_cloud = (
+            spatiotemporal_groups.groupby(group_by)
+            .apply(compute_max_avg_cloud)
+            .median()
+        )
         print(f"Max average cloud cover: {max_avg_cloud}")
+        print(f"Mean average cloud cover: {mean_avg_cloud}")
+        print(f"Median average cloud cover: {median_avg_cloud}")
+        print(f"Unique MGRS tiles: {spatiotemporal_groups['s2:mgrs_tile'].unique()}")
+        print(
+            f"Unique relative tracks: {spatiotemporal_groups['sat:relative_orbit'].unique()}"
+        )
 
         for threshold, max_items in CLOUD_THRESHOLD_MAPPING.items():  # noqa
             if max_avg_cloud < threshold:
