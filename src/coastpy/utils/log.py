@@ -273,6 +273,7 @@ class TileLogger:
         n: int,
         statuses: list[Status] | None = None,
         min_priority: int | None = None,
+        max_retries: int | None = None,
     ) -> list[str]:
         """
         Sample up to `n` IDs with specified statuses, prioritizing higher-priority items first while allowing fallback to lower-priority items if needed.
@@ -299,6 +300,9 @@ class TileLogger:
         # Determine the highest available priority if min_priority is not set
         if min_priority is None:
             min_priority = filtered["priority"].max()
+
+        if max_retries is not None:
+            filtered = filtered[filtered["retries"] < max_retries]
 
         # Apply priority filter
         filtered = filtered[filtered["priority"] >= min_priority]
