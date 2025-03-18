@@ -1,6 +1,7 @@
 import logging
 from datetime import timedelta
 
+import numpy as np
 import pandas as pd
 import pystac
 import stac_geoparquet
@@ -173,6 +174,11 @@ def filter_and_sort_stac_items(
         print(
             f"Number of items: {len(items)}; groups: {len(spatiotemporal_groups.groupby(group_by).groups)}"
         )
+
+        MAX_ITEMS = 40
+        if len(items) > MAX_ITEMS:
+            items = list(np.random.choice(np.array(items), MAX_ITEMS, replace=False))
+
         return items
 
     except Exception as err:
