@@ -274,14 +274,17 @@ class TileLogger:
         statuses: list[Status] | None = None,
         min_priority: int | None = None,
         max_retries: int | None = None,
+        sort_by_priority: bool = True,
     ) -> list[str]:
         """
-        Sample up to `n` IDs with specified statuses, prioritizing higher-priority items first while allowing fallback to lower-priority items if needed.
+        Sample up to `n` IDs with specified statuses, with optional priority sorting.
 
         Args:
             n (int): Number of IDs to sample.
             statuses (List[Status], optional): Statuses to sample from. Defaults to [PENDING].
             min_priority (int, optional): Minimum priority threshold. Defaults to highest available priority.
+            max_retries (int, optional): Maximum allowed retries for a task. Defaults to no restriction.
+            sort_by_priority (bool, optional): Whether to prioritize higher-priority items first. Defaults to True.
 
         Returns:
             List[str]: Sampled IDs.
@@ -309,6 +312,12 @@ class TileLogger:
 
         if filtered.empty:
             return []
+
+        # If sort_by_priority is False, we shuffle the data immediately
+        if not sort_by_priority:
+            return filtered.sample(
+                n=min(n, len(filtered)), random_state=42
+            ).index.tolist()
 
         # Sort by priority (descending) to process higher-priority items first
         filtered = filtered.sort_values(by="priority", ascending=False)
@@ -572,14 +581,18 @@ class ParquetLogger:
         n: int,
         statuses: list[Status] | None = None,
         min_priority: int | None = None,
+        max_retries: int | None = None,
+        sort_by_priority: bool = True,
     ) -> list[str]:
         """
-        Sample up to `n` IDs with specified statuses, prioritizing higher-priority items first while allowing fallback to lower-priority items if needed.
+        Sample up to `n` IDs with specified statuses, with optional priority sorting.
 
         Args:
             n (int): Number of IDs to sample.
             statuses (List[Status], optional): Statuses to sample from. Defaults to [PENDING].
             min_priority (int, optional): Minimum priority threshold. Defaults to highest available priority.
+            max_retries (int, optional): Maximum allowed retries for a task. Defaults to no restriction.
+            sort_by_priority (bool, optional): Whether to prioritize higher-priority items first. Defaults to True.
 
         Returns:
             List[str]: Sampled IDs.
@@ -599,11 +612,20 @@ class ParquetLogger:
         if min_priority is None:
             min_priority = filtered["priority"].max()
 
+        if max_retries is not None:
+            filtered = filtered[filtered["retries"] < max_retries]
+
         # Apply priority filter
         filtered = filtered[filtered["priority"] >= min_priority]
 
         if filtered.empty:
             return []
+
+        # If sort_by_priority is False, we shuffle the data immediately
+        if not sort_by_priority:
+            return filtered.sample(
+                n=min(n, len(filtered)), random_state=42
+            ).index.tolist()
 
         # Sort by priority (descending) to process higher-priority items first
         filtered = filtered.sort_values(by="priority", ascending=False)
