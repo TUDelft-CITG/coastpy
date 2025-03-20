@@ -101,25 +101,25 @@ class STACQueryEngine(BaseQueryEngine):
 
     def __init__(
         self,
-        stac_collection: pystac.Collection,
+        collection: pystac.Collection,
         storage_backend: Literal["azure", "aws"] = "azure",
         columns: list[str] | None = None,
     ) -> None:
         super().__init__(storage_backend=storage_backend)
-        self.extents = read_snapshot(
-            stac_collection,
+        self.snapshot = read_snapshot(
+            collection,
         )
         try:
-            self.proj_epsg = self.extents["proj:code"].unique().item()
+            self.proj_epsg = self.snapshot["proj:code"].unique().item()
         except KeyError:
-            self.proj_epsg = self.extents["proj:epsg"].unique().item()
+            self.proj_epsg = self.snapshot["proj:epsg"].unique().item()
 
         if columns is None or not columns:
-            # NOTE: before we used a wildcard, but that was tricky.. now we will rely on STAC? Also a bit
-            # tricky if the STAC is not complete..
-            # self.columns = ["*"]
+            # NOTE: before we used a wildcard, but that was tricky.. now we will rely on STAC metadata,
+            # while reading the first item. It's also a bit arbitrary, but let's see.
             self.columns = [
-                i["name"] for i in self.extents.assets.iloc[0]["data"]["table:columns"]
+                i["name"]
+                for i in collection.extra_fields["item_assets"]["data"]["table:columns"]
             ]
         else:
             self.columns = columns
@@ -131,7 +131,7 @@ class STACQueryEngine(BaseQueryEngine):
         maxx: float,
         maxy: float,
         sas_token: str | None = None,
-    ) -> gpd.GeoDataFrame:
+    ) -> gpd.GeoDataFrame | pd.DataFrame:
         """
         Retrieve data within the specified bounding box.
 
@@ -155,7 +155,7 @@ class STACQueryEngine(BaseQueryEngine):
         bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs="EPSG:4326")
 
         # Perform spatial join to get all overlapping HREFs
-        overlapping_hrefs = gpd.sjoin(self.extents, bbox_gdf).href.tolist()
+        overlapping_hrefs = gpd.sjoin(self.snapshot, bbox_gdf).href.tolist()
 
         # Sign each HREF with the SAS token if the storage backend is Azure
         sas_token = self._get_token() if sas_token is None else sas_token
@@ -205,7 +205,7 @@ class HREFQueryEngine(BaseQueryEngine):
 
     def get_data_within_bbox(
         self, minx: float, miny: float, maxx: float, maxy: float
-    ) -> gpd.GeoDataFrame:
+    ) -> gpd.GeoDataFrame | pd.DataFrame:
         """
         Queries data within a specified bounding box from a direct HREF.
 
@@ -228,3 +228,49 @@ class HREFQueryEngine(BaseQueryEngine):
             bbox.ymax >= {miny};
         """
         return self.execute_query(query)
+
+
+if __name__ == "__main__":
+    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+    storage_options = {"account_name": "coclico", "sas_token": sas_token}
+
+    coclico_catalog = pystac.Catalog.from_file(
+        "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
+    )
+    print(list(coclico_catalog.get_all_collections()))
+    for c in [
+        "gcts",
+        "gctr",
+        "coastal-zone",
+        "coastal-grid",
+        "shorelinemonitor-series",
+        "shorelinemonitor-shorelines",
+        "cet",
+    ]:
+        collection = coclico_catalog.get_child(c)
+
+        snapshot = read_snapshot(collection, storage_options=storage_options)
+        from coastpy.geo.utils import get_region_of_interest_from_map
+
+        roi = get_region_of_interest_from_map(
+            None, default_extent=(4.796, 53.108, 5.229, 53.272)
+        )
+        west, south, east, north = roi.geometry.item().bounds
+
+        from typing import cast
+
+        collection = cast(pystac.Collection, collection)
+        db = STACQueryEngine(
+            collection=collection,
+            storage_backend="azure",
+            # Use columns to filter when you don't need all data;
+            # columns=[
+            #     "geometry",
+            #     "lon",
+            #     "lat",
+            #     "transect_id",
+            #     "sds:change_rate",
+            #     "class:shore_type",
+            #     "class:coastal_type",
+            # ],
+        )
