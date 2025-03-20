@@ -101,13 +101,13 @@ class STACQueryEngine(BaseQueryEngine):
 
     def __init__(
         self,
-        collection: pystac.Collection,
+        stac_collection: pystac.Collection,
         storage_backend: Literal["azure", "aws"] = "azure",
         columns: list[str] | None = None,
     ) -> None:
         super().__init__(storage_backend=storage_backend)
         self.snapshot = read_snapshot(
-            collection,
+            stac_collection,
         )
         try:
             self.proj_epsg = self.snapshot["proj:code"].unique().item()
@@ -119,7 +119,9 @@ class STACQueryEngine(BaseQueryEngine):
             # while reading the first item. It's also a bit arbitrary, but let's see.
             self.columns = [
                 i["name"]
-                for i in collection.extra_fields["item_assets"]["data"]["table:columns"]
+                for i in stac_collection.extra_fields["item_assets"]["data"][
+                    "table:columns"
+                ]
             ]
         else:
             self.columns = columns
@@ -228,49 +230,3 @@ class HREFQueryEngine(BaseQueryEngine):
             bbox.ymax >= {miny};
         """
         return self.execute_query(query)
-
-
-if __name__ == "__main__":
-    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-    storage_options = {"account_name": "coclico", "sas_token": sas_token}
-
-    coclico_catalog = pystac.Catalog.from_file(
-        "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
-    )
-    print(list(coclico_catalog.get_all_collections()))
-    for c in [
-        "gcts",
-        "gctr",
-        "coastal-zone",
-        "coastal-grid",
-        "shorelinemonitor-series",
-        "shorelinemonitor-shorelines",
-        "cet",
-    ]:
-        collection = coclico_catalog.get_child(c)
-
-        snapshot = read_snapshot(collection, storage_options=storage_options)
-        from coastpy.geo.utils import get_region_of_interest_from_map
-
-        roi = get_region_of_interest_from_map(
-            None, default_extent=(4.796, 53.108, 5.229, 53.272)
-        )
-        west, south, east, north = roi.geometry.item().bounds
-
-        from typing import cast
-
-        collection = cast(pystac.Collection, collection)
-        db = STACQueryEngine(
-            collection=collection,
-            storage_backend="azure",
-            # Use columns to filter when you don't need all data;
-            # columns=[
-            #     "geometry",
-            #     "lon",
-            #     "lat",
-            #     "transect_id",
-            #     "sds:change_rate",
-            #     "class:shore_type",
-            #     "class:coastal_type",
-            # ],
-        )
