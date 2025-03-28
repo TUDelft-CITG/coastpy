@@ -30,7 +30,7 @@ dependencies = [
     "pyarrow",
     "duckdb>=1.0.0",
     "pystac",
-    "dask",
+    "dask<2025.3.0",
     "dask-geopandas",
     "antimeridian",
     "mercantile",

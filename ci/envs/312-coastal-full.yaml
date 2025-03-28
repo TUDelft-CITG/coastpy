@@ -128,7 +128,7 @@ dependencies:
   - cartopy
   - cfgrib
   - contextily
-  - dask #<2025.1.0
+  - dask<2025.3.0 # https://github.com/opendatacube/odc-geo/issues/213
   - dask-geopandas # <0.4.3
   - dask-image
   - dask-jobqueue

@@ -85,8 +85,8 @@ dependencies:
   # Spatial libraries
   - cartopy
   - contextily
-  - dask # <2025.1.0 - this was pinned for datashader/spatialpandas
-  - dask-geopandas # <0.4.3 - this was pinned for datashader/spatialpandas
+  - dask<2025.3.0 # https://github.com/opendatacube/odc-geo/issues/213
+  - dask-geopandas #
   - dask-jobqueue
   - distributed
   - esda
