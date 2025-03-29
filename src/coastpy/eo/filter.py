@@ -76,7 +76,8 @@ import stac_geoparquet.arrow
 # Define cloud cover bins and corresponding image selection strategy
 CLOUD_THRESHOLD_MAPPING: dict[float, int] = {
     15: 10,
-    100: 10,
+    30: 20,
+    50: 30,
 }
 
 
@@ -175,7 +176,7 @@ def filter_and_sort_stac_items(
             f"Number of items: {len(items)}; groups: {len(spatiotemporal_groups.groupby(group_by).groups)}"
         )
 
-        MAX_ITEMS = 40
+        MAX_ITEMS = 80
         if len(items) > MAX_ITEMS:
             items = list(np.random.choice(np.array(items), MAX_ITEMS, replace=False))
 
