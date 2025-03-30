@@ -176,7 +176,7 @@ def filter_and_sort_stac_items(
             f"Number of items: {len(items)}; groups: {len(spatiotemporal_groups.groupby(group_by).groups)}"
         )
 
-        MAX_ITEMS = 80
+        MAX_ITEMS = 30
         if len(items) > MAX_ITEMS:
             items = list(np.random.choice(np.array(items), MAX_ITEMS, replace=False))
 
