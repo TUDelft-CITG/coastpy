@@ -106,8 +106,7 @@ def read_snapshot(
     """
 
     # Set default storage options
-    if storage_options is None:
-        storage_options = {"account_name": "coclico"}
+    storage_options = storage_options or {}
 
     if columns is not None:
         columns = list({*columns, "assets"})
@@ -115,17 +114,28 @@ def read_snapshot(
     href = collection.assets["geoparquet-stac-items"].href
 
     if href.startswith("https://"):
-        with fsspec.open(href, mode="rb") as f:
-            extents = gpd.read_parquet(f, columns=columns)
+        try:
+            with fsspec.open(href, mode="rb") as f:
+                extents = gpd.read_parquet(f, columns=columns)
+        except FileNotFoundError:
+            token = storage_options.get("sas_token") or storage_options.get(
+                "credential"
+            )
+            if token is None:
+                raise ValueError(
+                    "The provided href is not accessible. Please check the URL or provide a valid SAS token."
+                ) from None
+            signed_href = f"{href}?{token}"
+            with fsspec.open(signed_href, mode="rb") as f:
+                extents = gpd.read_parquet(f, columns=columns)
     else:
         with fsspec.open(href, mode="rb", **storage_options) as f:
             extents = gpd.read_parquet(f, columns=columns)
 
     if add_href:
         if "assets" not in extents.columns:
-            raise ValueError(
-                "The 'assets' column is required to extract 'href' values."
-            )
+            msg = "The 'assets' column is required to extract 'href' values."
+            raise ValueError(msg)
 
         # Determine whether we are dealing with a single or multiple assets
         first_assets = extents["assets"].iloc[0]
@@ -153,7 +163,9 @@ def read_snapshot(
                 }
 
             hrefs_df = extents["assets"].apply(extract_hrefs).apply(pd.Series)
-            extents = pd.concat([extents, hrefs_df], axis=1)
+            from typing import cast
+
+            extents = cast(gpd.GeoDataFrame, pd.concat([extents, hrefs_df], axis=1))
 
     return extents
 
