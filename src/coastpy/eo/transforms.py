@@ -1,9 +1,12 @@
 from collections.abc import Callable
 from typing import cast
 
+import geopandas as gpd
 import xarray as xr
+from shapely.wkt import loads as wkt_loads
 
 from coastpy.eo.mask import nodata_mask
+from coastpy.eo.typology import encode_region_of_interest
 
 
 class BaseTransform:
@@ -17,6 +20,7 @@ class BaseTransform:
     """
 
     suffix: str = ""  # Default suffix, subclasses should override
+    is_dataset_transform: bool = False
 
     def __init__(self, variables: list[str], group_dim: str | None = None):
         """
@@ -122,12 +126,69 @@ class RelativeTransform(BaseTransform):
         return data - data.min()
 
 
+class RegionOfInterestTransform(BaseTransform):
+    """
+    Compute region of interest (ROI) mask from transect geometries per chip.
+    """
+
+    is_dataset_transform = True
+    suffix = "region_of_interest"
+
+    def __init__(self, group_dim: str = "uuid"):
+        """
+        Initializes the transform.
+
+        Args:
+            group_dim (str): Dimension over which to apply ROI logic (e.g., "uuid").
+        """
+        super().__init__(variables=[], group_dim=group_dim)
+
+    def transform(self, data: xr.Dataset) -> xr.DataArray:
+        """
+        Applies the ROI transform using groupby map, using a reference variable for spatial dims.
+
+        Args:
+            data (xr.Dataset): Dataset containing the chips and transect geometry.
+
+        Returns:
+            xr.DataArray: Binary region of interest mask.
+        """
+        if self.group_dim not in data.dims:
+            msg = f"Dataset must contain dimension '{self.group_dim}'."
+            raise ValueError(msg)
+
+        # Use the first data variable as the spatial container
+        first_var = next(iter(data.data_vars))
+        ref_array = data[first_var]
+
+        def compute_mask_from_array(ref_chip: xr.DataArray) -> xr.DataArray:
+            # Get corresponding dataset slice
+            sel_dict = {self.group_dim: ref_chip[self.group_dim].item()}
+            chip = data.sel(sel_dict)
+
+            # Extract transect geometry
+            wkt_str = chip.transect_geometry.item()
+            geometry = wkt_loads(wkt_str)
+            transect = gpd.GeoDataFrame(geometry=[geometry], crs=4326)
+
+            mask = encode_region_of_interest(transect=transect, ds=chip)
+            return mask
+
+        # Apply the ROI computation grouped by chip
+        roi_mask = ref_array.groupby(self.group_dim).map(compute_mask_from_array)
+
+        # Set name so it can be inserted into the dataset later
+        roi_mask.name = "region_of_interest"
+        return roi_mask
+
+
 class TransformFactory:
     """Factory class for creating transform instances with optional parameters."""
 
     _registry: dict[str, type[BaseTransform]] = {
         "nodata_mask": NoDataMaskTransform,
         "relative": RelativeTransform,
+        "region_of_interest": RegionOfInterestTransform,
     }
 
     @staticmethod
@@ -160,47 +221,24 @@ class TransformFactory:
 
 
 def create_transforms(
-    transform_mapping: dict[str, str | type[BaseTransform] | dict | list],
+    transform_mapping: dict[str, list[dict]],
 ) -> dict[str, list[BaseTransform]]:
     """
-    Creates transform transformations based on a band-to-transform mapping.
-
-    Args:
-        transform_mapping (Dict[str, Union[str, Type[BaseTransform], dict, list]]):
-            - Dictionary mapping variables to transform types.
-            - Each value can be:
-              - A **string** (e.g., `"relative"`)
-              - A **transform class** (e.g., `RelativeTransform`)
-              - A **dictionary** with optional parameters (e.g., `{"type": "relative", "group_dim": "uuid"}`)
-              - A **list** of any of the above for multiple transformations per variable.
+    Creates transforms based on the parsed transform mapping.
 
     Returns:
-        Dict[str, list[BaseTransform]]: Dictionary mapping variables to lists of instantiated transforms.
+        dict: Mapping from variable name or '__dataset__' to list of transform objects.
     """
-    transforms = {}
+    transforms: dict[str, list[BaseTransform]] = {}
 
-    for band, config in transform_mapping.items():
-        # Ensure config is always a list (to handle single or multiple transforms uniformly)
-        config_list = config if isinstance(config, list) else [config]
-        transforms[band] = []
+    for key, config_list in transform_mapping.items():
+        transforms[key] = []
+        for cfg in config_list:
+            cfg_ = cfg.copy()
+            transform_type = cfg_.pop("type")
 
-        for item in config_list:
-            # If a dictionary, extract the transform type safely
-            if isinstance(item, dict):
-                item_copy = item.copy()  # 🛠 Copy to prevent modifying original dict
-                if "type" not in item_copy:
-                    raise ValueError(
-                        f"Missing 'type' key in transform config for '{band}': {item}"
-                    )
-                transform_type = item_copy.pop("type")
-                transforms[band].append(
-                    TransformFactory.create(
-                        transform_type, variables=[band], **item_copy
-                    )
-                )
-            else:
-                # If it's a string or class, create the transform directly
-                transforms[band].append(TransformFactory.create(item, variables=[band]))
+            # Only pass variables if present
+            transforms[key].append(TransformFactory.create(transform_type, **cfg))
 
     return transforms
 
@@ -211,19 +249,6 @@ def apply_transforms(
     keep_attrs: bool = True,
     merge: bool = True,
 ) -> xr.Dataset | xr.DataArray:
-    """
-    Apply transformations to an Xarray Dataset or DataArray.
-
-    Args:
-        data (xr.Dataset | xr.DataArray): The input dataset or data array.
-        transforms (Dict[str, list[BaseTransform]]): Dictionary mapping variables to lists of transformations.
-        keep_attrs (bool, optional): Whether to retain attributes in the output. Defaults to True.
-        merge (bool, optional): If True, merges transformed variables with the original dataset.
-
-    Returns:
-        xr.Dataset | xr.DataArray: Transformed dataset or data array.
-    """
-
     def _apply_transform(transform: BaseTransform, da: xr.DataArray) -> xr.DataArray:
         transformed = transform.transform(da)
         if keep_attrs:
@@ -239,11 +264,12 @@ def apply_transforms(
         )
 
         for var, transform_list in transforms.items():
-            if var in data.data_vars:
-                for transform in transform_list:
-                    transformed_ds[f"{var}{transform.suffix}"] = _apply_transform(
-                        transform, data[var]
-                    )
+            for transform in transform_list:
+                if transform.is_dataset_transform:
+                    transformed_ds[transform.suffix] = transform.transform(data)
+                elif var in data.data_vars:
+                    transformed = transform.transform(data[var])
+                    transformed_ds[f"{var}{transform.suffix}"] = transformed
 
         return data.merge(transformed_ds) if merge else transformed_ds
 

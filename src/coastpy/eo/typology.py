@@ -5,7 +5,6 @@ from typing import Literal
 
 import dask.bag as db
 import geopandas as gpd
-import numpy as np
 import odc.geo
 import odc.geo.cog
 import odc.geo.geobox
@@ -77,7 +76,13 @@ def encode_region_of_interest(
         xr.DataArray: Classification mask where
                       0 = background, 1 = ROI, 2 = landward, 3 = seaward
     """
-    utm_epsg = ds.coords["utm_epsg"].item()
+    import odc.geo  # noqa
+    import rioxarray  # noqa
+
+    transect = transect.copy()
+    utm_epsg = ds.odc.crs.to_epsg()
+    if utm_epsg is None:
+        raise ValueError("Dataset does not have a valid UTM EPSG code.")
     ref = ds[next(iter(ds.data_vars))]
     ref = ref.rio.write_crs(utm_epsg)
     transect["utm_epsg"] = utm_epsg
@@ -112,7 +117,7 @@ def encode_region_of_interest(
     sea_mask = make_mask(sea_geom)
 
     # 4. Build classification mask by priority
-    class_ = xr.zeros_like(ref, dtype=np.uint8)
+    class_ = xr.zeros_like(ref)
     class_ = class_.where(~roi_mask, 1)
     class_ = class_.where(~land_mask, 2)
     class_ = class_.where(~sea_mask, 3)
@@ -312,6 +317,7 @@ class TypologyCollection:
         x_shape: int,
         resampling: Resampling = Resampling.cubic,
         rotate: bool = False,
+        add_region_of_interest: bool = True,
         offset_distance: int | None = None,
         target_axis: Literal[
             "closest", "horizontal", "vertical", "horizontal-right-aligned"
@@ -330,8 +336,9 @@ class TypologyCollection:
             y_shape (Optional[int]): The y shape of the dataset (required if rotate=True).
             x_shape (Optional[int]): The x shape of the dataset (required if rotate=True).
             resampling (Optional[Resampling]): Resampling method for interpolation during rotation (required if rotate=True).
-            resolution (Optional[int]): The resolution of the dataset (required if rotate=True).
             rotate (bool): Whether to rotate the dataset to align with the transect.
+            add_region_of_interest (bool): Whether to add a region of interest mask/classification to the dataset.
+            resolution (Optional[int]): The resolution of the dataset (required if rotate=True or add_region_of_interest).
 
         Returns:
             xr.Dataset: The rotated, clipped, and interpolated dataset.
@@ -356,6 +363,18 @@ class TypologyCollection:
 
             if resolution is None:
                 raise ValueError("When rotate=True, resolution is required.")
+
+            if add_region_of_interest:
+                raise UserWarning(
+                    "`add_region_of_interest` is not supported when `rotate=True`."
+                )
+
+            if add_region_of_interest and (
+                offset_distance is None or resolution is None
+            ):
+                raise ValueError(
+                    "When add_region_of_interest=True, offset_distance and resolution are required."
+                )
 
             # Create ROI from transect
             roi = transect_region(transect, offset_distance)
@@ -435,6 +454,15 @@ class TypologyCollection:
             dataset = interpolate_raster(
                 dataset, y_shape=y_shape, x_shape=x_shape, resampling=resampling
             )
+
+            if add_region_of_interest:
+                # Add region of interest mask
+                dataset["region_of_interest"] = encode_region_of_interest(
+                    transect=transect,
+                    ds=dataset,
+                    buffer_dist=offset_distance,  # type: ignore
+                    point_buffer=resolution,  # type:ignore
+                )
 
         return dataset
 
