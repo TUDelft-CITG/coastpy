@@ -318,16 +318,14 @@ class TileLogger:
 
         # If sort_by_priority is False, we shuffle the data immediately
         if not sort_by_priority:
-            return filtered.sample(
-                n=min(n, len(filtered)), random_state=42
-            ).index.tolist()
+            return filtered.sample(n=min(n, len(filtered))).index.tolist()
 
         # Sort by priority (descending) to process higher-priority items first
         filtered = filtered.sort_values(by="priority", ascending=False)
 
         # Shuffle within each priority group
         filtered = filtered.groupby("priority", group_keys=False).apply(
-            lambda x: x.sample(frac=1, random_state=42)
+            lambda x: x.sample(frac=1)
         )
 
         sampled_ids = []
