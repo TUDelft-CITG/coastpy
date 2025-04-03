@@ -186,34 +186,37 @@ class TileLogger:
         """Update the log based on the given URL path."""
         groups = self._extract_groups(urlpath)
         tile_id = groups["tile_id"]
-        if not tile_id:
-            raise ValueError(f"Tile ID not found in urlpath: {urlpath}")
         band = groups.get("band")
         dt = dt or self.now_to_isoformat()
 
         if tile_id not in self.df.index:
             raise KeyError(f"Tile ID '{tile_id}' not found in the log.")
 
-        if not bands and not band:
-            self.df.at[tile_id, "status"] = status.value
-            self.df.at[tile_id, "message"] = message
+        # Load current bands (stored internally as frozenset)
+        current_bands = self.df.at[tile_id, "bands"] or frozenset()
 
+        # Patch: add band from file path if needed
+        if bands is None and band is not None:
+            updated_bands = current_bands | frozenset([band])
+        elif bands is None:
+            updated_bands = current_bands
         else:
-            current_bands = bands or self.df.at[tile_id, "bands"] or frozenset()
-            self.df.at[tile_id, "bands"] = current_bands
-            self._update_tile_status(tile_id)
+            updated_bands = frozenset(bands)
 
-        # Update datetime
+        self.df.at[tile_id, "bands"] = updated_bands
+        self._update_tile_status(tile_id)  # type: ignore
+
         self.df.at[tile_id, "datetime"] = dt
-
-        # Add retry logic
-        if status == Status.FAILED or status == Status.PARTLY:
+        if status in {Status.FAILED, Status.PARTLY}:
             self.df.at[tile_id, "retries"] += 1
             self.df.at[tile_id, "message"] = (
                 f"{message} (retry count: {self.df.at[tile_id, 'retries']})"
             )
-        elif status == Status.SUCCESS:
-            self.df.at[tile_id, "retries"] = 0
+        else:
+            self.df.at[tile_id, "status"] = status.value
+            self.df.at[tile_id, "message"] = message
+            if status == Status.SUCCESS:
+                self.df.at[tile_id, "retries"] = 0
 
     def bulk_update(self, results: list[tuple[str, Status, str, str]]) -> None:
         """Bulk update the log with multiple results."""
