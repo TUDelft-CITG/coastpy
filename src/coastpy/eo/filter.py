@@ -28,7 +28,23 @@ def filter_and_sort_stac_items(
     max_num_groups: int = 4,
     max_items: int = 30,
     cloud_threshold_lookup: dict[int, int] = CLOUD_THRESHOLD_LOOKUP,
+    verbose=False,
 ) -> list[pystac.Item]:
+    """Filter and sort STAC items using cloud cover, spatial grouping, and temporal binning.
+
+    Args:
+        items (list[pystac.Item]): Input STAC items.
+        group_by (list[str]): Columns to spatially group by (e.g., ["s2:mgrs_tile", "sat:relative_orbit"]).
+        time_window (timedelta): Temporal bin size.
+        max_num_groups (int): Max number of synthetic spatial groups.
+        max_items (int): Max number of items to return.
+        cloud_threshold_lookup (dict[int, int]): Lookup of cloud thresholds to number of items.
+        verbose (bool): Whether to print verbose output.
+
+    Returns:
+        list[pystac.Item]: Filtered and sorted list of items.
+    """
+
     try:
         sort_by = "eo:cloud_cover"
 
@@ -89,6 +105,18 @@ def filter_and_sort_stac_items(
             for _, row in df_sampled.iterrows()
             if row["id"] in item_dict
         ]
+
+        if verbose:
+            print("   STAC Item Filtering Summary")
+            print(f"  Input items           : {len(items)}")
+            print(f"  Selected items        : {len(selected_items)}")
+            print(
+                f"  Cloud cover threshold : {global_mean:.2f}% → selected {n_items_per_group}/group"
+            )
+            print(
+                f"  Unique orbits         : {df['sat:relative_orbit'].nunique() if 'sat:relative_orbit' in df else 'N/A'}"
+            )
+            print("")
 
         return selected_items
 

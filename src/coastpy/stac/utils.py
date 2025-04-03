@@ -1,6 +1,7 @@
 import itertools
 import logging
 import operator
+from collections.abc import Callable
 from contextlib import suppress
 
 import fsspec
@@ -90,7 +91,11 @@ def get_alternate_href(links):
 
 
 def read_snapshot(
-    collection, columns=None, add_href=True, storage_options=None
+    collection,
+    columns=None,
+    add_href=True,
+    storage_options=None,
+    patch_url: Callable[[str, dict[str, str]], str] | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Reads the extent of items from a STAC collection and returns a GeoDataFrame with specified columns.
@@ -100,6 +105,7 @@ def read_snapshot(
         columns: List of columns to return. If None, all columns will be read.
         add_href: Boolean indicating whether to extract and add the 'href' columns from 'assets'. Default is True.
         storage_options: Storage options to pass to fsspec. Default is {"account_name": "coclico"}.
+        patch_url: Function to patch the URL. If None, no patching is done. This is useful to reference private cloud storage or local files.
 
     Returns:
         GeoDataFrame containing the specified columns.
@@ -112,6 +118,7 @@ def read_snapshot(
         columns = list({*columns, "assets"})
 
     href = collection.assets["geoparquet-stac-items"].href
+    href = patch_url(href, storage_options) if patch_url else href
 
     if href.startswith("https://"):
         try:

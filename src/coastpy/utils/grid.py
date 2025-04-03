@@ -18,6 +18,7 @@ def read_coastal_grid(zoom: int, buffer_size: str) -> gpd.GeoDataFrame:
     collection = catalog.get_child("coastal-grid")
     if not collection:
         raise ValueError("Coastal zone collection not found")
+
     item = collection.get_item(f"coastal_grid_z{zoom}_{buffer_size}")
     if not item:
         raise ValueError(
