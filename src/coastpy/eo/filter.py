@@ -9,7 +9,7 @@ import stac_geoparquet.arrow
 
 CLOUD_THRESHOLD_LOOKUP = {
     10: 10,  # low cloud -> few items
-    50: 20,  # moderate cloud -> more items
+    40: 20,  # moderate cloud -> more items
     100: 30,  # high cloud -> max items
 }
 
@@ -89,11 +89,6 @@ def filter_and_sort_stac_items(
             for _, row in df_sampled.iterrows()
             if row["id"] in item_dict
         ]
-
-        # Diagnostics
-        print(f"Total selected items: {len(selected_items)}")
-        print(f"Global cloud mean: {global_mean:.2f}")
-        print(f"n_items_per_group (from lookup): {n_items_per_group}")
 
         return selected_items
 
