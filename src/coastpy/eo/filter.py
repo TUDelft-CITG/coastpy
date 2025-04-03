@@ -9,7 +9,7 @@ import stac_geoparquet.arrow
 
 CLOUD_THRESHOLD_LOOKUP = {
     10: 10,  # low cloud -> few items
-    20: 20,  # moderate cloud -> more items
+    50: 20,  # moderate cloud -> more items
     100: 30,  # high cloud -> max items
 }
 
