@@ -11,15 +11,6 @@ import pystac.utils
 import rasterio
 import shapely
 import xarray as xr
-
-# uncomment these lines if you do not have coclicodata in development mode installed
-# dev_dir = pathlib.Path.home() / "dev"  # set the path to the location where you would like to clone the package
-# dev_dir.mkdir(parents=True, exist_ok=True)
-# # Clone the repository
-# os.system(f"git clone https://github.com/openearth/coclicodata.git {dev_dir / 'coclicodata'}")
-# # Install the package in development mode
-# os.system(f"pip install -e {dev_dir / 'coclicodata'}")
-from coclicodata.coclico_stac.layouts import CoCliCoCOGLayout
 from dotenv import load_dotenv
 from pystac.extensions import raster
 from pystac.extensions.file import FileExtension
@@ -34,6 +25,15 @@ from tqdm import tqdm
 
 from coastpy.io.utils import PathParser
 from coastpy.stac.item import add_gpq_snapshot
+from coastpy.stac.layouts import COGLayout
+
+# uncomment these lines if you do not have coclicodata in development mode installed
+# dev_dir = pathlib.Path.home() / "dev"  # set the path to the location where you would like to clone the package
+# dev_dir.mkdir(parents=True, exist_ok=True)
+# # Clone the repository
+# os.system(f"git clone https://github.com/openearth/coclicodata.git {dev_dir / 'coclicodata'}")
+# # Install the package in development mode
+# os.system(f"pip install -e {dev_dir / 'coclicodata'}")
 
 # Load the environment variables from the .env file
 load_dotenv(override=True)
@@ -236,7 +236,7 @@ if __name__ == "__main__":
     fps = fs.glob(f"{root}/**/*.tif")
 
     stac_io = DefaultStacIO()  # CoCliCoStacIO()
-    layout = CoCliCoCOGLayout()
+    layout = COGLayout()
 
     collection = create_collection()
 
