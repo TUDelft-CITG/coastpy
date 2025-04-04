@@ -30,6 +30,7 @@ def filter_and_sort_stac_items(
     max_num_groups: int = 4,
     max_items: int = 30,
     cloud_threshold_lookup: dict[int, int] = CLOUD_THRESHOLD_LOOKUP,
+    only_summer: bool = False,
     verbose=False,
 ) -> list[pystac.Item]:
     """Filter and sort STAC items using cloud cover, spatial grouping, and temporal binning.
@@ -41,6 +42,7 @@ def filter_and_sort_stac_items(
         max_num_groups (int): Max number of synthetic spatial groups.
         max_items (int): Max number of items to return.
         cloud_threshold_lookup (dict[int, int]): Lookup of cloud thresholds to number of items.
+        only_summer (bool): Whether to filter items to summer months (e.g., June, July, August for Northern Hemisphere).
         verbose (bool): Whether to print verbose output.
 
     Returns:
@@ -50,12 +52,22 @@ def filter_and_sort_stac_items(
     try:
         sort_by = "eo:cloud_cover"
 
-        df = (
-            stac_geoparquet.arrow.parse_stac_items_to_arrow(items)
-            .read_all()
-            .to_pandas()
+        df = stac_geoparquet.to_geodataframe(
+            [i.to_dict() for i in items], dtype_backend="pyarrow"
         )
-        df["datetime"] = pd.to_datetime(df["datetime"])
+
+        if only_summer:
+            min_lat = df.bounds["miny"].min()
+            max_lat = df.bounds["maxy"].max()
+
+            df["month"] = df["datetime"].dt.month
+            if min_lat > 60:
+                df = df[df["month"].isin([7, 8, 9])]
+            elif max_lat < -60:
+                df = df[df["month"].isin([1, 2, 3])]
+
+        if df.empty:
+            return []
 
         # Group spatially and assign synthetic groups
         spatial_keys = df[group_by].drop_duplicates().reset_index(drop=True)
@@ -94,11 +106,11 @@ def filter_and_sort_stac_items(
             df_remaining = df[~df["id"].isin(df_sampled_ids)].copy()
             n_missing = max_items - len(df_sampled)
 
-            backfill = df_remaining.sort_values(sort_by).head(n_missing)
+            backfill = df_remaining.sort_values(sort_by).head(n_missing)  # type: ignore
             df_sampled = pd.concat([df_sampled, backfill], ignore_index=True)
 
         # Enforce final limit
-        df_sampled = df_sampled.sort_values(sort_by).head(max_items)
+        df_sampled = df_sampled.sort_values(sort_by).head(max_items)  # type: ignore
 
         # Reconstruct list of STAC Items
         item_dict = {item.id: item for item in items}
