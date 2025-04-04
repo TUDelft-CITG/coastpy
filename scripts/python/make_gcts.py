@@ -381,7 +381,7 @@ if __name__ == "__main__":
         coastline: LineString,
         transect_length: float,
         spacing: float | int,
-        osm_coastline_id: str,
+        osm_coastline_id: int,
         osm_coastline_is_closed: bool,
         osm_coastline_length: int,
         src_crs: int,
