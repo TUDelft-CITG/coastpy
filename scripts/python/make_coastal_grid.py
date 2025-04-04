@@ -283,7 +283,7 @@ def main(
                 tiles = tiles.sort_values("coastal_grid:quadkey")
 
                 points = tiles.representative_point().to_frame("geometry")
-                utm_epsg = gpd.sjoin(points, utm_grid).drop(columns=["index_right"])[
+                utm_epsg = gpd.sjoin(points, utm_grid).drop(columns=["index_right"])[  # type: ignore
                     "epsg"
                 ]
                 tiles["coastal_grid:utm_epsg"] = utm_epsg
