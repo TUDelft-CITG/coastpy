@@ -1,12 +1,15 @@
-from dotenv import load_dotenv
+import fsspec.utils
+from analytics.config import configure_dask, configure_rio, load_env
 
-load_dotenv()
+load_env()
+configure_dask()
+configure_rio(cloud=True)
+import argparse
 import datetime
 import json
-import logging
 import os
-import pathlib
 import re
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -18,6 +21,7 @@ import pystac.media_type
 import xarray as xr
 from dask import delayed
 from dask.distributed import Client
+from distributed import LocalCluster
 from pystac import Collection, Item, Provider, ProviderRole
 from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.extensions.scientific import ScientificExtension
@@ -28,41 +32,11 @@ from coastpy.stac.item import add_gpq_snapshot, create_cog_item
 from coastpy.stac.layouts import COGLayout
 from coastpy.utils.dask_utils import summarize_dask_cluster
 
-# Load the environment variables from the .env file
-
-logging.getLogger("azure").setLevel(logging.WARNING)
-
-# Configuration
-VERSION = "2025-03-15"
-CONTAINER_NAME = "s2-l2a-composite"
-CONTAINER_URI = f"az://{CONTAINER_NAME}/release/{VERSION}"
-STAC_ITEM_CONTAINER = f"az://tmp/stac-test6/{CONTAINER_URI.replace('az://', '')}/items"
-DATETIME_RANGE = "2023-01-01/2024-01-01"
-BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
-REQUIRED_BANDS = [b for b in BANDS if b != "SCL"]
-
 
 def format_date_range(date_range: str) -> str:
     """Convert ISO date range to YYYYMMDD_YYYYMMDD format."""
     return "_".join(pd.to_datetime(date_range.split("/")).strftime("%Y%m%d"))
 
-
-date_range = format_date_range(DATETIME_RANGE)
-
-# NOTE: this is very important to get right
-FILENAME_PATTERN = (
-    rf"(?P<tile_id>\d{{2}}[A-Za-z]{{3}}_z\d+-(?:n|s)\d{{2}}(?:w|e)\d{{3}}-[a-z0-9]{{6}})"  # Tile ID
-    rf"(?:_{date_range})?"  # Optional date range
-    r"(?:_(?P<band>[a-z0-9]+))?"  # Optional band
-    r"(?:_10m\.tif)?"  # Optional resolution
-)
-
-# Get the SAS token and storage account name from environment variables
-sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
-storage_options = {"account_name": "coclico", "credential": sas_token}
-
-# STAC DEFINITIONS
-STAC_DIR = pathlib.Path.home() / "dev" / "coclicodata" / "current"
 
 COLLECTION_ID = "s2-l2a-composite"
 COLLECTION_TITLE = "Sentinel-2 L2A Annual Composites"
@@ -75,8 +49,6 @@ ASSET_EXTRA_FIELDS = {
     "xarray:storage_options": {"account_name": "coclico"},
 }
 
-
-#
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 LICENSE = "CC-BY-4.0"
@@ -228,7 +200,8 @@ def group_tif_files_by_tile(
     Returns:
         Dict[str, Set[str]]: Mapping of tile IDs to their associated bands.
     """
-    fs = fsspec.filesystem(storage_pattern.split("://")[0], **storage_options)
+    protocol = fsspec.utils.get_protocol(storage_pattern)
+    fs = fsspec.filesystem(protocol, **storage_options)
     files = fs.glob(storage_pattern)
 
     pattern = re.compile(filename_pattern)
@@ -308,7 +281,7 @@ def load_bands_to_dataset(
 
         # Collect dataset-level attributes from the first dataset
         if common_attrs is None:
-            common_attrs = ds.attrs.copy()
+            common_attrs = da.attrs.copy()
 
         data_arrays.append(da)
 
@@ -353,7 +326,9 @@ def load_bands_to_dataset_delayed(
 
 
 @delayed
-def create_stac_item_delayed(ds: xr.Dataset, urlpath: str) -> Item | None:
+def create_stac_item_delayed(
+    ds: xr.Dataset, urlpath: str, storage_options
+) -> Item | None:
     """Create a STAC item from a dataset lazily."""
     try:
         return create_cog_item(
@@ -371,10 +346,12 @@ def create_stac_item_delayed(ds: xr.Dataset, urlpath: str) -> Item | None:
 
 
 @delayed
-def write_stac_item_to_storage(item: Item, storage_options: dict) -> str | None:
+def write_stac_item_to_storage(
+    item: Item, stac_item_container: str, storage_options: dict
+) -> str | None:
     """Write a STAC item to cloud storage as a JSON file."""
     if item:
-        item_path = f"{STAC_ITEM_CONTAINER}/{item.id}.json"
+        item_path = f"{stac_item_container}/{item.id}.json"
         try:
             with fsspec.open(item_path, mode="w", **storage_options) as f:
                 json.dump(item.to_dict(), f)
@@ -391,11 +368,11 @@ def read_stac_item_from_storage(file: str, filesystem) -> Item:
 
 
 def filter_existing_tiles(
-    tiles: dict[str, dict], storage_options: dict[str, str]
+    tiles: dict[str, dict], stac_item_container, storage_options: dict[str, str]
 ) -> dict[str, dict]:
     """Filter out tiles that already have STAC items in the cloud storage."""
     fs = fsspec.filesystem("az", **storage_options)
-    existing_files = fs.glob(f"{STAC_ITEM_CONTAINER}/*.json")
+    existing_files = fs.glob(f"{stac_item_container}/*.json")
     TILE_ID_PATTERN = (
         r"(?P<tile_id>\d{2}[A-Za-z]{3}_z\d+-(?:n|s)\d{2}(?:w|e)\d{3}-[a-z0-9]{6})"
     )
@@ -417,32 +394,42 @@ def filter_existing_tiles(
     }
 
 
-def create_stac_items():
+def create_stac_items(
+    s2a_composite_container,
+    s2a_filename_pattern,
+    s2a_required_bands,
+    stac_item_container,
+    client,
+    storage_options: dict[str, str],
+):
     """Main function for creating STAC items."""
-    # Initialize Dask client
-    client = Client(threads_per_worker=1)
-    summarize_dask_cluster(client)
+    start_time = time.time()
 
     # List and filter tiles
-    storage_pattern = f"{CONTAINER_URI}/*.tif"
-    tiles = group_tif_files_by_tile(storage_pattern, FILENAME_PATTERN, storage_options)
+    storage_pattern = f"{s2a_composite_container}/*.tif"
+    tiles = group_tif_files_by_tile(
+        storage_pattern, s2a_filename_pattern, storage_options
+    )
     print(f"Found {len(tiles)} tiles.")
 
     tiles = {
         tile_id: bands
         for tile_id, bands in tiles.items()
-        if set(REQUIRED_BANDS).issubset(bands.keys())
+        if set(s2a_required_bands).issubset(bands.keys())
     }
     print(f"Found {len(tiles)} tiles with all required bands.")
 
     # Filter out tiles with existing STAC items
-    tiles = filter_existing_tiles(tiles, storage_options)
+    tiles = filter_existing_tiles(tiles, stac_item_container, storage_options)
     print(f"Processing {len(tiles)} new tiles.")
 
     stac_id_pattern = r"(?P<stac_id>\d{2}[A-Za-z]{3}_z\d+-(?:n|s)\d{2}(?:w|e)\d{3}-[a-z0-9]{6}_\d{8}_\d{8})"
 
     # Create tasks
     tasks = []
+    keys = list(tiles.keys())[104:106]
+    tiles = {k: v for k, v in tiles.items() if k in keys}
+
     for _, band_paths in tiles.items():
         ds = load_bands_to_dataset_delayed(band_paths, storage_options)
         first_href = band_paths[next(iter(band_paths.keys()))]
@@ -450,28 +437,26 @@ def create_stac_items():
         if not match:
             raise ValueError(f"Could not extract STAC ID from URL: {first_href}")
         stac_id = match.group("stac_id")
-        urlpath = f"{CONTAINER_URI}/{stac_id}.tif"
-        item = create_stac_item_delayed(ds, urlpath)
-        task = write_stac_item_to_storage(item, storage_options)
+        urlpath = f"{s2a_composite_container}/{stac_id}.tif"
+        item = create_stac_item_delayed(ds, urlpath, storage_options)
+        task = write_stac_item_to_storage(item, stac_item_container, storage_options)
         tasks.append(task)
 
     # Execute tasks
-    results = client.compute(tasks, sync=True)
 
-    if not isinstance(results, list):
-        print(f"Error processing STAC items: {results}")
+    futures = client.compute(tasks, retries=2, sync=False)
+    results = client.gather(futures, errors="skip")  # skip failures
 
-    print(f"Completed processing {len(results)} STAC items.")  # type: ignore
+    print(
+        f"Create STAC items (n={len(results)}) completed in {time.time() - start_time:.2f} seconds."
+    )
 
-    client.close()
 
-
-def create_collection_with_items():
-    client = Client(n_workers=5, threads_per_worker=1)
-    summarize_dask_cluster(client)
-
+def create_collection_with_items(
+    stac_item_container, stac_collection_directory, client, storage_options
+):
     fs = fsspec.filesystem("az", **storage_options)
-    files = list(fs.glob(f"{STAC_ITEM_CONTAINER}/*.json"))
+    files = list(fs.glob(f"{stac_item_container}/*.json"))
     print("Found", len(files), "STAC items.")
 
     # Create a Dask bag from the list of files
@@ -506,7 +491,7 @@ def create_collection_with_items():
         collection, GEOPARQUET_STAC_ITEMS_HREF, storage_options
     )
 
-    catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
+    catalog = pystac.Catalog.from_file(str(stac_collection_directory / "catalog.json"))
 
     # TODO: there should be a cleaner method to remove the previous stac catalog and its items
     try:
@@ -518,18 +503,118 @@ def create_collection_with_items():
 
     catalog.add_child(collection)
 
-    collection.normalize_hrefs(str(STAC_DIR / collection.id), strategy=layout)
+    collection.normalize_hrefs(
+        str(stac_collection_directory / collection.id), strategy=layout
+    )
 
     catalog.save(
         catalog_type=pystac.CatalogType.SELF_CONTAINED,
-        dest_href=str(STAC_DIR),
+        dest_href=str(stac_collection_directory),
         stac_io=stac_io,
     )
 
 
+def create_local_client(**kwargs):
+    """
+    Create a Dask local cluster and client with an optional custom config file.
+    """
+    cluster = LocalCluster(**kwargs)
+    client = Client(cluster)
+    return cluster, client
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Create a STAC collection for Sentinel-2 L2A composites."
+    )
+
+    parser.add_argument(
+        "container", help="Source container with the S2A Composite imagery."
+    )
+    parser.add_argument("release", help="Release version.")
+    parser.add_argument("stac_dir", help="Directory to store the STAC collection.")
+
+    parser.add_argument(
+        "--create-items",
+        action="store_true",
+        help="Create STAC items.",
+    )
+    parser.add_argument(
+        "--create-collection",
+        action="store_true",
+        help="Create a STAC collection with items.",
+    )
+
+    parser.add_argument(
+        "--n-workers", type=int, default=None, help="Number of Dask workers."
+    )
+    parser.add_argument(
+        "--threads-per-worker",
+        type=int,
+        default=None,
+        help="Number of threads per worker.",
+    )
+    args = parser.parse_args()
+    return args
+
+
 def main():
-    create_stac_items()
-    # create_collection_with_items()
+    start_time = time.time()
+    args = parse_args()
+
+    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+    storage_options = {"account_name": "coclico", "credential": sas_token}
+
+    # Configuration
+    VERSION = args.release
+    CONTAINER_NAME = args.container
+    S2A_COMPOSITE_CONTAINER = f"az://{CONTAINER_NAME}/release/{VERSION}"
+    STAC_ITEM_CONTAINER = (
+        f"az://tmp/stac/{S2A_COMPOSITE_CONTAINER.replace('az://', '')}/items"
+    )
+    DATETIME_RANGE = "2023-01-01/2024-01-01"
+    BANDS = ["blue", "green", "red", "nir", "swir16", "swir22", "SCL"]
+    S2A_REQUIRED_BANDS = [b for b in BANDS if b != "SCL"]
+
+    date_range = format_date_range(DATETIME_RANGE)
+
+    # NOTE: this is very important to get right
+    S2A_FILENAME_PATTERN = (
+        rf"(?P<tile_id>\d{{2}}[A-Za-z]{{3}}_z\d+-(?:n|s)\d{{2}}(?:w|e)\d{{3}}-[a-z0-9]{{6}})"  # Tile ID
+        rf"(?:_{date_range})?"  # Optional date range
+        r"(?:_(?P<band>[a-z0-9]+))?"  # Optional band
+        r"(?:_10m\.tif)?"  # Optional resolution
+    )
+
+    # STAC DEFINITIONS
+    STAC_DIR = args.stac_dir
+
+    cluster, client = create_local_client(
+        n_workers=args.n_workers, threads_per_worker=args.threads_per_worker
+    )
+    summarize_dask_cluster(client)
+
+    if args.create_items:
+        print("Creating STAC items...")
+        create_stac_items(
+            s2a_composite_container=S2A_COMPOSITE_CONTAINER,
+            s2a_filename_pattern=S2A_FILENAME_PATTERN,
+            s2a_required_bands=S2A_REQUIRED_BANDS,
+            stac_item_container=STAC_ITEM_CONTAINER,
+            client=client,
+            storage_options=storage_options,
+        )
+    if args.create_collection:
+        print("Creating STAC collection with items...")
+        create_collection_with_items(
+            stac_item_container=STAC_ITEM_CONTAINER,
+            stac_collection_directory=STAC_DIR,
+            client=client,
+            storage_options=storage_options,
+        )
+        print(f"STAC collection created and saved successfully at {STAC_DIR}.")
+
+    print(f"Workflow completed in {time.time() - start_time:.2f} seconds.")
 
 
 if __name__ == "__main__":
