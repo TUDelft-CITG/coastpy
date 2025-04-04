@@ -21,6 +21,8 @@ def get_items_per_group(cloud_mean: float, threshold_map: dict[int, int]) -> int
     return max(threshold_map.values())
 
 
+# NOTE: Next processing iteration consider return metadata dictionary, that has the properties we
+# typically add to a STAC item or the dataset coordinates. These can be composite:n_obs or composote:n_rel_orbits.
 def filter_and_sort_stac_items(
     items: list[pystac.Item],
     group_by: list[str],
@@ -118,6 +120,7 @@ def filter_and_sort_stac_items(
             )
             print("")
 
+        # NOTE: next iteration consider adding a metadata return field (with the properties that can be added to the coords/stac item)
         return selected_items
 
     except Exception as err:

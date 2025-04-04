@@ -193,10 +193,11 @@ def create_cog_item(
         end_datetime = None
 
     attributes = dataset.attrs.copy()
-    standard_metadata = {"datetime", "start_datetime", "end_datetime"}
+    standard_metadata = {"datetime", "start_datetime", "end_datetime", "AREA_OR_POINT"}
     properties.update(
         {
-            k.replace(":", "_"): v
+            # k.replace(":", "_"): v # NOTE: see if it also works without replacing
+            k: v
             for k, v in attributes.items()
             if k not in standard_metadata
         }
