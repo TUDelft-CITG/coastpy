@@ -7,27 +7,25 @@ from coastpy.eo.mask import nodata_mask
 
 
 class BaseTransform:
-    """
-    Base class for transform transformations on xarray objects.
-
-    Attributes:
-        variables (List[str]): List of variable names to apply the transformation to.
-        group_dim (Optional[str]): Dimension over which to apply the transformation. If None, apply globally.
-        suffix (str): Suffix to append to transformed variable names.
-    """
-
     suffix: str = ""  # Default suffix, subclasses should override
 
-    def __init__(self, variables: list[str], group_dim: str | None = None):
+    def __init__(
+        self,
+        variables: list[str],
+        group_dim: str | None = None,
+        src_var_as_model_input: bool = True,
+    ):
         """
         Initializes the BaseTransform.
 
         Args:
             variables (List[str]): Variables to apply transformations to.
-            group_dim (Optional[str]): Dimension over which to apply the transformation. If None, apply globally.
+            group_dim (Optional[str]): Dimension over which to apply the transformation.
+            src_var_as_model_input (bool): Whether the source variable should be passed to the model.
         """
         self.variables = variables
         self.group_dim = group_dim
+        self.src_var_as_model_input = src_var_as_model_input
 
     def _apply_function(self, data: xr.DataArray, func: Callable) -> xr.DataArray:
         """
@@ -94,6 +92,9 @@ class NoDataMaskTransform(BaseTransform):
 
     suffix = "_mask_nodata"
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
     def _transformation(self, data: xr.DataArray) -> xr.DataArray:
         """Computes a NoData mask for the input data array."""
         da = cast(xr.DataArray, nodata_mask(data))
@@ -106,7 +107,7 @@ class RelativeTransform(BaseTransform):
 
     suffix = "_rel"
 
-    def __init__(self, variables: list[str], group_dim: str | None = None):
+    def __init__(self, variables: list[str], group_dim: str | None = None, **kwargs):  # noqa: ARG002
         """
         Initializes the relative transformation.
 
@@ -127,6 +128,9 @@ class RegionOfInterestMaskTransform(BaseTransform):
 
     suffix = "_mask_roi"
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
     def _transformation(self, data: xr.DataArray) -> xr.DataArray:
         mask = data.where(data.isnull(), data.isin([1, 2, 3]).astype("int16"))
         return mask
@@ -137,6 +141,9 @@ class LandwardMaskTransform(BaseTransform):
 
     suffix = "_mask_landward"
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
     def _transformation(self, data: xr.DataArray) -> xr.DataArray:
         mask = data.where(data.isnull(), (data == 2).astype("int16"))
         return mask
@@ -146,6 +153,9 @@ class SeawardMaskTransform(BaseTransform):
     """Bitmask for seaward point (class 3 → 1; else → 0; NaNs preserved)."""
 
     suffix = "_mask_seaward"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def _transformation(self, data: xr.DataArray) -> xr.DataArray:
         mask = data.where(data.isnull(), (data == 3).astype("int16"))
@@ -220,15 +230,19 @@ def create_transforms(
         for item in config_list:
             # If a dictionary, extract the transform type safely
             if isinstance(item, dict):
-                item_copy = item.copy()  # 🛠 Copy to prevent modifying original dict
+                item_copy = item.copy()  # Copy to prevent modifying original dict
                 if "type" not in item_copy:
                     raise ValueError(
                         f"Missing 'type' key in transform config for '{band}': {item}"
                     )
                 transform_type = item_copy.pop("type")
+                src_flag = item_copy.pop("src_var_as_model_input", True)
                 transforms[band].append(
                     TransformFactory.create(
-                        transform_type, variables=[band], **item_copy
+                        transform_type,
+                        variables=[band],
+                        src_var_as_model_input=src_flag,
+                        **item_copy,
                     )
                 )
             else:
