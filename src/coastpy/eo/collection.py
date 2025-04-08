@@ -131,12 +131,14 @@ class BaseCollection:
             self.items = list(search.items())
 
             if not self.items:
-                raise ValueError("No items found for the given search parameters.")
+                raise ValueError(
+                    f"No items found for collection {self} the given search parameters."
+                )
 
         except Exception as e:
             if not use_geoparquet_fallback:
                 raise RuntimeError(
-                    f"STAC API search failed and fallback is disabled: {e}"
+                    f"STAC API search for {self} failed and fallback is disabled: {e}"
                 ) from e
 
             # Fallback to GeoParquet
@@ -950,6 +952,30 @@ class DeltaDTMCollection(BaseCollection):
         self.composite_method = None  # Disable composite method for this collection.
         self.merge = None
 
+    def search(
+        self: Self,
+        roi: gpd.GeoDataFrame,
+        filter_function: Callable[[list], list] | None = None,
+    ) -> Self:
+        """
+        Perform a search specific to the DeltaDTM collection.
+
+        Args:
+            roi (GeoDataFrame): Region of interest.
+            query (dict, optional): STAC query parameters.
+            filter_function (Callable, optional): Filter to apply to search results.
+
+        Returns:
+            Self: The updated collection instance with results.
+        """
+        return super().search(
+            roi=roi,
+            date_range=None,
+            query=None,
+            filter_function=filter_function,
+            use_geoparquet_fallback=True,
+        )
+
     @staticmethod
     def postprocess_deltadtm(ds: xr.Dataset) -> xr.Dataset:
         # Squeeze time dimension
@@ -1004,6 +1030,31 @@ class CopernicusDEMCollection(BaseCollection):
         self.percentile = None  # Disable percentile compositing for this collection.
         self.composite_method = None  # Disable composite method for this collection.
         self.merge = None
+
+    def search(
+        self: Self,
+        roi: gpd.GeoDataFrame,
+        query: dict | None = None,
+        filter_function: Callable[[list], list] | None = None,
+    ) -> Self:
+        """
+        Perform a search specific to the CopernicusDEM collection.
+
+        Args:
+            roi (GeoDataFrame): Region of interest.
+            query (dict, optional): STAC query parameters.
+            filter_function (Callable, optional): Filter to apply to search results.
+
+        Returns:
+            Self: The updated collection instance with results.
+        """
+        return super().search(
+            roi=roi,
+            date_range=None,
+            query=query,
+            filter_function=filter_function,
+            use_geoparquet_fallback=False,
+        )
 
     @staticmethod
     def postprocess_cop_dem30(ds: xr.Dataset) -> xr.Dataset:

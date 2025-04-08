@@ -14,8 +14,8 @@ from shapely.geometry import (
     MultiLineString,
     MultiPoint,
     Point,
-    base,
 )
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import snap, split
 
 from coastpy.utils.dask_utils import silence_shapely_warnings
@@ -542,67 +542,104 @@ def crosses_antimeridian(df: gpd.GeoDataFrame) -> pd.Series:
     return coords.apply(crosses)
 
 
-def _buffer_geometry(
-    geom: base.BaseGeometry, src_crs: str | int, buffer_dist: float
-) -> base.BaseGeometry:
+import geopandas as gpd
+import pandas as pd
+
+
+def _buffer_geometry_in_utm(
+    geom: BaseGeometry,
+    src_crs: str | int,
+    buffer_dist: float,
+    utm_crs: str | int | None = None,
+) -> gpd.GeoSeries:
     """
-    Buffers a single geometry in its appropriate UTM projection and reprojects it back to the original CRS.
+    Buffer a geometry in UTM CRS and return it (still in UTM, not reprojected back).
 
     Args:
-        geom (shapely.geometry.base.BaseGeometry): The geometry to buffer.
-        src_crs (Union[str, int]): The original CRS of the geometry.
-        buffer_dist (float): The buffer distance in meters.
+        geom (BaseGeometry): Input geometry.
+        src_crs (str | int): CRS of the input geometry.
+        buffer_dist (float): Buffer distance in meters.
+        utm_crs (str | int | None): UTM CRS to use. If None, it's estimated.
 
     Returns:
-        base.BaseGeometry: The buffered geometry in the original CRS.
+        GeoSeries: Buffered geometry in UTM CRS.
     """
-    # Estimate the UTM CRS based on the geometry's location
-    utm_crs = gpd.GeoSeries([geom], crs=src_crs).estimate_utm_crs()
-
-    # Reproject the geometry to UTM, apply the buffer, and reproject back to the original CRS
-    geom_utm = gpd.GeoSeries([geom], crs=src_crs).to_crs(utm_crs).iloc[0]
-    buffered_utm = geom_utm.buffer(buffer_dist)
-    buffered_geom = gpd.GeoSeries([buffered_utm], crs=utm_crs).to_crs(src_crs).iloc[0]
-
-    return buffered_geom
+    geom_series = gpd.GeoSeries([geom], crs=src_crs)
+    utm_crs = utm_crs or geom_series.estimate_utm_crs()
+    return geom_series.to_crs(utm_crs).buffer(buffer_dist)
 
 
 def buffer_geometries_in_utm(
-    geo_data: gpd.GeoSeries | gpd.GeoDataFrame, buffer_dist: float
+    geo_data: gpd.GeoSeries | gpd.GeoDataFrame,
+    buffer_dist: float,
+    utm_crs: str | int | None = None,
+    add_area: bool = False,
 ) -> gpd.GeoSeries | gpd.GeoDataFrame:
     """
-    Buffer all geometries in a GeoSeries or GeoDataFrame in their appropriate UTM projections and return
-    the buffered geometries in the original CRS.
+    Buffer geometries in UTM and return them in the original CRS. Optionally add area in UTM.
 
     Args:
-        geo_data (Union[gpd.GeoSeries, gpd.GeoDataFrame]): Input GeoSeries or GeoDataFrame containing geometries.
+        geo_data (GeoSeries | GeoDataFrame): Input geometries with defined CRS.
         buffer_dist (float): Buffer distance in meters.
+        utm_crs (str | int | None): Can be:
+            - None: estimate per geometry
+            - EPSG int/str: use fixed UTM CRS
+            - str: column name for per-row CRS (only GeoDataFrame)
+        add_area (bool): If True, add area column computed in UTM.
 
     Returns:
-        Union[gpd.GeoSeries, gpd.GeoDataFrame]: Buffered geometries in the original CRS.
+        GeoSeries | GeoDataFrame: Buffered geometries (and area if requested).
     """
-    # Determine if the input is a GeoDataFrame or a GeoSeries
-    is_geodataframe = isinstance(geo_data, gpd.GeoDataFrame)
+    if isinstance(geo_data, gpd.GeoSeries):
+        if geo_data.crs is None:
+            raise ValueError("GeoSeries must have a defined CRS.")
 
-    # Extract the geometry series from the GeoDataFrame, if necessary
-    geom_series = geo_data.geometry if is_geodataframe else geo_data
+        def _buffer_and_area(geom):
+            buffered = _buffer_geometry_in_utm(geom, geo_data.crs, buffer_dist, utm_crs)
+            if add_area:
+                return {
+                    "geometry": buffered.to_crs(geo_data.crs).iloc[0],
+                    "area": buffered.area.iloc[0],
+                }
+            return buffered.to_crs(geo_data.crs).iloc[0]
 
-    # Ensure the input data has a defined CRS
-    if geom_series.crs is None:
-        msg = "Input GeoSeries or GeoDataFrame must have a defined CRS."
-        raise ValueError(msg)
+        if add_area:
+            df = geo_data.apply(_buffer_and_area)
+            return gpd.GeoDataFrame(df.tolist(), crs=geo_data.crs)
+        else:
+            buffered = geo_data.apply(_buffer_and_area)
+            buffered.name = geo_data.name
+            buffered.crs = geo_data.crs
+            return buffered
 
-    # Buffer each geometry using the UTM projection and return to original CRS
-    buffered_geoms = geom_series.apply(
-        lambda geom: _buffer_geometry(geom, geom_series.crs, buffer_dist)
-    )
+    elif isinstance(geo_data, gpd.GeoDataFrame):
+        if geo_data.crs is None:
+            raise ValueError("GeoDataFrame must have a defined CRS.")
 
-    # Return the modified GeoDataFrame or GeoSeries with the buffered geometries
-    if is_geodataframe:
-        geo_data = geo_data.assign(geometry=buffered_geoms)
-        return geo_data
+        def _process_group(df: gpd.GeoDataFrame, epsg: int | str):
+            buffered_utm = df.geometry.apply(
+                lambda geom: _buffer_geometry_in_utm(
+                    geom, geo_data.crs, buffer_dist, epsg
+                ).iloc[0]
+            )
+            if add_area:
+                area = buffered_utm.area
+                buffered = buffered_utm.to_crs(geo_data.crs)
+                return df.assign(geometry=buffered, area=area)
+            else:
+                buffered = buffered_utm.to_crs(geo_data.crs)
+                return df.assign(geometry=buffered)
+
+        if isinstance(utm_crs, str) and utm_crs in geo_data.columns:
+            groups = []
+            for epsg, group in geo_data.groupby(utm_crs):
+                groups.append(_process_group(group.copy(), epsg))
+            return gpd.GeoDataFrame(pd.concat(groups), crs=geo_data.crs)
+        else:
+            return _process_group(geo_data.copy(), utm_crs)
+
     else:
-        return buffered_geoms
+        raise TypeError("Input must be a GeoSeries or GeoDataFrame.")
 
 
 def add_line_length(
