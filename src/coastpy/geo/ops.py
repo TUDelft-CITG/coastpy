@@ -553,20 +553,21 @@ def _buffer_geometry_in_utm(
     utm_crs: str | int | None = None,
 ) -> gpd.GeoSeries:
     """
-    Buffer a geometry in UTM CRS and return it (still in UTM, not reprojected back).
+    Buffer a geometry in UTM CRS and return it in the original CRS.
 
     Args:
-        geom (BaseGeometry): Input geometry.
-        src_crs (str | int): CRS of the input geometry.
-        buffer_dist (float): Buffer distance in meters.
-        utm_crs (str | int | None): UTM CRS to use. If None, it's estimated.
+        geom: Input geometry.
+        src_crs: CRS of the input geometry.
+        buffer_dist: Buffer distance in meters.
+        utm_crs: UTM CRS to use. If None, it's estimated.
 
     Returns:
-        GeoSeries: Buffered geometry in UTM CRS.
+        GeoSeries: Buffered geometry in the original CRS.
     """
     geom_series = gpd.GeoSeries([geom], crs=src_crs)
     utm_crs = utm_crs or geom_series.estimate_utm_crs()
-    return geom_series.to_crs(utm_crs).buffer(buffer_dist)
+    buffered = geom_series.to_crs(utm_crs).buffer(buffer_dist)
+    return gpd.GeoSeries(buffered, crs=utm_crs).to_crs(src_crs)
 
 
 def buffer_geometries_in_utm(
@@ -576,65 +577,65 @@ def buffer_geometries_in_utm(
     add_area: bool = False,
 ) -> gpd.GeoSeries | gpd.GeoDataFrame:
     """
-    Buffer geometries in UTM and return them in the original CRS. Optionally add area in UTM.
+    Buffer geometries in UTM CRS and return in original CRS. Optionally add area in UTM.
 
     Args:
-        geo_data (GeoSeries | GeoDataFrame): Input geometries with defined CRS.
-        buffer_dist (float): Buffer distance in meters.
-        utm_crs (str | int | None): Can be:
+        geo_data: Input geometries with defined CRS.
+        buffer_dist: Buffer distance in meters.
+        utm_crs: One of:
             - None: estimate per geometry
-            - EPSG int/str: use fixed UTM CRS
+            - int/str: fixed UTM EPSG code
             - str: column name for per-row CRS (only GeoDataFrame)
-        add_area (bool): If True, add area column computed in UTM.
+        add_area: If True, also compute area in UTM CRS.
 
     Returns:
-        GeoSeries | GeoDataFrame: Buffered geometries (and area if requested).
+        Buffered geometries (and optional area column).
     """
+    if geo_data.crs is None:
+        raise ValueError("Input must have a defined CRS.")
+
     if isinstance(geo_data, gpd.GeoSeries):
-        if geo_data.crs is None:
-            raise ValueError("GeoSeries must have a defined CRS.")
 
         def _buffer_and_area(geom):
             buffered = _buffer_geometry_in_utm(geom, geo_data.crs, buffer_dist, utm_crs)
             if add_area:
-                return {
-                    "geometry": buffered.to_crs(geo_data.crs).iloc[0],
-                    "area": buffered.area.iloc[0],
-                }
-            return buffered.to_crs(geo_data.crs).iloc[0]
+                utm_proj = buffered.to_crs(utm_crs or buffered.estimate_utm_crs())
+                return {"geometry": buffered.iloc[0], "area": utm_proj.area.iloc[0]}
+            return buffered.iloc[0]
 
         if add_area:
             df = geo_data.apply(_buffer_and_area)
             return gpd.GeoDataFrame(df.tolist(), crs=geo_data.crs)
         else:
-            buffered = geo_data.apply(_buffer_and_area)
-            buffered.name = geo_data.name
-            buffered.crs = geo_data.crs
-            return buffered
+            out = geo_data.apply(_buffer_and_area)
+            out.name = geo_data.name
+            out.crs = geo_data.crs
+            return out
 
     elif isinstance(geo_data, gpd.GeoDataFrame):
-        if geo_data.crs is None:
-            raise ValueError("GeoDataFrame must have a defined CRS.")
 
         def _process_group(df: gpd.GeoDataFrame, epsg: int | str):
-            buffered_utm = df.geometry.apply(
-                lambda geom: _buffer_geometry_in_utm(
-                    geom, geo_data.crs, buffer_dist, epsg
+            buffered = df.geometry.apply(
+                lambda g: _buffer_geometry_in_utm(
+                    g, geo_data.crs, buffer_dist, epsg
                 ).iloc[0]
             )
             if add_area:
-                area = buffered_utm.area
-                buffered = buffered_utm.to_crs(geo_data.crs)
-                return df.assign(geometry=buffered, area=area)
-            else:
-                buffered = buffered_utm.to_crs(geo_data.crs)
-                return df.assign(geometry=buffered)
+                # reproject to UTM to compute area
+                utm = buffered.to_crs(epsg)
+                return df.assign(geometry=buffered, area=utm.area)
+            return df.assign(geometry=buffered)
 
         if isinstance(utm_crs, str) and utm_crs in geo_data.columns:
-            groups = []
-            for epsg, group in geo_data.groupby(utm_crs):
-                groups.append(_process_group(group.copy(), epsg))
-            return gpd.GeoDataFrame(pd.concat(groups), crs=geo_data.crs)
+            return gpd.GeoDataFrame(
+                pd.concat(
+                    [
+                        _process_group(group.copy(), epsg)
+                        for epsg, group in geo_data.groupby(utm_crs)
+                    ]
+                ),
+                crs=geo_data.crs,
+            )
         else:
             return _process_group(geo_data.copy(), utm_crs)
 

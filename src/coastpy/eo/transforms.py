@@ -295,4 +295,5 @@ def apply_transforms(
         return data.merge(transformed_ds) if merge else transformed_ds
 
     else:
-        raise TypeError("Input must be an xarray Dataset or DataArray.")
+        msg = "Input must be an xarray Dataset or DataArray."
+        raise TypeError(msg)
