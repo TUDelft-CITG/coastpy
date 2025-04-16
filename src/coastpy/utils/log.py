@@ -584,16 +584,18 @@ class ParquetLogger:
         min_priority: int | None = None,
         max_retries: int | None = None,
         sort_by_priority: bool = True,
+        sort_by_grid_idx: bool = False,
     ) -> list[str]:
         """
-        Sample up to `n` IDs with specified statuses, with optional priority sorting.
+        Sample up to `n` IDs with specified statuses, with optional sorting controls.
 
         Args:
             n (int): Number of IDs to sample.
             statuses (List[Status], optional): Statuses to sample from. Defaults to [PENDING].
-            min_priority (int, optional): Minimum priority threshold. Defaults to highest available priority.
-            max_retries (int, optional): Maximum allowed retries for a task. Defaults to no restriction.
-            sort_by_priority (bool, optional): Whether to prioritize higher-priority items first. Defaults to True.
+            min_priority (int, optional): Minimum priority threshold. Defaults to highest available.
+            max_retries (int, optional): Maximum allowed retries. Defaults to no restriction.
+            sort_by_priority (bool, optional): Whether to sort by priority (descending). Defaults to True.
+            sort_by_grid_idx (bool, optional): Whether to sample in the order of index (e.g., quadkey). Defaults to False.
 
         Returns:
             List[str]: Sampled IDs.
@@ -616,6 +618,10 @@ class ParquetLogger:
         if max_retries is not None:
             filtered = filtered[filtered["retries"] < max_retries]
 
+        # Error: cannot enable both priority and grid-index sorting
+        if sort_by_priority and sort_by_grid_idx:
+            raise ValueError("Cannot sort by both priority and grid index.")
+
         # Apply priority filter
         filtered = filtered[filtered["priority"] >= min_priority]
 
@@ -625,6 +631,10 @@ class ParquetLogger:
         # If sort_by_priority is False, we shuffle the data immediately
         if not sort_by_priority:
             return filtered.sample(n=min(n, len(filtered))).index.tolist()
+
+        # Sort by grid index (e.g., quadkey-ordered index)
+        if sort_by_grid_idx:
+            return filtered.head(n).index.tolist()
 
         # Sort by priority (descending) to process higher-priority items first
         filtered = filtered.sort_values(by="priority", ascending=False)

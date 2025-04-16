@@ -90,6 +90,24 @@ def get_alternate_href(links):
     return None  # Default return if no alternate href is found
 
 
+def list_parquet_columns_from_stac(
+    collection: pystac.Collection, asset_key: str = "data"
+) -> list[str]:
+    """Extract available column names from a STAC Collection using the table:columns extension."""
+    if not isinstance(collection, pystac.Collection):
+        raise TypeError("Expected a STAC Collection.")
+
+    asset = collection.item_assets.get(asset_key)
+    if asset is None:
+        raise KeyError(f"Asset '{asset_key}' not found in item_assets.")
+
+    table_columns = asset.properties.get("table:columns")
+    if not table_columns:
+        raise ValueError(f"Asset '{asset_key}' does not declare 'table:columns'.")
+
+    return [col["name"] for col in table_columns if "name" in col]
+
+
 def read_snapshot(
     collection,
     columns=None,
