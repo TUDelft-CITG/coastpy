@@ -604,9 +604,9 @@ class ParquetLogger:
 
         # Filter based on statuses and ensure only provided `ids` are considered
         filtered = self.df[
-            (self.df["status"].isin([s.value for s in statuses]))
-            & (self.df.index.isin(self.ids))
-        ]
+            self.df["status"].isin([s.value for s in statuses])
+            & self.df.index.isin(self.ids)
+        ].loc[self.ids]
 
         if filtered.empty:
             return []
