@@ -296,9 +296,9 @@ class TileLogger:
 
         # Filter based on statuses and ensure only provided `ids` are considered
         filtered = self.df[
-            (self.df["status"].isin([s.value for s in statuses]))
-            & (self.df.index.isin(self.ids))
-        ]
+            self.df["status"].isin([s.value for s in statuses])
+            & self.df.index.isin(self.ids)
+        ].reindex(self.ids)
 
         if filtered.empty:
             return []
@@ -606,7 +606,7 @@ class ParquetLogger:
         filtered = self.df[
             self.df["status"].isin([s.value for s in statuses])
             & self.df.index.isin(self.ids)
-        ].loc[self.ids]
+        ].reindex(self.ids)
 
         if filtered.empty:
             return []
@@ -628,8 +628,8 @@ class ParquetLogger:
         if filtered.empty:
             return []
 
-        # If sort_by_priority is False, we shuffle the data immediately
-        if not sort_by_priority:
+        # If sort_by_priority is False AND we do not want it filtered by ids, we shuffle the data immediately
+        if not sort_by_priority and not sort_by_grid_idx:
             return filtered.sample(n=min(n, len(filtered))).index.tolist()
 
         # Sort by grid index (e.g., quadkey-ordered index)
@@ -666,7 +666,7 @@ class ParquetLogger:
         self, statuses: list[Status] | None = None, min_priority: int | None = None
     ) -> int:
         """
-        Get the number of samples to process based on the current status and priority.
+        Get the number of samples to process based on the provided ids, status and processing priority.
 
         Args:
             statuses (List[Status], optional): Statuses to sample from. Defaults to [PENDING].
@@ -679,6 +679,9 @@ class ParquetLogger:
 
         # Filter by status
         filtered = self.df[self.df["status"].isin([s.value for s in statuses])]
+
+        # Filter by provided ids
+        filtered = filtered[filtered.index.isin(self.ids)]
 
         if filtered.empty:
             return 0
