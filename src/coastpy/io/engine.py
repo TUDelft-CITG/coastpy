@@ -106,20 +106,22 @@ class STACQueryEngine(BaseQueryEngine):
         columns: list[str] | None = None,
     ) -> None:
         super().__init__(storage_backend=storage_backend)
-        self.extents = read_snapshot(
+        self.snapshot = read_snapshot(
             stac_collection,
         )
         try:
-            self.proj_epsg = self.extents["proj:code"].unique().item()
+            self.proj_epsg = self.snapshot["proj:code"].unique().item()
         except KeyError:
-            self.proj_epsg = self.extents["proj:epsg"].unique().item()
+            self.proj_epsg = self.snapshot["proj:epsg"].unique().item()
 
         if columns is None or not columns:
-            # NOTE: before we used a wildcard, but that was tricky.. now we will rely on STAC? Also a bit
-            # tricky if the STAC is not complete..
-            # self.columns = ["*"]
+            # NOTE: before we used a wildcard, but that was tricky.. now we will rely on STAC metadata,
+            # while reading the first item. It's also a bit arbitrary, but let's see.
             self.columns = [
-                i["name"] for i in self.extents.assets.iloc[0]["data"]["table:columns"]
+                i["name"]
+                for i in stac_collection.extra_fields["item_assets"]["data"][
+                    "table:columns"
+                ]
             ]
         else:
             self.columns = columns
@@ -131,7 +133,7 @@ class STACQueryEngine(BaseQueryEngine):
         maxx: float,
         maxy: float,
         sas_token: str | None = None,
-    ) -> gpd.GeoDataFrame:
+    ) -> gpd.GeoDataFrame | pd.DataFrame:
         """
         Retrieve data within the specified bounding box.
 
@@ -155,7 +157,7 @@ class STACQueryEngine(BaseQueryEngine):
         bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs="EPSG:4326")
 
         # Perform spatial join to get all overlapping HREFs
-        overlapping_hrefs = gpd.sjoin(self.extents, bbox_gdf).href.tolist()
+        overlapping_hrefs = gpd.sjoin(self.snapshot, bbox_gdf).href.tolist()
 
         # Sign each HREF with the SAS token if the storage backend is Azure
         sas_token = self._get_token() if sas_token is None else sas_token
@@ -205,7 +207,7 @@ class HREFQueryEngine(BaseQueryEngine):
 
     def get_data_within_bbox(
         self, minx: float, miny: float, maxx: float, maxy: float
-    ) -> gpd.GeoDataFrame:
+    ) -> gpd.GeoDataFrame | pd.DataFrame:
         """
         Queries data within a specified bounding box from a direct HREF.
 

@@ -11,11 +11,12 @@ import odc.geo.geobox
 import odc.geo.geom
 import odc.stac
 import planetary_computer as pc
+import rioxarray  # noqa
 import shapely
 import stac_geoparquet
 import xarray as xr
+from odc.geo import Geometry
 from odc.geo.geobox import GeoBox
-from odc.geo.geom import Geometry
 from rasterio.enums import Resampling
 from shapely.geometry import Point
 
@@ -25,7 +26,7 @@ from coastpy.eo.collection import (
     S2CompositeCollection,
 )
 from coastpy.geo.geoms import create_offset_rectangle
-from coastpy.geo.ops import get_rotation_angle
+from coastpy.geo.ops import extract_endpoints, get_rotation_angle
 from coastpy.io.utils import get_datetimes, merge_time_attrs, update_time_coord
 from coastpy.utils.xarray_utils import interpolate_raster, trim_outer_nans
 
@@ -54,6 +55,76 @@ def get_rotation_angle_from_transect(
     p1, p2 = list(map(Point, transect.to_crs(utm_epsg).geometry.item().coords))
     rotation_angle = get_rotation_angle(p1, p2, target_axis=target_axis)
     return rotation_angle
+
+
+def encode_region_of_interest(
+    transect: gpd.GeoDataFrame,
+    ds: xr.Dataset,
+    buffer_dist: float = 200,
+    point_buffer: float = 10,
+) -> xr.DataArray:
+    """
+    Generate a classification mask of ROI, landward and seaward buffers.
+
+    Args:
+        transect (gpd.GeoDataFrame): Single-row GeoDataFrame (EPSG:4326).
+        ds (xr.Dataset): Dataset with georeferenced variables (e.g. satellite bands).
+        buffer_dist (float): Buffer radius around the transect (meters).
+        point_buffer (float): Buffer radius around endpoints (meters).
+
+    Returns:
+        xr.DataArray: Classification mask where
+                      0 = background, 1 = ROI, 2 = landward, 3 = seaward
+    """
+    import odc.geo  # noqa
+    import rioxarray  # noqa
+
+    transect = transect.copy()
+    utm_epsg = ds.odc.crs.to_epsg()
+    if utm_epsg is None:
+        raise ValueError("Dataset does not have a valid UTM EPSG code.")
+    ref = ds[next(iter(ds.data_vars))]
+    ref = ref.rio.write_crs(utm_epsg)
+    transect["utm_epsg"] = utm_epsg
+
+    # 1. Region of Interest
+    roi = transect_region(transect, buffer_dist)
+    roi_geom = Geometry(roi.geometry.item(), crs=roi.crs).to_crs(utm_epsg)
+
+    # 2. Endpoints (buffered)
+    land_pt, sea_pt = extract_endpoints(transect.geometry.item())  # type: ignore
+    land_geom = Geometry(
+        gpd.GeoSeries([land_pt], crs=transect.crs)
+        .to_crs(utm_epsg)
+        .buffer(point_buffer)
+        .geometry.item(),
+        crs=utm_epsg,
+    )
+    sea_geom = Geometry(
+        gpd.GeoSeries([sea_pt], crs=transect.crs)
+        .to_crs(utm_epsg)
+        .buffer(point_buffer)
+        .geometry.item(),
+        crs=utm_epsg,
+    )
+
+    # 3. Create binary masks
+    def make_mask(g: Geometry) -> xr.DataArray:
+        return ref.odc.mask(g).notnull()
+
+    roi_mask = make_mask(roi_geom)
+    land_mask = make_mask(land_geom)
+    sea_mask = make_mask(sea_geom)
+
+    # 4. Build classification mask by priority
+    class_ = xr.zeros_like(ref)
+    class_ = class_.where(~roi_mask, 1)
+    class_ = class_.where(~land_mask, 2)
+    class_ = class_.where(~sea_mask, 3)
+
+    class_.name = "region_of_interest"
+    class_ = class_.astype("float32")
+    return class_
 
 
 class TypologyCollection:
@@ -246,6 +317,7 @@ class TypologyCollection:
         x_shape: int,
         resampling: Resampling = Resampling.cubic,
         rotate: bool = False,
+        add_region_of_interest: bool = True,
         offset_distance: int | None = None,
         target_axis: Literal[
             "closest", "horizontal", "vertical", "horizontal-right-aligned"
@@ -264,8 +336,9 @@ class TypologyCollection:
             y_shape (Optional[int]): The y shape of the dataset (required if rotate=True).
             x_shape (Optional[int]): The x shape of the dataset (required if rotate=True).
             resampling (Optional[Resampling]): Resampling method for interpolation during rotation (required if rotate=True).
-            resolution (Optional[int]): The resolution of the dataset (required if rotate=True).
             rotate (bool): Whether to rotate the dataset to align with the transect.
+            add_region_of_interest (bool): Whether to add a region of interest mask/classification to the dataset.
+            resolution (Optional[int]): The resolution of the dataset (required if rotate=True or add_region_of_interest).
 
         Returns:
             xr.Dataset: The rotated, clipped, and interpolated dataset.
@@ -291,6 +364,18 @@ class TypologyCollection:
             if resolution is None:
                 raise ValueError("When rotate=True, resolution is required.")
 
+            if add_region_of_interest:
+                raise UserWarning(
+                    "`add_region_of_interest` is not supported when `rotate=True`."
+                )
+
+            if add_region_of_interest and (
+                offset_distance is None or resolution is None
+            ):
+                raise ValueError(
+                    "When add_region_of_interest=True, offset_distance and resolution are required."
+                )
+
             # Create ROI from transect
             roi = transect_region(transect, offset_distance)
             roi_geom = Geometry(roi.geometry.item(), crs=roi.crs).to_crs(
@@ -304,7 +389,7 @@ class TypologyCollection:
                 .buffer(MAX_TRANSECT_RADIUS)
                 .to_frame("geometry")
                 .to_crs(4326)
-            )
+            )  # type: ignore
             roi_buffered = gpd.GeoDataFrame(
                 geometry=[shapely.box(*roi_buffered.total_bounds)], crs=roi_buffered.crs
             )
@@ -369,6 +454,15 @@ class TypologyCollection:
             dataset = interpolate_raster(
                 dataset, y_shape=y_shape, x_shape=x_shape, resampling=resampling
             )
+
+            if add_region_of_interest:
+                # Add region of interest mask
+                dataset["region_of_interest"] = encode_region_of_interest(
+                    transect=transect,
+                    ds=dataset,
+                    buffer_dist=offset_distance,  # type: ignore
+                    point_buffer=resolution,  # type:ignore
+                )
 
         return dataset
 

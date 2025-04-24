@@ -1,10 +1,12 @@
 import itertools
 import logging
 import operator
+from collections.abc import Callable
 from contextlib import suppress
 
 import fsspec
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import pystac
 import xarray as xr
@@ -78,7 +80,7 @@ def stackstac_to_dataset(stack: xr.DataArray) -> xr.Dataset:
 
 def get_alternate_href(links):
     """Extracts the 'alternate' href from a list of STAC links."""
-    if not isinstance(links, list | tuple):
+    if not isinstance(links, list | tuple | np.ndarray):
         return None  # Return None if links are missing or not iterable
 
     for link in links:
@@ -88,7 +90,31 @@ def get_alternate_href(links):
     return None  # Default return if no alternate href is found
 
 
-def read_snapshot(collection, columns=None, add_href=True, storage_options=None):
+def list_parquet_columns_from_stac(
+    collection: pystac.Collection, asset_key: str = "data"
+) -> list[str]:
+    """Extract available column names from a STAC Collection using the table:columns extension."""
+    if not isinstance(collection, pystac.Collection):
+        raise TypeError("Expected a STAC Collection.")
+
+    asset = collection.item_assets.get(asset_key)
+    if asset is None:
+        raise KeyError(f"Asset '{asset_key}' not found in item_assets.")
+
+    table_columns = asset.properties.get("table:columns")
+    if not table_columns:
+        raise ValueError(f"Asset '{asset_key}' does not declare 'table:columns'.")
+
+    return [col["name"] for col in table_columns if "name" in col]
+
+
+def read_snapshot(
+    collection,
+    columns=None,
+    add_href=True,
+    storage_options=None,
+    patch_url: Callable[[str, dict[str, str]], str] | None = None,
+) -> gpd.GeoDataFrame:
     """
     Reads the extent of items from a STAC collection and returns a GeoDataFrame with specified columns.
 
@@ -97,32 +123,44 @@ def read_snapshot(collection, columns=None, add_href=True, storage_options=None)
         columns: List of columns to return. If None, all columns will be read.
         add_href: Boolean indicating whether to extract and add the 'href' columns from 'assets'. Default is True.
         storage_options: Storage options to pass to fsspec. Default is {"account_name": "coclico"}.
+        patch_url: Function to patch the URL. If None, no patching is done. This is useful to reference private cloud storage or local files.
 
     Returns:
         GeoDataFrame containing the specified columns.
     """
 
     # Set default storage options
-    if storage_options is None:
-        storage_options = {"account_name": "coclico"}
+    storage_options = storage_options or {}
 
     if columns is not None:
         columns = list({*columns, "assets"})
 
     href = collection.assets["geoparquet-stac-items"].href
+    href = patch_url(href, storage_options) if patch_url else href
 
     if href.startswith("https://"):
-        with fsspec.open(href, mode="rb") as f:
-            extents = gpd.read_parquet(f, columns=columns)
+        try:
+            with fsspec.open(href, mode="rb") as f:
+                extents = gpd.read_parquet(f, columns=columns)
+        except FileNotFoundError:
+            token = storage_options.get("sas_token") or storage_options.get(
+                "credential"
+            )
+            if token is None:
+                raise ValueError(
+                    "The provided href is not accessible. Please check the URL or provide a valid SAS token."
+                ) from None
+            signed_href = f"{href}?{token}"
+            with fsspec.open(signed_href, mode="rb") as f:
+                extents = gpd.read_parquet(f, columns=columns)
     else:
         with fsspec.open(href, mode="rb", **storage_options) as f:
             extents = gpd.read_parquet(f, columns=columns)
 
     if add_href:
         if "assets" not in extents.columns:
-            raise ValueError(
-                "The 'assets' column is required to extract 'href' values."
-            )
+            msg = "The 'assets' column is required to extract 'href' values."
+            raise ValueError(msg)
 
         # Determine whether we are dealing with a single or multiple assets
         first_assets = extents["assets"].iloc[0]
@@ -150,6 +188,8 @@ def read_snapshot(collection, columns=None, add_href=True, storage_options=None)
                 }
 
             hrefs_df = extents["assets"].apply(extract_hrefs).apply(pd.Series)
-            extents = pd.concat([extents, hrefs_df], axis=1)
+            from typing import cast
+
+            extents = cast(gpd.GeoDataFrame, pd.concat([extents, hrefs_df], axis=1))
 
     return extents

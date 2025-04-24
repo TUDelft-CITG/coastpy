@@ -40,3 +40,20 @@ def get_region_of_interest_from_map(
 
     roi = shapely.geometry.box(west, south, east, north)
     return gpd.GeoDataFrame(geometry=[roi], crs="EPSG:4326")
+
+
+def is_roi_geometry_invalid(roi: gpd.GeoDataFrame, threshold: float = 100.0) -> bool:
+    """
+    Checks whether the ROI geometry is invalid due to excessive area, often from antimeridian issues.
+
+    Args:
+        roi (GeoDataFrame): The ROI to check. Must have CRS EPSG:4326.
+        threshold (float): Area threshold (in degrees squared) to flag as invalid.
+
+    Returns:
+        bool: True if the geometry is invalid, False otherwise.
+    """
+    if roi.crs and roi.crs.to_epsg() != 4326:
+        raise ValueError("ROI must be in EPSG:4326 to validate geometry area.")
+
+    return roi.geometry.item().area > threshold

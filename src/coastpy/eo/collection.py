@@ -63,7 +63,7 @@ class BaseCollection:
         self.items: list | None = None
         self.add_metadata_from_stac: bool = True
         self.dataset: xr.Dataset | None = None
-        self.data_extent: dict | None = None
+        self.data_extent: gpd.GeoDataFrame | None = None
 
         # Mask and scale settings
         self.mask_nodata: bool = False
@@ -131,12 +131,14 @@ class BaseCollection:
             self.items = list(search.items())
 
             if not self.items:
-                raise ValueError("No items found for the given search parameters.")
+                raise ValueError(
+                    f"No items found for collection {self} the given search parameters."
+                )
 
         except Exception as e:
             if not use_geoparquet_fallback:
                 raise RuntimeError(
-                    f"STAC API search failed and fallback is disabled: {e}"
+                    f"STAC API search for {self} failed and fallback is disabled: {e}"
                 ) from e
 
             # Fallback to GeoParquet
@@ -176,7 +178,7 @@ class BaseCollection:
         )
 
         # Spatial filter using sjoin
-        snapshot = gpd.sjoin(snapshot, roi[["geometry"]].to_crs(snapshot.crs)).drop(
+        snapshot = gpd.sjoin(snapshot, roi[["geometry"]].to_crs(snapshot.crs)).drop(  # type: ignore
             columns="index_right"
         )
 
@@ -215,6 +217,9 @@ class BaseCollection:
         geobox = kwargs.pop("geobox", None)
 
         if geobox is None and resolution:
+            if self.data_extent is None:
+                raise ValueError("No data extent found. Perform a search first.")
+
             geobox = geobox_from_data_extent(
                 region=self.roi,
                 data_extent=self.data_extent,
@@ -679,6 +684,62 @@ class S2Collection(BaseCollection):
         stac_cfg = stac_cfg or self.default_stac_cfg
         super().__init__(catalog_url, collection, stac_cfg)
 
+    def search(
+        self: Self,
+        roi: gpd.GeoDataFrame,
+        date_range: str | None = None,
+        query: dict | None = None,
+        item_limit: int = 300,
+        filter_function: Callable[[list], list] | None = None,
+    ) -> Self:
+        """
+        Perform a STAC search using the API, retrieving items sorted by ascending cloud cover
+        instead of filtering by a strict cloud cover threshold.
+
+        Args:
+            roi (gpd.GeoDataFrame): Region of interest.
+            date_range (str, optional): Date range for the search (ISO8601 format).
+            filter_function (Callable, optional): Function to filter the resulting items.
+            use_geoparquet_fallback (bool): Whether to fallback to STAC GeoParquet.
+            item_limit (int, optional): Maximum number of items to retrieve. Default is 300.
+
+        Returns:
+            Updated collection instance with search results.
+        """
+
+        self.roi = roi
+
+        self.search_params = {
+            "collections": self.collection,
+            "intersects": self.roi.to_crs(4326).geometry.item(),
+            "datetime": date_range,
+            "query": query,
+            "sortby": [{"field": "eo:cloud_cover", "direction": "asc"}],
+            "limit": item_limit,
+        }
+
+        # Attempt STAC API search
+        search = self.catalog.search(
+            **{k: v for k, v in self.search_params.items() if v is not None}
+        )
+        self.items = list(search.items())
+
+        if not self.items:
+            raise ValueError("No items found for the given search parameters.")
+
+        # Apply filter function if provided
+        if filter_function:
+            try:
+                self.items = filter_function(self.items)
+                if not self.items:
+                    raise ValueError("Filter function returned no items.")
+            except Exception as e:
+                raise RuntimeError(f"Error in filter_function: {e}") from e
+
+        # Store data extent
+        self.data_extent = self._compute_data_extent(self.items)
+        return self
+
     @classmethod
     def _add_metadata_from_stac(
         cls, items: list[pystac.Item], ds: xr.Dataset
@@ -891,6 +952,30 @@ class DeltaDTMCollection(BaseCollection):
         self.composite_method = None  # Disable composite method for this collection.
         self.merge = None
 
+    def search(
+        self: Self,
+        roi: gpd.GeoDataFrame,
+        filter_function: Callable[[list], list] | None = None,
+    ) -> Self:
+        """
+        Perform a search specific to the DeltaDTM collection.
+
+        Args:
+            roi (GeoDataFrame): Region of interest.
+            query (dict, optional): STAC query parameters.
+            filter_function (Callable, optional): Filter to apply to search results.
+
+        Returns:
+            Self: The updated collection instance with results.
+        """
+        return super().search(
+            roi=roi,
+            date_range=None,
+            query=None,
+            filter_function=filter_function,
+            use_geoparquet_fallback=True,
+        )
+
     @staticmethod
     def postprocess_deltadtm(ds: xr.Dataset) -> xr.Dataset:
         # Squeeze time dimension
@@ -945,6 +1030,31 @@ class CopernicusDEMCollection(BaseCollection):
         self.percentile = None  # Disable percentile compositing for this collection.
         self.composite_method = None  # Disable composite method for this collection.
         self.merge = None
+
+    def search(
+        self: Self,
+        roi: gpd.GeoDataFrame,
+        query: dict | None = None,
+        filter_function: Callable[[list], list] | None = None,
+    ) -> Self:
+        """
+        Perform a search specific to the CopernicusDEM collection.
+
+        Args:
+            roi (GeoDataFrame): Region of interest.
+            query (dict, optional): STAC query parameters.
+            filter_function (Callable, optional): Filter to apply to search results.
+
+        Returns:
+            Self: The updated collection instance with results.
+        """
+        return super().search(
+            roi=roi,
+            date_range=None,
+            query=query,
+            filter_function=filter_function,
+            use_geoparquet_fallback=False,
+        )
 
     @staticmethod
     def postprocess_cop_dem30(ds: xr.Dataset) -> xr.Dataset:
