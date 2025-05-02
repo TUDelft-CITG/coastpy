@@ -188,6 +188,59 @@ class STACQueryEngine(BaseQueryEngine):
         """
         return self.execute_query(query)
 
+    def get_data_within_aoi(
+        self,
+        aoi: gpd.GeoDataFrame,
+        sas_token: str | None = None,
+    ) -> gpd.GeoDataFrame | pd.DataFrame:
+        """
+        Retrieve data within the aoi
+
+        Args:
+            aoi (gpd.GeoDataFrame): geodataframe of the Area of Interest
+
+        Returns:
+            pd.DataFrame: The queried data.
+        """
+
+        # Helper function to escape column names
+        def escape_column(col):
+            if col == "geometry":
+                return "ST_AsWKB(ST_Transform(geometry, 'EPSG:4326', 'EPSG:4326')) AS geometry"
+            return f'"{col}"'
+
+        # bbox = shapely.box(minx, miny, maxx, maxy)
+        # bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs="EPSG:4326")
+        polygon_wkt = aoi.geometry[0].wkt
+
+        # Perform spatial join to get all overlapping HREFs
+        overlapping_hrefs = gpd.sjoin(self.snapshot, aoi).href.tolist()
+
+        # Sign each HREF with the SAS token if the storage backend is Azure
+        sas_token = self._get_token() if sas_token is None else sas_token
+        if self.storage_backend == "azure":
+            signed_hrefs = []
+            for href in overlapping_hrefs:
+                signed_href = href.replace(
+                    "az://", "https://coclico.blob.core.windows.net/"
+                )
+                signed_href = signed_href + "?" + sas_token
+                signed_hrefs.append(signed_href)
+        else:
+            signed_hrefs = overlapping_hrefs
+
+        # Join the hrefs into a single string
+        hrefs_str = ", ".join(f'"{href}"' for href in signed_hrefs)
+
+        columns_str = ", ".join(escape_column(col) for col in self.columns)
+
+        query = f"""
+            SELECT {columns_str}
+            FROM read_parquet([{hrefs_str}])
+            WHERE ST_Intersects(geometry, ST_GeomFromText('{polygon_wkt}'));
+        """
+        return self.execute_query(query)
+
 
 class HREFQueryEngine(BaseQueryEngine):
     """
