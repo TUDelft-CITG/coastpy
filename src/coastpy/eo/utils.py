@@ -15,15 +15,15 @@ def data_extent_from_stac_items(
     Compute the data extent by dissolving geometries in a STAC collection.
 
     Args:
-        items (list[dict]): List of STAC items as dictionaries.
+        items (list[Item]): List of STAC items.
         dissolve_kwargs (dict, optional): Additional parameters for GeoDataFrame `dissolve`.
 
     Returns:
         gpd.GeoDataFrame: Dissolved GeoDataFrame.
     """
     items_as_json = [item.to_dict() for item in items]
-    gdf = stac_geoparquet.to_geodataframe(items_as_json, dtype_backend="pyarrow")
     dissolve_kwargs = dissolve_kwargs or {}
+    gdf = stac_geoparquet.to_geodataframe(items_as_json, dtype_backend="pyarrow")
     return gdf[["geometry"]].dissolve(**dissolve_kwargs)
 
 
