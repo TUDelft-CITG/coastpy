@@ -468,8 +468,17 @@ def create_tabular_item(
     )
     assert isinstance(item, pystac.Item)
 
+    # Inject extra fields at item level
+    item.extra_fields.update(item_extra_fields)
+
+    item.extra_fields.update(item_extra_fields)
+
+    # Optionally update the asset extra fields
+    if "data" in item.assets:
+        item.assets["data"].extra_fields.update(asset_extra_fields)
+
     # Enrich table column descriptions
-    item = enrich_table_columns(item, asset_extra_fields)
+    # item = enrich_table_columns(item, asset_extra_fields)
 
     # Handle alternate links
     if alternate_links:

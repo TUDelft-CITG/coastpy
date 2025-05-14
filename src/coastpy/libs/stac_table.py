@@ -7,11 +7,13 @@ Generate STAC Collections for tabular datasets.
 import copy
 import datetime
 import enum
+import warnings
 from typing import Any, TypeVar
 
 import dask
 import dask_geopandas
 import fsspec
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyproj
@@ -119,7 +121,7 @@ def generate(
         data.calculate_spatial_partitions()
 
     columns = get_columns(ds.schema)
-    item.properties["table:columns"] = columns
+    item.extra_fields["table:columns"] = columns
 
     if proj is True:
         if data is not None:
@@ -211,14 +213,19 @@ def generate(
 
     if infer_datetime == InferDatetimeOptions.range:
         values = dask.compute(data[datetime_column].min(), data[datetime_column].max())  # type: ignore
-        values = pd.Series(values).dt.to_pydatetime().tolist()
+
+        # Safely convert to datetime.datetime while suppressing the warning
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            values = np.array(pd.Series(values).dt.to_pydatetime())
+
         item.common_metadata.start_datetime = values[0]
         item.common_metadata.end_datetime = values[1]
         # NOTE: consider if its good practice to set datetime to midpoint when range is set
         item.datetime = pd.Timestamp(pd.Series(values).mean()).to_pydatetime()
 
     if count_rows:
-        item.properties["table:row_count"] = sum(x.count_rows() for x in ds.fragments)
+        item.extra_fields["table:row_count"] = sum(x.count_rows() for x in ds.fragments)
 
     if asset_key:
         href = asset_href if asset_href is not None else uri
