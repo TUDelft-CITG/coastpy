@@ -493,17 +493,3 @@ if __name__ == "__main__":
     )
     gdf_rectangle_acco.to_parquet(output_path_rectangle_acco)
     print(f"Saved: {output_path_rectangle_acco}")
-
-    # Show sample output
-    print("\nPreview of point projection:")
-    print(
-        gdf_point[
-            [
-                "transect_id",
-                "ambient_change_mean",
-                "retreat_p50",
-                "total_change_p50",
-                "geometry",
-            ]
-        ].head()
-    )
