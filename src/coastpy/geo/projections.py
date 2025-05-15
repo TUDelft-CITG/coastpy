@@ -307,6 +307,203 @@ def apply_projection_from_values(
     )
 
 
+def compute_projection_stats(
+    ac_mean: float,
+    ac_std: float,
+    slr_samples: list[float] | np.ndarray,
+    total_samples: list[float] | np.ndarray,
+    accommodation_buffer: float = 0.0,
+) -> dict:
+    ac_p5, ac_p95 = normal_p5_p95(ac_mean, ac_std)
+
+    if isinstance(slr_samples, (list, np.ndarray)) and len(slr_samples) > 0:
+        slr_arr = np.asarray(slr_samples, dtype="float32")
+        slr_p5, slr_p50, slr_p95 = np.percentile(slr_arr, [5, 50, 95])
+        slr_vals_out = slr_arr.tolist()
+    else:
+        slr_p5 = slr_p50 = slr_p95 = 0.0
+        slr_vals_out = [0.0]
+
+    if isinstance(total_samples, (list, np.ndarray)) and len(total_samples) > 0:
+        total_arr = np.asarray(total_samples, dtype="float32")
+        total_p5, total_p50, total_p95 = np.percentile(total_arr, [5, 50, 95])
+        total_vals_out = total_arr.tolist()
+    else:
+        total_p5 = total_p50 = total_p95 = np.nan
+        total_vals_out = [np.nan]
+
+    shoreline_change = ac_mean + slr_p50
+
+    return {
+        "ac_p5": ac_p5,
+        "ac_p95": ac_p95,
+        "slr_vals_out": slr_vals_out,
+        "slr_p5": slr_p5,
+        "slr_p50": slr_p50,
+        "slr_p95": slr_p95,
+        "total_vals_out": total_vals_out,
+        "total_p5": total_p5,
+        "total_p50": total_p50,
+        "total_p95": total_p95,
+        "shoreline_change": shoreline_change,
+    }
+
+
+def point_projection(
+    row: pd.Series,
+    ac_mean: float,
+    slr_samples: list[float],
+    total_samples: list[float],
+    accommodation_buffer: float,
+    reference_point: Point,
+) -> tuple[dict, Point | None]:
+    stats = compute_projection_stats(
+        ac_mean,
+        row["ambient_change_std"],
+        slr_samples,
+        total_samples,
+        accommodation_buffer,
+    )
+    geom = project_along_transect(
+        row,
+        shoreline_change=stats["shoreline_change"],
+        reference_point=reference_point,
+        accommodation_buffer=accommodation_buffer,
+    )
+    return stats, geom
+
+
+def apply_projection_from_values(
+    df: gpd.GeoDataFrame,
+    reference_lons: str | list[float],
+    reference_lats: str | list[float],
+    accommodation_buffer: float = 0.0,
+    ambient_change_is_valid: str | list[bool] | None = None,
+    ambient_change_mean: str | list[float] | None = None,
+    ambient_change_std: str | list[float] | None = None,
+    retreat_samples: str | list[list[float]] | None = None,
+    total_change_samples: str | list[list[float]] | None = None,
+    result_type: Literal["point", "rectangle"] = "point",
+    alongshore_buffer: float = 50.0,
+) -> gpd.GeoDataFrame:
+    """
+    Projects future shoreline positions based on ambient and sea level rise change samples.
+
+    Args:
+        df: GeoDataFrame of transects with UTM geometries and metadata.
+        reference_lons: Column or list of reference longitudes.
+        reference_lats: Column or list of reference latitudes.
+        accommodation_buffer: Optional landward buffer (meters).
+        ambient_change_is_valid: Optional column or list of validity flags (True/False/<NA>).
+        ambient_change_mean: Optional column or list of ambient change means (m).
+        ambient_change_std: Optional column or list of ambient change std devs (m).
+        retreat_samples: Optional column or list of sea level rise samples.
+        total_change_samples: Optional column or list of total change samples (for diagnostics only).
+        result_type: 'point' or 'rectangle' geometry output.
+        alongshore_buffer: Rectangle width in meters (only used if result_type='rectangle').
+
+    Returns:
+        GeoDataFrame with projected geometries and change metadata.
+    """
+    lons = resolve_input(
+        df, reference_lons, "reference_lons", required=True, cast=float
+    )
+    lats = resolve_input(
+        df, reference_lats, "reference_lats", required=True, cast=float
+    )
+    is_valid = resolve_input(
+        df,
+        ambient_change_is_valid,
+        "ambient_change_is_valid",
+        default=pd.NA,
+        cast="boolean",
+    )
+    ac_mean = resolve_input(
+        df, ambient_change_mean, "ambient_change_mean", default=0.0, cast=float
+    )
+    ac_std = resolve_input(
+        df, ambient_change_std, "ambient_change_std", default=np.nan, cast=float
+    )
+    slr_samples = resolve_input(
+        df, retreat_samples, "retreat_samples", default=[], cast=list
+    )
+    total_samples = resolve_input(
+        df, total_change_samples, "total_change_samples", default=[], cast=list
+    )
+
+    records = []
+    for i, (_, row) in enumerate(df.iterrows()):
+        tid = row["transect_id"]
+        row_std = float(ac_std[i])
+        ref_point = Point(lons[i], lats[i])
+
+        row["ambient_change_std"] = row_std
+        stats, point = point_projection(
+            row=row,
+            ac_mean=float(ac_mean[i]),
+            slr_samples=slr_samples[i],
+            total_samples=total_samples[i],
+            accommodation_buffer=accommodation_buffer,
+            reference_point=ref_point,
+        )
+
+        if point is None:
+            continue
+
+        if result_type == "rectangle":
+            geom = compute_rectangle_projection(
+                row=row,
+                shoreline_change=stats["shoreline_change"],
+                accommodation_buffer=accommodation_buffer,
+                reference_point=ref_point,
+                alongshore_buffer=alongshore_buffer,
+            )
+        else:
+            geom = point
+
+        if geom is None:
+            continue
+
+        records.append(
+            {
+                "transect_id": tid,
+                "ssp": pd.NA,
+                "datetime": row.get("datetime", pd.NaT),
+                "ambient_change_is_valid": is_valid[i],
+                "ambient_change_mean": np.float32(ac_mean[i]),
+                "ambient_change_std": np.float32(row_std),
+                "ambient_change_p5": np.float32(stats["ac_p5"]),
+                "ambient_change_p95": np.float32(stats["ac_p95"]),
+                "retreat_samples": stats["slr_vals_out"],
+                "retreat_p5": np.float32(stats["slr_p5"]),
+                "retreat_p50": np.float32(stats["slr_p50"]),
+                "retreat_p95": np.float32(stats["slr_p95"]),
+                "total_change_samples": stats["total_vals_out"],
+                "total_change_p5": np.float32(stats["total_p5"]),
+                "total_change_p50": np.float32(stats["total_p50"]),
+                "total_change_p95": np.float32(stats["total_p95"]),
+                "accommodation_buffer": np.float32(accommodation_buffer),
+                "geometry": geom,
+            }
+        )
+
+    return gpd.GeoDataFrame(records, geometry="geometry", crs=4326).astype(
+        {
+            "ambient_change_mean": "float32",
+            "ambient_change_std": "float32",
+            "ambient_change_p5": "float32",
+            "ambient_change_p95": "float32",
+            "retreat_p5": "float32",
+            "retreat_p50": "float32",
+            "retreat_p95": "float32",
+            "total_change_p5": "float32",
+            "total_change_p50": "float32",
+            "total_change_p95": "float32",
+            "accommodation_buffer": "float32",
+        }
+    )
+
+
 def add_building_count(
     areas_at_risk_of_erosion: gpd.GeoDataFrame,
     buildings: gpd.GeoDataFrame,
@@ -366,115 +563,6 @@ def add_building_count(
 
 ######################################################## @ JUUL ##############################
 ############### FROM HERE ITS OLD CODE` ##############################
-
-
-def apply_projection_trend(
-    df: gpd.GeoDataFrame,
-    target_datetimes: list[datetime],
-    reference_lons: str | list[float],
-    reference_lats: str | list[float],
-    reference_datetimes: str | list[datetime],
-    accommodation_buffer: float = 100.0,
-) -> gpd.GeoDataFrame:
-    """
-    Projects transects forward in time using change rate trends and adds optional landward buffer.
-
-    Args:
-        df: GeoDataFrame containing transect geometries and metadata.
-        target_datetimes: List of datetime targets to project to.
-        reference_lons: Column name (str) or list of longitudes (floats).
-        reference_lats: Column name (str) or list of latitudes (floats).
-        reference_datetimes: Column name (str) or list of datetime objects.
-        accommodation_buffer: Buffer distance in meters applied in landward direction.
-
-    Returns:
-        GeoDataFrame with projected point geometries and structured shoreline change fields.
-    """
-
-    def resolve(ref: str | list, name: str):
-        if isinstance(ref, str):
-            if ref not in df.columns:
-                raise ValueError(f"Column '{ref}' not found in DataFrame for '{name}'")
-            return df[ref].tolist()
-        if isinstance(ref, list):
-            if len(ref) != len(df):
-                raise ValueError(f"Length of list '{name}' must match DataFrame length")
-            return ref
-        raise TypeError(f"Argument '{name}' must be a string or a list")
-
-    lons = resolve(reference_lons, "reference_lons")
-    lats = resolve(reference_lats, "reference_lats")
-    ref_dts = resolve(reference_datetimes, "reference_datetimes")
-
-    records = []
-
-    for i, (_, row) in enumerate(df.iterrows()):
-        tid = row["transect_id"]
-        rate = row["sds:change_rate"]
-        ref_dt = ref_dts[i]
-
-        if pd.isnull(ref_dt):
-            print(f"[WARN] Missing reference_datetime for transect {tid}. Skipping.")
-            continue
-
-        year_deltas = [target.year - ref_dt.year for target in target_datetimes]
-        ac_values = [float(rate * delta) for delta in year_deltas]
-
-        ref_point = Point(lons[i], lats[i])
-        projected_geoms = project_along_transect(
-            row,
-            shoreline_change=ac_values,
-            reference_point=ref_point,
-            accommodation_buffer=accommodation_buffer,
-        )
-
-        if not projected_geoms:
-            continue
-
-        for j, (target_dt, geom) in enumerate(
-            zip(target_datetimes, projected_geoms, strict=False)
-        ):
-            if geom:
-                ac_val = ac_values[j]
-
-                records.append(
-                    {
-                        "transect_id": tid,
-                        "ssp": pd.NA,
-                        "datetime": target_dt,
-                        "ambient_change_is_valid": pd.NA,
-                        "ambient_change_mean": float32(ac_val),
-                        "ambient_change_std": float32("nan"),
-                        "ambient_change_p5": float32("nan"),
-                        "ambient_change_p95": float32("nan"),
-                        "ambient_change_samples": [float32(ac_val)],
-                        "retreat_samples": None,
-                        "retreat_p5": float32("nan"),
-                        "retreat_p50": float32("nan"),
-                        "retreat_p95": float32("nan"),
-                        "total_change_samples": [float32(ac_val)],
-                        "total_change_p5": float32("nan"),
-                        "total_change_p50": float32("nan"),
-                        "total_change_p95": float32("nan"),
-                        "geometry": geom,
-                    }
-                )
-
-    gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=4326).astype(
-        {
-            "ambient_change_mean": "float32",
-            "ambient_change_std": "float32",
-            "ambient_change_p5": "float32",
-            "ambient_change_p95": "float32",
-            "retreat_p5": "float32",
-            "retreat_p50": "float32",
-            "retreat_p95": "float32",
-            "total_change_p5": "float32",
-            "total_change_p50": "float32",
-            "total_change_p95": "float32",
-        }
-    )
-    return gdf
 
 
 def compute_rectangle_projection(
@@ -885,6 +973,14 @@ if __name__ == "__main__":
         pathlib.Path.home() / "Downloads" / "sample_dataframe.parquet"
     )
 
+    # Rename all sea_level_rise columns to retreat
+    df.rename(
+        columns=lambda col: col.replace("sea_level_rise", "retreat")
+        if "sea_level_rise" in col
+        else col,
+        inplace=True,
+    )
+
     # --- Run your function ---
     result = apply_projection_from_values(
         df=df,
@@ -898,6 +994,7 @@ if __name__ == "__main__":
         accommodation_buffer=0,  # meters
     )
 
+    result.to_parquet("/Users/calkoen/Downloads/projections2.parquet")
     # --- Inspect the result ---
     print(
         result[
