@@ -170,7 +170,7 @@ def apply_projection_from_values(
     ambient_change_is_valid: str | list[bool] | None = None,
     ambient_change_mean: str | list[float] | None = None,
     ambient_change_std: str | list[float] | None = None,
-    sea_level_rise_samples: str | list[list[float]] | None = None,
+    retreat_samples: str | list[list[float]] | None = None,
     total_change_samples: str | list[list[float]] | None = None,
 ) -> gpd.GeoDataFrame:
     """
@@ -184,7 +184,7 @@ def apply_projection_from_values(
         ambient_change_is_valid: Optional column or list of validity flags (True/False/<NA>).
         ambient_change_mean: Optional column or list of ambient change means (m).
         ambient_change_std: Optional column or list of ambient change std devs (m).
-        sea_level_rise_samples: Optional column or list of sea level rise samples.
+        retreat_samples: Optional column or list of sea level rise samples.
         total_change_samples: Optional column or list of total change samples (for diagnostics only).
 
     Returns:
@@ -211,7 +211,7 @@ def apply_projection_from_values(
     )
 
     slr_samples = resolve_input(
-        df, sea_level_rise_samples, "sea_level_rise_samples", default=[], cast=list
+        df, retreat_samples, "retreat_samples", default=[], cast=list
     )
     total_samples = resolve_input(
         df, total_change_samples, "total_change_samples", default=[], cast=list
@@ -277,10 +277,10 @@ def apply_projection_from_values(
                 "ambient_change_std": np.float32(ac_sigma),
                 "ambient_change_p5": np.float32(ac_p5),
                 "ambient_change_p95": np.float32(ac_p95),
-                "sea_level_rise_samples": slr_vals_out,
-                "sea_level_rise_p5": np.float32(slr_p5),
-                "sea_level_rise_p50": np.float32(slr_p50),
-                "sea_level_rise_p95": np.float32(slr_p95),
+                "retreat_samples": slr_vals_out,
+                "retreat_p5": np.float32(slr_p5),
+                "retreat_p50": np.float32(slr_p50),
+                "retreat_p95": np.float32(slr_p95),
                 "total_change_samples": total_vals_out,
                 "total_change_p5": np.float32(total_p5),
                 "total_change_p50": np.float32(total_p50),
@@ -296,9 +296,9 @@ def apply_projection_from_values(
             "ambient_change_std": "float32",
             "ambient_change_p5": "float32",
             "ambient_change_p95": "float32",
-            "sea_level_rise_p5": "float32",
-            "sea_level_rise_p50": "float32",
-            "sea_level_rise_p95": "float32",
+            "retreat_p5": "float32",
+            "retreat_p50": "float32",
+            "retreat_p95": "float32",
             "total_change_p5": "float32",
             "total_change_p50": "float32",
             "total_change_p95": "float32",
@@ -448,10 +448,10 @@ def apply_projection_trend(
                         "ambient_change_p5": float32("nan"),
                         "ambient_change_p95": float32("nan"),
                         "ambient_change_samples": [float32(ac_val)],
-                        "sea_level_rise_samples": None,
-                        "sea_level_rise_p5": float32("nan"),
-                        "sea_level_rise_p50": float32("nan"),
-                        "sea_level_rise_p95": float32("nan"),
+                        "retreat_samples": None,
+                        "retreat_p5": float32("nan"),
+                        "retreat_p50": float32("nan"),
+                        "retreat_p95": float32("nan"),
                         "total_change_samples": [float32(ac_val)],
                         "total_change_p5": float32("nan"),
                         "total_change_p50": float32("nan"),
@@ -466,9 +466,9 @@ def apply_projection_trend(
             "ambient_change_std": "float32",
             "ambient_change_p5": "float32",
             "ambient_change_p95": "float32",
-            "sea_level_rise_p5": "float32",
-            "sea_level_rise_p50": "float32",
-            "sea_level_rise_p95": "float32",
+            "retreat_p5": "float32",
+            "retreat_p50": "float32",
+            "retreat_p95": "float32",
             "total_change_p5": "float32",
             "total_change_p50": "float32",
             "total_change_p95": "float32",
@@ -624,10 +624,10 @@ def apply_rectangle_projection_trend(
                     "ambient_change_p5": float32("nan"),
                     "ambient_change_p95": float32("nan"),
                     "ambient_change_samples": [float32(ac_val)],
-                    "sea_level_rise_samples": None,
-                    "sea_level_rise_p5": float32("nan"),
-                    "sea_level_rise_p50": float32("nan"),
-                    "sea_level_rise_p95": float32("nan"),
+                    "retreat_samples": None,
+                    "retreat_p5": float32("nan"),
+                    "retreat_p50": float32("nan"),
+                    "retreat_p95": float32("nan"),
                     "total_change_samples": [float32(ac_val)],
                     "total_change_p5": float32("nan"),
                     "total_change_p50": float32("nan"),
@@ -642,9 +642,9 @@ def apply_rectangle_projection_trend(
             "ambient_change_std": "float32",
             "ambient_change_p5": "float32",
             "ambient_change_p95": "float32",
-            "sea_level_rise_p5": "float32",
-            "sea_level_rise_p50": "float32",
-            "sea_level_rise_p95": "float32",
+            "retreat_p5": "float32",
+            "retreat_p50": "float32",
+            "retreat_p95": "float32",
             "total_change_p5": "float32",
             "total_change_p50": "float32",
             "total_change_p95": "float32",
@@ -667,7 +667,7 @@ def apply_projection_from_future_df(
         df: GeoDataFrame with transect geometries and metadata.
         futures: DataFrame with future shoreline change data per transect_id.
                  Must include 'transect_id', 'datetime', 'ssp',
-                 'ambient_change_samples', 'sea_level_rise_samples', 'total_change_samples'.
+                 'ambient_change_samples', 'retreat_samples', 'total_change_samples'.
         reference_lons: Column name (str) or list of float longitudes.
         reference_lats: Column name (str) or list of float latitudes.
         accommodation_buffer: Optional landward buffer to subtract from shoreline change.
@@ -706,9 +706,7 @@ def apply_projection_from_future_df(
             ambient_samples = (
                 group["ambient_change_samples"].explode().astype(float).tolist()
             )
-            slr_samples = (
-                group["sea_level_rise_samples"].explode().astype(float).tolist()
-            )
+            slr_samples = group["retreat_samples"].explode().astype(float).tolist()
             total_samples = (
                 group["total_change_samples"].explode().astype(float).tolist()
             )
@@ -738,16 +736,10 @@ def apply_projection_from_future_df(
                             pd.Series(ambient_samples).quantile(0.95)
                         ),
                         "ambient_change_samples": [float32(v) for v in ambient_samples],
-                        "sea_level_rise_samples": [float32(v) for v in slr_samples],
-                        "sea_level_rise_p5": float32(
-                            pd.Series(slr_samples).quantile(0.05)
-                        ),
-                        "sea_level_rise_p50": float32(
-                            pd.Series(slr_samples).quantile(0.50)
-                        ),
-                        "sea_level_rise_p95": float32(
-                            pd.Series(slr_samples).quantile(0.95)
-                        ),
+                        "retreat_samples": [float32(v) for v in slr_samples],
+                        "retreat_p5": float32(pd.Series(slr_samples).quantile(0.05)),
+                        "retreat_p50": float32(pd.Series(slr_samples).quantile(0.50)),
+                        "retreat_p95": float32(pd.Series(slr_samples).quantile(0.95)),
                         "total_change_samples": [float32(v) for v in total_samples],
                         "total_change_p5": float32(
                             pd.Series(total_samples).quantile(0.05)
@@ -768,9 +760,9 @@ def apply_projection_from_future_df(
             "ambient_change_std": "float32",
             "ambient_change_p5": "float32",
             "ambient_change_p95": "float32",
-            "sea_level_rise_p5": "float32",
-            "sea_level_rise_p50": "float32",
-            "sea_level_rise_p95": "float32",
+            "retreat_p5": "float32",
+            "retreat_p50": "float32",
+            "retreat_p95": "float32",
             "total_change_p5": "float32",
             "total_change_p50": "float32",
             "total_change_p95": "float32",
@@ -852,10 +844,10 @@ def apply_rectangle_projection_from_future_df(
                     "ambient_change_p5": float32("nan"),
                     "ambient_change_p95": float32("nan"),
                     "ambient_change_samples": None,
-                    "sea_level_rise_samples": None,
-                    "sea_level_rise_p5": float32("nan"),
-                    "sea_level_rise_p50": float32("nan"),
-                    "sea_level_rise_p95": float32("nan"),
+                    "retreat_samples": None,
+                    "retreat_p5": float32("nan"),
+                    "retreat_p50": float32("nan"),
+                    "retreat_p95": float32("nan"),
                     "total_change_samples": [offset],
                     "total_change_p5": float32("nan"),
                     "total_change_p50": float32("nan"),
@@ -870,9 +862,9 @@ def apply_rectangle_projection_from_future_df(
             "ambient_change_std": "float32",
             "ambient_change_p5": "float32",
             "ambient_change_p95": "float32",
-            "sea_level_rise_p5": "float32",
-            "sea_level_rise_p50": "float32",
-            "sea_level_rise_p95": "float32",
+            "retreat_p5": "float32",
+            "retreat_p50": "float32",
+            "retreat_p95": "float32",
             "total_change_p5": "float32",
             "total_change_p50": "float32",
             "total_change_p95": "float32",
@@ -901,7 +893,7 @@ if __name__ == "__main__":
         ambient_change_is_valid="ambient_change_is_valid",
         ambient_change_mean="ambient_change_mean",
         ambient_change_std="ambient_change_std",
-        sea_level_rise_samples="sea_level_rise_samples",
+        retreat_samples="retreat_samples",
         total_change_samples="total_change_samples",
         accommodation_buffer=0,  # meters
     )
@@ -912,7 +904,7 @@ if __name__ == "__main__":
             [
                 "transect_id",
                 "ambient_change_mean",
-                "sea_level_rise_p50",
+                "retreat_p50",
                 "total_change_p50",
                 "geometry",
             ]
