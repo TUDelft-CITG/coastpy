@@ -5,12 +5,31 @@ import numpy as np
 import pandas as pd
 from numpy import float32
 from pyproj import Transformer
+from scipy.stats import norm
 from shapely import ops
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import transform
 
 from coastpy.geo.geoms import create_offset_rectangle
 from coastpy.geo.ops import extend_transect
+
+
+def normal_p5_p95(mean: float, std: float) -> tuple[float, float]:
+    """
+    Computes the 5th and 95th percentiles for a normal distribution.
+
+    Args:
+        mean: Mean of the distribution.
+        std: Standard deviation of the distribution.
+
+    Returns:
+        Tuple of (p5, p95) percentiles.
+    """
+    if np.isnan(std):
+        return np.nan, np.nan
+    p5 = norm.ppf(0.05, loc=mean, scale=std)
+    p95 = norm.ppf(0.95, loc=mean, scale=std)
+    return p5, p95
 
 
 def project_trend(rate: float, years: float | list[float]) -> float | list[float]:
@@ -171,7 +190,6 @@ def apply_projection_from_values(
     Returns:
         GeoDataFrame with projected geometries and change metadata.
     """
-
     lons = resolve_input(
         df, reference_lons, "reference_lons", required=True, cast=float
     )
@@ -191,6 +209,7 @@ def apply_projection_from_values(
     ac_std = resolve_input(
         df, ambient_change_std, "ambient_change_std", default=np.nan, cast=float
     )
+
     slr_samples = resolve_input(
         df, sea_level_rise_samples, "sea_level_rise_samples", default=[], cast=list
     )
@@ -204,31 +223,33 @@ def apply_projection_from_values(
         tid = row["transect_id"]
         lon, lat = lons[i], lats[i]
         ac_valid = is_valid[i]
-        ac_mu = ac_mean[i]
-        ac_sigma = ac_std[i]
+        ac_mu = float(ac_mean[i])  # type: ignore
+        ac_sigma = float(ac_std[i])  # type: ignore
         slr_vals = slr_samples[i]
         total_vals = total_samples[i]
 
-        # Quantiles from total change samples (optional)
-        if isinstance(total_vals, list) and total_vals:
-            total_arr = np.array(total_vals, dtype="float32")
-            total_p5 = np.percentile(total_arr, 5)
-            total_p50 = np.percentile(total_arr, 50)
-            total_p95 = np.percentile(total_arr, 95)
+        ac_p5, ac_p95 = normal_p5_p95(ac_mu, ac_sigma)
+
+        # Handle sea level rise samples
+        if isinstance(slr_vals, list | np.ndarray) and len(slr_vals) > 0:
+            slr_arr = np.asarray(slr_vals, dtype="float32")
+            slr_p5, slr_p50, slr_p95 = np.percentile(slr_arr, [5, 50, 95])
+            slr_vals_out = slr_arr.tolist()
+        else:
+            slr_p5 = slr_p50 = slr_p95 = 0.0
+            slr_vals_out = [0.0]
+
+        # Handle total change samples (optional diagnostics)
+        if isinstance(total_vals, list | np.ndarray) and len(total_vals) > 0:
+            total_arr = np.asarray(total_vals, dtype="float32")
+            total_p5, total_p50, total_p95 = np.percentile(total_arr, [5, 50, 95])
+            total_vals_out = total_arr.tolist()
         else:
             total_p5 = total_p50 = total_p95 = np.nan
+            total_vals_out = [np.nan]
 
-        # Quantiles from sea level rise samples (optional)
-        if isinstance(slr_vals, list) and slr_vals:
-            slr_arr = np.array(slr_vals, dtype="float32")
-            slr_p5 = np.percentile(slr_arr, 5)
-            slr_p50 = np.percentile(slr_arr, 50)
-            slr_p95 = np.percentile(slr_arr, 95)
-        else:
-            slr_p5 = slr_p50 = slr_p95 = 0.0  # default: no SLR
-
-        # Compute shoreline change (ambient + slr)
-        shoreline_change = float(ac_mu or 0.0) + float(slr_p50 or 0.0)
+        # Compute shoreline change (ac + slr)
+        shoreline_change = ac_mu + slr_p50
 
         if lon is None or lat is None:
             raise ValueError(
@@ -254,17 +275,17 @@ def apply_projection_from_values(
                 "ambient_change_is_valid": ac_valid,
                 "ambient_change_mean": np.float32(ac_mu),
                 "ambient_change_std": np.float32(ac_sigma),
-                "ambient_change_p5": np.float32("nan"),
-                "ambient_change_p95": np.float32("nan"),
-                "ambient_change_samples": [np.float32(ac_mu)] if ac_mu != 0.0 else [],
-                "sea_level_rise_samples": slr_vals if slr_vals else None,
+                "ambient_change_p5": np.float32(ac_p5),
+                "ambient_change_p95": np.float32(ac_p95),
+                "sea_level_rise_samples": slr_vals_out,
                 "sea_level_rise_p5": np.float32(slr_p5),
                 "sea_level_rise_p50": np.float32(slr_p50),
                 "sea_level_rise_p95": np.float32(slr_p95),
-                "total_change_samples": total_vals if total_vals else None,
+                "total_change_samples": total_vals_out,
                 "total_change_p5": np.float32(total_p5),
                 "total_change_p50": np.float32(total_p50),
                 "total_change_p95": np.float32(total_p95),
+                "accommodation_buffer": np.float32(accommodation_buffer),
                 "geometry": geom,
             }
         )
@@ -281,6 +302,7 @@ def apply_projection_from_values(
             "total_change_p5": "float32",
             "total_change_p50": "float32",
             "total_change_p95": "float32",
+            "accommodation_buffer": "float32",
         }
     )
 
@@ -860,31 +882,15 @@ def apply_rectangle_projection_from_future_df(
 
 
 if __name__ == "__main__":
+    import pathlib
     from datetime import datetime
 
     import geopandas as gpd
     import pandas as pd
     from shapely.geometry import LineString
 
-    # --- Minimal sample transect ---
-    transect = LineString([(0, 0), (0.001, 0)])  # ~111 meters long at equator
-
-    df = gpd.GeoDataFrame(
-        {
-            "transect_id": ["T0001"],
-            "geometry": [transect],
-            "utm_epsg": [32631],  # UTM zone 31N
-            "sds:reference_lon": [0.0005],
-            "sds:reference_lat": [0.0],
-            "datetime": [datetime(2050, 1, 1)],
-            "ambient_change_is_valid": [True],
-            "ambient_change_mean": [1.5],
-            "ambient_change_std": [0.2],
-            "sea_level_rise_samples": [[0.4, 0.5, 0.6]],
-            "total_change_samples": [[1.8, 2.0, 2.2]],
-        },
-        geometry="geometry",
-        crs="EPSG:4326",
+    df = gpd.read_parquet(
+        pathlib.Path.home() / "Downloads" / "sample_dataframe.parquet"
     )
 
     # --- Run your function ---
@@ -897,7 +903,7 @@ if __name__ == "__main__":
         ambient_change_std="ambient_change_std",
         sea_level_rise_samples="sea_level_rise_samples",
         total_change_samples="total_change_samples",
-        accommodation_buffer=50.0,  # meters
+        accommodation_buffer=0,  # meters
     )
 
     # --- Inspect the result ---
