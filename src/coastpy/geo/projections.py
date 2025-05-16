@@ -62,15 +62,33 @@ def ambient_change_from_trend(
 
 def ambient_change_is_valid(df: gpd.GeoDataFrame) -> list[bool]:
     """
-    Marks all rows as valid for ambient trend-based change. Placeholder for future logic.
+    Flags rows as valid for ambient (trend-based) shoreline change estimation.
+
+    A shoreline change trend is considered valid if the product of the absolute shoreline
+    change rate and the number of primary SDS observations exceeds 15 meters.
+    This threshold approximates whether sufficient shoreline movement has occurred to
+    reliably estimate a long-term trend.
+
+    Notes:
+        - This method uses the number of observations (`sds:obs_primary_count`) as a proxy
+          for the observation time span, which may not always reflect the actual temporal coverage.
+        - This simplification may overestimate validity when observations are temporally clustered,
+          or underestimate it when large shoreline shifts are observed in fewer but well-distributed points.
+        - An alternative approach could use the actual time span between the first and last observation
+          (`delta_t_obs`) instead of the observation count, if available.
 
     Args:
-        df: GeoDataFrame (ambient projection data).
+        df: GeoDataFrame with 'sds:change_rate' and 'sds:obs_primary_count'.
 
     Returns:
-        List of True values indicating validity.
+        List of booleans indicating whether each row is valid for ambient change modeling.
     """
-    return [True] * len(df)
+    obs = df["sds:obs_primary_count"].fillna(0)
+    rate = df["sds:change_rate"].fillna(0)
+
+    # A trend is valid if estimated shoreline change exceeds 15m
+    is_valid = (obs * rate.abs()) > 15
+    return is_valid.tolist()
 
 
 def normal_p5_p95(mean: float, std: float) -> tuple[float, float]:
@@ -170,17 +188,17 @@ def prepare_transect_context(
 def compute_projection_stats(
     ambient_change_mean: float,
     ambient_change_std: float,
-    retreat_samples: list[float] | np.ndarray,
+    slr_retreat_samples: list[float] | np.ndarray,
     total_change_samples: list[float] | np.ndarray,
 ) -> dict:
     """
-    Computes change quantiles and shoreline change statistics using ambient, retreat, and total samples.
+    Computes change quantiles and shoreline change statistics using ambient, slr_retreat, and total samples.
 
     Args:
         ambient_change_mean: Mean ambient (trend-based) change in meters.
         ambient_change_std: Standard deviation of ambient change.
-        retreat_samples: Sea-level rise sample values (list or array).
-        total_change_samples: Optional total shoreline change samples (ambient + retreat).
+        slr_retreat_samples: Sea-level rise sample values (list or array).
+        total_change_samples: Optional total shoreline change samples (ambient + slr_retreat).
 
     Returns:
         Dict of float32-compatible statistics and input-normalized sample lists.
@@ -191,20 +209,25 @@ def compute_projection_stats(
         ambient_change_mean, ambient_change_std
     )
 
-    # Retreat samples (e.g. SLR)
-    if isinstance(retreat_samples, list | np.ndarray) and len(retreat_samples) > 0:
-        retreat_arr = np.asarray(retreat_samples, dtype="float32")
+    # slr_retreat samples (e.g. SLR)
+    if (
+        isinstance(slr_retreat_samples, list | np.ndarray)
+        and len(slr_retreat_samples) > 0
+    ):
+        slr_retreat_arr = np.asarray(slr_retreat_samples, dtype="float32")
 
-        if np.ma.isMaskedArray(retreat_arr) and isinstance(
-            retreat_arr, np.ma.MaskedArray
+        if np.ma.isMaskedArray(slr_retreat_arr) and isinstance(
+            slr_retreat_arr, np.ma.MaskedArray
         ):
-            retreat_arr = retreat_arr.filled(np.nan)
+            slr_retreat_arr = slr_retreat_arr.filled(np.nan)
 
-        retreat_p5, retreat_p50, retreat_p95 = np.percentile(retreat_arr, [5, 50, 95])
-        retreat_samples_out = retreat_arr.tolist()
+        slr_retreat_p5, slr_retreat_p50, slr_retreat_p95 = np.percentile(
+            slr_retreat_arr, [5, 50, 95]
+        )
+        slr_retreat_samples_out = slr_retreat_arr.tolist()
     else:
-        retreat_p5 = retreat_p50 = retreat_p95 = 0.0
-        retreat_samples_out = [0.0]
+        slr_retreat_p5 = slr_retreat_p50 = slr_retreat_p95 = 0.0
+        slr_retreat_samples_out = [0.0]
 
     # Total change samples (optional diagnostics)
     if (
@@ -224,10 +247,10 @@ def compute_projection_stats(
     return {
         "ambient_change_p5": np.float32(ambient_change_p5),
         "ambient_change_p95": np.float32(ambient_change_p95),
-        "retreat_samples": retreat_samples_out,
-        "retreat_p5": np.float32(retreat_p5),
-        "retreat_p50": np.float32(retreat_p50),
-        "retreat_p95": np.float32(retreat_p95),
+        "slr_retreat_samples": slr_retreat_samples_out,
+        "slr_retreat_p5": np.float32(slr_retreat_p5),
+        "slr_retreat_p50": np.float32(slr_retreat_p50),
+        "slr_retreat_p95": np.float32(slr_retreat_p95),
         "total_change_samples": total_samples_out,
         "total_change_p5": np.float32(total_p5),
         "total_change_p50": np.float32(total_p50),
@@ -302,7 +325,7 @@ def apply_projection_from_values(
     ambient_change_is_valid: str | list[bool] | None = None,
     ambient_change_mean: str | list[float] | None = None,
     ambient_change_std: str | list[float] | None = None,
-    retreat_samples: str | list[list[float]] | None = None,
+    slr_retreat_samples: str | list[list[float]] | None = None,
     total_change_samples: str | list[list[float]] | None = None,
     result_type: Literal["point", "rectangle"] = "point",
     alongshore_buffer: float = 50.0,
@@ -330,7 +353,7 @@ def apply_projection_from_values(
         df, ambient_change_std, "ambient_change_std", default=np.nan, cast=float
     )
     slr_samples = resolve_input(
-        df, retreat_samples, "retreat_samples", default=[], cast=list
+        df, slr_retreat_samples, "slr_retreat_samples", default=[], cast=list
     )
     total_samples = resolve_input(
         df, total_change_samples, "total_change_samples", default=[], cast=list
@@ -344,11 +367,11 @@ def apply_projection_from_values(
         stats = compute_projection_stats(
             ambient_change_mean=ac_mean[i],  # type: ignore
             ambient_change_std=ac_std[i],  # type: ignore
-            retreat_samples=slr_samples[i],  # type: ignore
+            slr_retreat_samples=slr_samples[i],  # type: ignore
             total_change_samples=total_samples[i],  # type: ignore
         )
 
-        shoreline_change = ac_mean[i] + stats["retreat_p50"]
+        shoreline_change = ac_mean[i] + stats["slr_retreat_p50"]
 
         if result_type == "rectangle":
             geom = rectangle_projection(
@@ -379,10 +402,10 @@ def apply_projection_from_values(
                 "ambient_change_std": np.float32(ac_std[i]),
                 "ambient_change_p5": np.float32(stats["ambient_change_p5"]),
                 "ambient_change_p95": np.float32(stats["ambient_change_p95"]),
-                "retreat_samples": stats["retreat_samples"],
-                "retreat_p5": np.float32(stats["retreat_p5"]),
-                "retreat_p50": np.float32(stats["retreat_p50"]),
-                "retreat_p95": np.float32(stats["retreat_p95"]),
+                "slr_retreat_samples": stats["slr_retreat_samples"],
+                "slr_retreat_p5": np.float32(stats["slr_retreat_p5"]),
+                "slr_retreat_p50": np.float32(stats["slr_retreat_p50"]),
+                "slr_retreat_p95": np.float32(stats["slr_retreat_p95"]),
                 "total_change_samples": stats["total_change_samples"],
                 "total_change_p5": np.float32(stats["total_change_p5"]),
                 "total_change_p50": np.float32(stats["total_change_p50"]),
@@ -398,9 +421,9 @@ def apply_projection_from_values(
             "ambient_change_std": "float32",
             "ambient_change_p5": "float32",
             "ambient_change_p95": "float32",
-            "retreat_p5": "float32",
-            "retreat_p50": "float32",
-            "retreat_p95": "float32",
+            "slr_retreat_p5": "float32",
+            "slr_retreat_p50": "float32",
+            "slr_retreat_p95": "float32",
             "total_change_p5": "float32",
             "total_change_p50": "float32",
             "total_change_p95": "float32",
@@ -489,7 +512,7 @@ if __name__ == "__main__":
     input_path = "file://" + str(
         pathlib.Path.home() / "Downloads" / "sample_dataframe.parquet"
     )
-    output_prefix = "file://" + str(pathlib.Path.home() / "tmp" / "projections")
+    output_prefix = "az://tmp/projections/examples"
 
     fs = fsspec.filesystem(fsspec.utils.get_protocol(output_prefix), **storage_options)
     if not fs.exists(output_prefix):
@@ -501,7 +524,7 @@ if __name__ == "__main__":
 
     # --- NORMALIZE COLUMN NAMES ---
     df.rename(
-        columns=lambda col: col.replace("sea_level_rise", "retreat")
+        columns=lambda col: col.replace("sea_level_rise", "slr_retreat")
         if "sea_level_rise" in col
         else col,
         inplace=True,
@@ -526,7 +549,7 @@ if __name__ == "__main__":
             ambient_change_is_valid="ambient_change_is_valid",
             ambient_change_mean="ambient_change_mean",
             ambient_change_std="ambient_change_std",
-            retreat_samples="retreat_samples",
+            slr_retreat_samples="slr_retreat_samples",
             total_change_samples="total_change_samples",
             accommodation_buffer=buffer,
             result_type=result_type,
