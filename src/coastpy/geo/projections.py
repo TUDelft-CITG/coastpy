@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Literal
 
 import geopandas as gpd
@@ -10,6 +12,65 @@ from shapely.ops import transform as shapely_transform
 
 from coastpy.geo.geoms import create_offset_rectangle
 from coastpy.geo.ops import extend_transect
+
+
+def ambient_change_from_trend(
+    df: gpd.GeoDataFrame,
+    target_datetimes: Sequence[datetime],
+    reference_datetime: str = "sds:reference_datetime",
+    change_rate: str = "sds:change_rate",
+) -> gpd.GeoDataFrame:
+    """
+    Computes projected ambient change for each target year based on a fixed trend rate.
+
+    Args:
+        df: GeoDataFrame containing 'sds:change_rate' and reference datetime columns.
+        target_datetimes: List of future datetime objects (e.g., [2050-01-01, 2100-01-01]).
+        reference_datetime: Column with the base year of observation.
+        change_rate: Column with shoreline change rate in meters/year.
+
+    Returns:
+        Expanded GeoDataFrame with one row per target datetime, including:
+            - 'ambient_change_mean': projected trend-based change in meters.
+            - 'datetime': target datetime.
+    """
+    if reference_datetime not in df.columns:
+        raise ValueError(f"Missing required column: {reference_datetime}")
+    if change_rate not in df.columns:
+        raise ValueError(f"Missing required column: {change_rate}")
+
+    # Resolve datetime and rate columns
+    base_years = pd.to_datetime(df[reference_datetime]).dt.year
+    rates = df[change_rate].astype(float)
+
+    # Store results per target year
+    records = []
+    for target_dt in target_datetimes:
+        target_year = target_dt.year
+        deltas = target_year - base_years
+        ambient_mean = rates * deltas
+
+        df_copy = df.copy()
+        df_copy["ambient_change_mean"] = ambient_mean.astype("float32")
+        df_copy["datetime"] = target_dt
+        records.append(df_copy)
+
+    return gpd.GeoDataFrame(
+        pd.concat(records, ignore_index=True), geometry="geometry", crs=df.crs
+    )
+
+
+def ambient_change_is_valid(df: gpd.GeoDataFrame) -> list[bool]:
+    """
+    Marks all rows as valid for ambient trend-based change. Placeholder for future logic.
+
+    Args:
+        df: GeoDataFrame (ambient projection data).
+
+    Returns:
+        List of True values indicating validity.
+    """
+    return [True] * len(df)
 
 
 def normal_p5_p95(mean: float, std: float) -> tuple[float, float]:
@@ -133,6 +194,12 @@ def compute_projection_stats(
     # Retreat samples (e.g. SLR)
     if isinstance(retreat_samples, list | np.ndarray) and len(retreat_samples) > 0:
         retreat_arr = np.asarray(retreat_samples, dtype="float32")
+
+        if np.ma.isMaskedArray(retreat_arr) and isinstance(
+            retreat_arr, np.ma.MaskedArray
+        ):
+            retreat_arr = retreat_arr.filled(np.nan)
+
         retreat_p5, retreat_p50, retreat_p95 = np.percentile(retreat_arr, [5, 50, 95])
         retreat_samples_out = retreat_arr.tolist()
     else:
@@ -145,6 +212,9 @@ def compute_projection_stats(
         and len(total_change_samples) > 0
     ):
         total_arr = np.asarray(total_change_samples, dtype="float32")
+        if np.ma.isMaskedArray(total_arr) and isinstance(total_arr, np.ma.MaskedArray):
+            total_arr = total_arr.filled(np.nan)  # replace masked values with np.nan
+
         total_p5, total_p50, total_p95 = np.percentile(total_arr, [5, 50, 95])
         total_samples_out = total_arr.tolist()
     else:
