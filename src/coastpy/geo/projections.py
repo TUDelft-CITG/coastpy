@@ -467,17 +467,39 @@ def add_building_count(
 
 
 if __name__ == "__main__":
+    import os
     import pathlib
 
+    import dotenv
+    import fsspec
     import geopandas as gpd
-    import pandas as pd
-    from shapely.geometry import LineString
 
-    # Load the sample dataframe
-    input_path = pathlib.Path.home() / "Downloads" / "sample_dataframe.parquet"
-    df = gpd.read_parquet(input_path)
+    from coastpy.io.cloud import write_parquet
+    from coastpy.io.utils import name_data
 
-    # Normalize column naming
+    # --- LOAD ENV + STORAGE CONFIG ---
+    dotenv.load_dotenv()
+    sas_token = os.getenv("AZURE_STORAGE_SAS_TOKEN")
+    storage_options = {
+        "account_name": "coclico",
+        "sas_token": sas_token,
+    }
+
+    # --- FILESYSTEM + PATHS ---
+    input_path = "file://" + str(
+        pathlib.Path.home() / "Downloads" / "sample_dataframe.parquet"
+    )
+    output_prefix = "file://" + str(pathlib.Path.home() / "tmp" / "projections")
+
+    fs = fsspec.filesystem(fsspec.utils.get_protocol(output_prefix), **storage_options)
+    if not fs.exists(output_prefix):
+        fs.mkdirs(output_prefix, exist_ok=True)
+
+    # --- LOAD INPUT ---
+    with fsspec.open(input_path, mode="rb") as f:
+        df = gpd.read_parquet(f)
+
+    # --- NORMALIZE COLUMN NAMES ---
     df.rename(
         columns=lambda col: col.replace("sea_level_rise", "retreat")
         if "sea_level_rise" in col
@@ -486,80 +508,35 @@ if __name__ == "__main__":
     )
     df.rename(columns={"scenario": "ssp"}, inplace=True)
 
-    # Create output directory
-    output_dir = pathlib.Path.home() / "tmp" / "projections"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # --- PROJECTION RUNS ---
+    configurations = [
+        (0, "point", "noaccom"),
+        (0, "rectangle", "noaccom"),
+        (50, "point", "accom"),
+        (50, "rectangle", "accom"),
+    ]
 
-    # --- Projection 1: Point, no accommodation ---
-    print("Running point projection (no accommodation)...")
-    gdf_point = apply_projection_from_values(
-        df=df,
-        reference_lons="sds:reference_lon",
-        reference_lats="sds:reference_lat",
-        ambient_change_is_valid="ambient_change_is_valid",
-        ambient_change_mean="ambient_change_mean",
-        ambient_change_std="ambient_change_std",
-        retreat_samples="retreat_samples",
-        total_change_samples="total_change_samples",
-        accommodation_buffer=0,
-        result_type="point",
-    )
-    output_path_point = output_dir / "projection_point.parquet"
-    gdf_point.to_parquet(output_path_point)
-    print(f"Saved: {output_path_point}")
+    for buffer, result_type, postfix in configurations:
+        print(f"Running {result_type} projection (buffer: {buffer}m)...")
 
-    # --- Projection 2: Rectangle, no accommodation ---
-    print("Running rectangle projection (no accommodation)...")
-    gdf_rectangle = apply_projection_from_values(
-        df=df,
-        reference_lons="sds:reference_lon",
-        reference_lats="sds:reference_lat",
-        ambient_change_is_valid="ambient_change_is_valid",
-        ambient_change_mean="ambient_change_mean",
-        ambient_change_std="ambient_change_std",
-        retreat_samples="retreat_samples",
-        total_change_samples="total_change_samples",
-        accommodation_buffer=0,
-        result_type="rectangle",
-    )
-    output_path_rectangle = output_dir / "projection_rectangle.parquet"
-    gdf_rectangle.to_parquet(output_path_rectangle)
-    print(f"Saved: {output_path_rectangle}")
+        gdf = apply_projection_from_values(
+            df=df,
+            reference_lons="sds:reference_lon",
+            reference_lats="sds:reference_lat",
+            ambient_change_is_valid="ambient_change_is_valid",
+            ambient_change_mean="ambient_change_mean",
+            ambient_change_std="ambient_change_std",
+            retreat_samples="retreat_samples",
+            total_change_samples="total_change_samples",
+            accommodation_buffer=buffer,
+            result_type=result_type,
+        )
 
-    # --- Projection 3: Point, with accommodation ---
-    print("Running point projection (with 50m accommodation)...")
-    gdf_point_acco = apply_projection_from_values(
-        df=df,
-        reference_lons="sds:reference_lon",
-        reference_lats="sds:reference_lat",
-        ambient_change_is_valid="ambient_change_is_valid",
-        ambient_change_mean="ambient_change_mean",
-        ambient_change_std="ambient_change_std",
-        retreat_samples="retreat_samples",
-        total_change_samples="total_change_samples",
-        accommodation_buffer=50,
-        result_type="point",
-    )
-    output_path_point_acco = output_dir / "projection_point_accommodation.parquet"
-    gdf_point_acco.to_parquet(output_path_point_acco)
-    print(f"Saved: {output_path_point_acco}")
+        urlpath = name_data(
+            gdf,
+            prefix=output_prefix,
+            filename_prefix=f"projection_{result_type}",
+            postfix=postfix,
+        )
 
-    # --- Projection 4: Rectangle, with accommodation ---
-    print("Running rectangle projection (with 50m accommodation)...")
-    gdf_rectangle_acco = apply_projection_from_values(
-        df=df,
-        reference_lons="sds:reference_lon",
-        reference_lats="sds:reference_lat",
-        ambient_change_is_valid="ambient_change_is_valid",
-        ambient_change_mean="ambient_change_mean",
-        ambient_change_std="ambient_change_std",
-        retreat_samples="retreat_samples",
-        total_change_samples="total_change_samples",
-        accommodation_buffer=50,
-        result_type="rectangle",
-    )
-    output_path_rectangle_acco = (
-        output_dir / "projection_rectangle_accommodation.parquet"
-    )
-    gdf_rectangle_acco.to_parquet(output_path_rectangle_acco)
-    print(f"Saved: {output_path_rectangle_acco}")
+        write_parquet(gdf, urlpath, storage_options=storage_options)
