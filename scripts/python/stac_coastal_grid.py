@@ -12,13 +12,10 @@ from pystac.extensions.item_assets import ItemAssetsExtension
 from pystac.extensions.scientific import Publication, ScientificExtension
 from pystac.extensions.version import VersionExtension
 from pystac.provider import ProviderRole
-from pystac.stac_io import DefaultStacIO
-from pystac.utils import now_in_utc
 
-from coastpy.io.utils import PathParser
 from coastpy.libs import stac_table
 from coastpy.stac import ParquetLayout
-from coastpy.stac.item import PARQUET_MEDIA_TYPE, add_gpq_snapshot
+from coastpy.stac.item import add_gpq_snapshot, create_tabular_item
 
 # Load the environment variables from the .env file
 load_dotenv()
@@ -44,7 +41,7 @@ COLLECTION_TITLE = "Coastal Grid"
 DESCRIPTION = """
 The Coastal Grid dataset provides a global tiling system for geospatial analytics in coastal areas.
 It supports scalable data processing workflows by offering structured grids at varying zoom levels
-(5, 6, 7, 8, 9, 10) and buffer sizes (500m, 1000m, 2000m, 5000m, 10000m, 15000m).
+(2, 3, 4, 5, 6, 7, 8, 9, 10) and buffer sizes (500m, 1000m, 2000m, 5000m, 10000m, 15000m).
 
 Each tile contains information on intersecting countries, continents, and Sentinel-2 MGRS tiles
 as nested JSON lists. The dataset is particularly suited for applications requiring global coastal
@@ -238,92 +235,13 @@ def create_collection(
     return collection
 
 
-def create_item(
-    urlpath: str,
-    storage_options: dict[str, Any] | None = None,
-    properties: dict[str, Any] | None = None,
-    item_extra_fields: dict[str, Any] | None = None,
-    asset_extra_fields: dict[str, Any] | None = None,
-) -> pystac.Item:
-    """Create a STAC Item"""
-
-    if item_extra_fields is None:
-        item_extra_fields = {}
-
-    if properties is None:
-        properties = {}
-
-    pp = PathParser(urlpath, account_name=STORAGE_ACCOUNT_NAME)
-
-    template = pystac.Item(
-        id=pp.stac_item_id,
-        properties=properties,
-        geometry=None,
-        bbox=None,
-        datetime=DATETIME_DATA_CREATED,
-        stac_extensions=[],
-    )
-    template.common_metadata.created = now_in_utc()
-
-    item = stac_table.generate(
-        uri=pp.to_cloud_uri(),
-        template=template,
-        infer_bbox=True,
-        proj=True,
-        infer_geometry=False,
-        infer_datetime=stac_table.InferDatetimeOptions.no,
-        datetime_column=None,
-        metadata_created=DATETIME_STAC_CREATED,
-        datetime=DATETIME_DATA_CREATED,
-        count_rows=True,
-        asset_key="data",
-        asset_href=pp.to_cloud_uri(),
-        asset_title=ASSET_TITLE,
-        asset_description=ASSET_DESCRIPTION,
-        asset_media_type=PARQUET_MEDIA_TYPE,
-        asset_roles=["data"],
-        asset_extra_fields=asset_extra_fields,
-        storage_options=storage_options,
-        validate=False,
-    )
-    assert isinstance(item, pystac.Item)
-
-    # add descriptions to item properties
-    if "table:columns" in ASSET_EXTRA_FIELDS and "table:columns" in item.properties:
-        source_lookup = {
-            col["name"]: col for col in ASSET_EXTRA_FIELDS["table:columns"]
-        }
-
-    for target_col in item.properties["table:columns"]:
-        source_col = source_lookup.get(target_col["name"])
-        if source_col:
-            target_col.setdefault("description", source_col.get("description"))
-
-    # Optionally add an HTTPS link if the URI uses a 'cloud protocol'
-    if not item.assets["data"].href.startswith("https://"):
-        item.add_link(
-            pystac.Link(
-                rel="alternate",
-                target=pp.to_https_url(),
-                title="HTTPS access",
-                media_type=PARQUET_MEDIA_TYPE,
-            )
-        )
-    return item
-
-
 if __name__ == "__main__":
-    storage_options = {"account_name": "coclico", "credential": sas_token}
-    fs, token, [root] = fsspec.get_fs_token_paths(
-        CONTAINER_URI, storage_options=storage_options
-    )
+    fs = fsspec.filesystem("az", **storage_options)
     paths = fs.glob(CONTAINER_URI + "/**/*.parquet")
     uris = ["az://" + p for p in paths]
 
     STAC_DIR = pathlib.Path.home() / "dev" / "coclicodata" / "current"
     catalog = pystac.Catalog.from_file(str(STAC_DIR / "catalog.json"))
-
-    stac_io = DefaultStacIO()
     layout = ParquetLayout()
 
     collection = create_collection(
@@ -333,42 +251,37 @@ if __name__ == "__main__":
 
     for uri in tqdm.tqdm(uris, desc="Processing files"):
         match = re.search(r"_z([0-9]+)_([0-9]+m)\.parquet$", uri)
+        item_extra_fields = {}
         if match:
-            zoom_level = match.group(1)  # Capture the zoom level
-            buffer_size = match.group(2)  # Capture the buffer size
-            item_extra_fields = {"zoom_level": zoom_level, "buffer_size": buffer_size}
+            item_extra_fields = {
+                "zoom_level": match.group(1),
+                "buffer_size": match.group(2),
+            }
 
-        item = create_item(
-            uri,
+        item = create_tabular_item(
+            urlpath=uri,
+            asset_title=ASSET_TITLE,
+            asset_description=ASSET_DESCRIPTION,
             storage_options=storage_options,
-            asset_extra_fields=ASSET_EXTRA_FIELDS,
+            properties=None,
             item_extra_fields=item_extra_fields,
+            asset_extra_fields=ASSET_EXTRA_FIELDS,
+            datetime=DATETIME_DATA_CREATED,
+            infer_datetime=stac_table.InferDatetimeOptions.no,
+            alternate_links={"CLOUD": True},
         )
         item.validate()
         collection.add_item(item)
 
     collection.update_extent_from_items()
-
     collection = add_gpq_snapshot(
         collection, GEOPARQUET_STAC_ITEMS_HREF, storage_options
     )
 
-    # TODO: there should be a cleaner method to remove the previous stac catalog and its items
-    try:
-        if catalog.get_child(collection.id):
-            catalog.remove_child(collection.id)
-            print(f"Removed child: {collection.id}.")
-    except Exception:
-        pass
-
     catalog.add_child(collection)
-
     collection.normalize_hrefs(str(STAC_DIR / collection.id), layout)
-
     collection.validate_all()
-
     catalog.save(
         catalog_type=pystac.CatalogType.SELF_CONTAINED,
         dest_href=str(STAC_DIR),
-        stac_io=stac_io,
     )
