@@ -14,7 +14,6 @@ from pystac.provider import ProviderRole
 from pystac.stac_io import DefaultStacIO
 
 from coastpy.libs import stac_table
-from coastpy.libs.stac_table import InferDatetimeOptions
 from coastpy.stac import ParquetLayout
 from coastpy.stac.item import add_gpq_snapshot, create_tabular_item
 
@@ -27,27 +26,30 @@ STORAGE_ACCOUNT_NAME = "coclico"
 storage_options = {"account_name": STORAGE_ACCOUNT_NAME, "credential": sas_token}
 
 # Container and URI configuration
-VERSION = "2025-02-21"
+VERSION = "2025-05-08"
 DATETIME_STAC_CREATED = datetime.datetime.now(datetime.UTC)
-DATETIME_DATA_CREATED = datetime.datetime(2025, 2, 21)
+DATETIME_DATA_CREATED = datetime.datetime(2025, 5, 8)
 CONTAINER_NAME = "cet"
 PREFIX = f"release/{VERSION}"
 CONTAINER_URI = f"az://{CONTAINER_NAME}/{PREFIX}"
 PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 LICENSE = "CC-BY-4.0"
 
+
 # Collection information
-COLLECTION_ID = "cet"
-COLLECTION_TITLE = (
-    "The CoCliCo coastal characteristics database to support erosion analysis"
-)
+COLLECTION_ID = "coaster"
+COLLECTION_TITLE = "Coastal Typologies and Erosion for Risk (CoasTER) database"
 
 DESCRIPTION = """
-This database brings together existing information on erosion and relevant coastal characteristics in a GIS environment, facilitating broad-scale analysis.
+The 'Coastal Typologies and Erosion for Risk' (CoasTER) database integrates existing information on erosion
+and other relevant coastal characteristics for Europe's coastal floodplains. It focuses on areas where mobile
+sediments and coastal floodplains co-locate, identifying locations where erosion and flooding are likely to interact.
+It includes a geomorphological typology and accounts for human modifications such as hard engineering and infrastructure.
 """
+
 # Asset details
-ASSET_TITLE = "CET"
-ASSET_DESCRIPTION = "Parquet dataset with coastal erosion data for this region."
+ASSET_TITLE = "CoasTER"
+ASSET_DESCRIPTION = "Parquet dataset with geomorphological and historical shoreline movement data for this region."
 GEOPARQUET_STAC_ITEMS_HREF = f"az://items/{COLLECTION_ID}.parquet"
 
 COLUMN_DESCRIPTIONS = [
@@ -147,21 +149,6 @@ COLUMN_DESCRIPTIONS = [
         "description": "Simplified reclassification of Corine 2018 land cover codes.",
     },
     {
-        "name": "Future_erosion",
-        "type": "float",
-        "description": "Probability of future erosion occurring at the segment location.",
-    },
-    {
-        "name": "Future_accretion",
-        "type": "float",
-        "description": "Probability of future accretion occurring at the segment location.",
-    },
-    {
-        "name": "Future_stable",
-        "type": "float",
-        "description": "Probability of future stability at the segment location.",
-    },
-    {
         "name": "Notes",
         "type": "string",
         "description": "Additional notes or comments on the segment.",
@@ -178,7 +165,6 @@ COLUMN_DESCRIPTIONS = [
     },
 ]
 
-
 ASSET_EXTRA_FIELDS = {
     "table:storage_options": {"account_name": "coclico"},
     "table:columns": COLUMN_DESCRIPTIONS,
@@ -193,7 +179,9 @@ def add_citation_extension(collection):
     ScientificExtension.add_to(collection)
 
     # Define the DOI and citation
-    CITATION = "Hanson et al., in progress."
+    CITATION = """Hanson, S.E., Nicholls, R.J, Calkoen, F. R. Le Cozannet, G. and
+    Luijendijk, A. P (2025, in review) 'A geospatial database of coastal characteristics
+    for erosion assessment of Europe's coastal floodplains'"""
 
     # Add the DOI and citation to the collection's extra fields
     sci_ext = ScientificExtension.ext(collection, add_if_missing=True)
@@ -314,11 +302,11 @@ if __name__ == "__main__":
             asset_description=ASSET_DESCRIPTION,
             storage_options=storage_options,
             properties=None,
-            item_extra_fields=None,
-            asset_extra_fields=None,
+            item_extra_fields={"table:columns": COLUMN_DESCRIPTIONS},
+            asset_extra_fields=ASSET_EXTRA_FIELDS,
             datetime=DATETIME_DATA_CREATED,
-            infer_datetime=InferDatetimeOptions.no,
-            alternate_links={"cloud": True},
+            infer_datetime=stac_table.InferDatetimeOptions.no,
+            alternate_links={"CLOUD": True},
         )
 
         item.validate()
@@ -330,13 +318,6 @@ if __name__ == "__main__":
     collection = add_gpq_snapshot(
         collection, GEOPARQUET_STAC_ITEMS_HREF, storage_options
     )
-    # TODO: there should be a cleaner method to remove the previous stac catalog and its items
-    try:
-        if catalog.get_child(collection.id):
-            catalog.remove_child(collection.id)
-            print(f"Removed child: {collection.id}.")
-    except Exception:
-        pass
 
     catalog.add_child(collection)
 
@@ -345,7 +326,6 @@ if __name__ == "__main__":
     collection.validate_all()
 
     catalog.save(
-        catalog_type=pystac.CatalogType.SELF_CONTAINED,
-        dest_href=str(STAC_DIR),
-        stac_io=stac_io,
+        catalog_type=pystac.CatalogType.SELF_CONTAINED, dest_href=str(STAC_DIR)
     )
+    print("STAC collection updated successfully.")
