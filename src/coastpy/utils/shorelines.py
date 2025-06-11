@@ -5,7 +5,27 @@ from sklearn.linear_model import LinearRegression
 
 
 def compute_ols_fit(x: np.ndarray, y: np.ndarray) -> pd.Series:
-    if len(x) < 3:  # need at least 3 points for dof > 0
+    """
+    Perform Ordinary Least Squares (OLS) linear regression using scikit-learn and compute
+    key statistical descriptors: intercept, slope, standard error of the slope, and R².
+
+    Parameters:
+        x (np.ndarray): 1D array of years (independent variable).
+        y (np.ndarray): 1D array of shoreline positions (dependent variable).
+
+    Returns:
+        pd.Series: {
+            "change_intercept": float,
+            "change_rate": float,
+            "change_rate_std_err": float,
+            "r_squared": float
+        }
+    """
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # Must have at least 3 points to compute standard error (dof > 0)
+    if x.ndim != 1 or y.ndim != 1 or len(x) != len(y) or len(x) < 3:
         return pd.Series(
             {
                 "change_intercept": np.nan,
@@ -15,22 +35,28 @@ def compute_ols_fit(x: np.ndarray, y: np.ndarray) -> pd.Series:
             }
         )
 
-    x = x.reshape(-1, 1)
-    model = LinearRegression().fit(x, y)
-    y_pred = model.predict(x)
+    # Reshape x for sklearn
+    x_reshaped = x.reshape(-1, 1)
+    model = LinearRegression().fit(x_reshaped, y)
+    y_pred = model.predict(x_reshaped)
 
     residuals = y - y_pred
-    dof = len(y) - 2
+    dof = len(y) - 2  # 2 parameters: slope and intercept
 
-    if dof <= 0 or np.sum((x - np.mean(x)) ** 2) == 0:
-        std_err = np.nan
-    else:
+    # Variance of residuals and denominator for std_err
+    x_centered = x - np.mean(x)
+    x_var_sum = np.sum(x_centered**2)
+
+    if dof > 0 and x_var_sum > 0:
         residual_var = np.sum(residuals**2) / dof
-        std_err = np.sqrt(residual_var / np.sum((x - np.mean(x)) ** 2))
+        std_err = np.sqrt(residual_var / x_var_sum)
+    else:
+        std_err = np.nan
 
+    # R² computation
     ss_total = np.sum((y - np.mean(y)) ** 2)
     ss_res = np.sum(residuals**2)
-    r_squared = 1 - ss_res / ss_total if ss_total != 0 else np.nan
+    r_squared = 1 - ss_res / ss_total if ss_total > 0 else np.nan
 
     return pd.Series(
         {
