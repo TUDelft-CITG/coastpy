@@ -1,26 +1,45 @@
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
 
-def compute_ols_fit(x, y) -> pd.Series:
-    """
-    Performs ordinary least squares (OLS) regression using scikit-learn.
+def compute_ols_fit(x: np.ndarray, y: np.ndarray) -> pd.Series:
+    if len(x) < 3:  # need at least 3 points for dof > 0
+        return pd.Series(
+            {
+                "change_intercept": np.nan,
+                "change_rate": np.nan,
+                "change_rate_std_err": np.nan,
+                "r_squared": np.nan,
+            }
+        )
 
-    Parameters:
-        x (np.ndarray): Array of years.
-        y (np.ndarray): Array of shoreline positions.
+    x = x.reshape(-1, 1)
+    model = LinearRegression().fit(x, y)
+    y_pred = model.predict(x)
 
-    Returns:
-        pd.Series: A pandas Series containing the intercept, slope, and R-squared.
-    """
-    model = LinearRegression()
-    model.fit(x.reshape(-1, 1), y)
-    slope = model.coef_[0]
-    intercept = model.intercept_
-    r_squared = model.score(x.reshape(-1, 1), y)
+    residuals = y - y_pred
+    dof = len(y) - 2
 
-    return pd.Series({"intercept": intercept, "slope": slope, "r_squared": r_squared})
+    if dof <= 0 or np.sum((x - np.mean(x)) ** 2) == 0:
+        std_err = np.nan
+    else:
+        residual_var = np.sum(residuals**2) / dof
+        std_err = np.sqrt(residual_var / np.sum((x - np.mean(x)) ** 2))
+
+    ss_total = np.sum((y - np.mean(y)) ** 2)
+    ss_res = np.sum(residuals**2)
+    r_squared = 1 - ss_res / ss_total if ss_total != 0 else np.nan
+
+    return pd.Series(
+        {
+            "change_intercept": model.intercept_,
+            "change_rate": model.coef_[0],
+            "change_rate_std_err": std_err,
+            "r_squared": r_squared,
+        }
+    )
 
 
 def compute_ols_trend(df: pd.DataFrame, x: str, y: str) -> pd.DataFrame:
