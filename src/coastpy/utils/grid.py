@@ -69,7 +69,10 @@ def filter_by_admins(
     exclude_countries=None,
     exclude_continents=None,
 ) -> gpd.GeoDataFrame:
-    """Filter the coastal grid based on countries and continents."""
+    """Filter the coastal grid based on countries and continents.
+
+    Exclude logic: only exclude rows if ALL countries/continents in the row are in the exclude list.
+    """
     if include_continents:
         grid = grid[
             grid["admin:continents"].apply(
@@ -85,13 +88,13 @@ def filter_by_admins(
     if exclude_continents:
         grid = grid[
             ~grid["admin:continents"].apply(
-                lambda x: any(c in exclude_continents for c in x)
+                lambda x: set(x).issubset(set(exclude_continents))
             )
         ]
     if exclude_countries:
         grid = grid[
             ~grid["admin:countries"].apply(
-                lambda x: any(c in exclude_countries for c in x)
+                lambda x: set(x).issubset(set(exclude_countries))
             )
         ]
     return grid
