@@ -542,10 +542,6 @@ def crosses_antimeridian(df: gpd.GeoDataFrame) -> pd.Series:
     return coords.apply(crosses)
 
 
-import geopandas as gpd
-import pandas as pd
-
-
 def _buffer_geometry_in_utm(
     geom: BaseGeometry,
     src_crs: str | int,
