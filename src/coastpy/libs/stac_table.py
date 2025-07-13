@@ -25,6 +25,8 @@ from pystac.asset import Asset
 from pystac.extensions.projection import ProjectionExtension
 from shapely.ops import transform
 
+from coastpy.io.utils import compute_bounds_from_bbox
+
 T = TypeVar("T", pystac.Collection, pystac.Item)
 SCHEMA_URI = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 # https://issues.apache.org/jira/browse/PARQUET-1889: parquet doesn't officially
@@ -60,6 +62,7 @@ def generate(
     asset_extra_fields: dict[str, Any] | None = None,
     storage_options: dict[str, Any] | None = None,
     validate: bool = True,
+    force_bbox: bool = False,
 ) -> pystac.Item:
     """
     Generate a STAC Item from a Parquet dataset.
@@ -91,6 +94,7 @@ def generate(
         asset_extra_fields (dict, optional): Additional metadata fields for the asset.
         storage_options (dict, optional): fsspec storage options for accessing the dataset.
         validate (bool, optional): Validate the generated STAC item (default: True).
+        force_bbox (bool, optional): If True, force the bbox to be extracted instead of taking the total bounds from the geometry.
 
     Returns:
         pystac.Item: A STAC item populated with metadata and assets.
@@ -142,14 +146,19 @@ def generate(
             setattr(proj_ext, key, value)
 
     if infer_bbox and data is not None:
-        bbox = data.spatial_partitions.unary_union.bounds
+        if force_bbox:
+            bbox = compute_bounds_from_bbox(data, column="bbox")
+            # Use the spatial partitions' bounds as the bbox
+        else:
+            bbox = data.spatial_partitions.unary_union.bounds
+
         proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
         proj_ext.bbox = bbox
 
         # Transform bbox to EPSG:4326 for STAC compliance
         src_crs = data.spatial_partitions.crs.to_epsg()
         tf = pyproj.Transformer.from_crs(src_crs, 4326, always_xy=True)
-        bbox_transformed = transform(tf.transform, shapely.geometry.box(*bbox))
+        bbox_transformed = transform(tf.transform, shapely.geometry.box(*bbox))  # type: ignore
         item.bbox = list(bbox_transformed.bounds)
 
     if infer_geometry and data is not None:

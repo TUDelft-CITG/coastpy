@@ -401,6 +401,7 @@ def create_tabular_item(
     infer_datetime: InferDatetimeOptions = InferDatetimeOptions.range,
     protocol: AssetProtocol = AssetProtocol.HTTPS,
     alternate_links: dict[str, bool | str] | None = None,
+    force_bbox: bool = False,
 ) -> pystac.Item:
     """Creates a STAC Item for a tabular dataset with configurable metadata and alternate access links.
 
@@ -416,6 +417,7 @@ def create_tabular_item(
         infer_datetime (InferDatetimeOptions, optional): Strategy for inferring datetime from data. Defaults to 'range'.
         protocol (AssetProtocol, optional): The protocol to use for the asset href. Defaults to HTTPS.
         alternate_links (dict[str, bool | str] | None, optional): Alternate access links.
+        force_bbox (bool, optional): If True, forces bbox extracing from bbox column instead of using total bounds. Defaults to False.
 
     Returns:
         pystac.Item: A fully populated STAC Item representing the tabular dataset.
@@ -465,6 +467,7 @@ def create_tabular_item(
         asset_extra_fields=asset_extra_fields,
         storage_options=storage_options,
         validate=False,
+        force_bbox=force_bbox,
     )
     assert isinstance(item, pystac.Item)
 
