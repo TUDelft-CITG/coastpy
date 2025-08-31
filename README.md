@@ -18,6 +18,8 @@ conda env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/
 
 ## Data
 
+2025-08-31: All data stored under the Azure storage CoCliCo account will from now on require a SAS token (available upon reasonable request from Deltares) because the CoCliCo project, including its funding for cloud storage, is finished. 
+
 The data that is produced with this software can be directly accessed via the cloud using
 tools like
 [DuckDB](https://duckdb.org/docs/installation/?version=stable&environment=cli&platform=macos&download_method=package_manager);
