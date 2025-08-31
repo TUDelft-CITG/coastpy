@@ -18,13 +18,13 @@ conda env create -f https://raw.githubusercontent.com/TUDelft-CITG/coastpy/refs/
 
 ## Data
 
-2025-08-31: All data stored under the Azure storage CoCliCo account will from now on require a SAS token (available upon reasonable request from Deltares) because the CoCliCo project, including its funding for cloud storage, is finished. 
+*Data Access Policy Update (Effective August 31, 2025)**
 
-The data that is produced with this software can be directly accessed via the cloud using
-tools like
-[DuckDB](https://duckdb.org/docs/installation/?version=stable&environment=cli&platform=macos&download_method=package_manager);
-see the [tutorials](./tutorials/) and [analytics](./analytics/) other for other access
-methods (Python) and latest usage instructions.
+With the conclusion of the CoCliCo project and its associated cloud storage funding, all datasets hosted in the `coclico` Azure Storage account have been transitioned from public to private access.
+
+To access the data, you will now need a Shared Access Signature (SAS) token. Tokens are available upon reasonable request from Deltares.
+
+The data remains directly accessible from the cloud using the same tools and methods. Please see the [tutorials](./tutorials/) and [analytics](./analytics/) sections for examples of how to use tools like Python and [DuckDB](https://duckdb.org/docs/installation/?version=stable&environment=cli&platform=macos&download_method=package_manager) with the required SAS token.
 
 ### Global Coastal Transect System (GCTS)
 
