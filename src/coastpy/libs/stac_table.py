@@ -7,11 +7,13 @@ Generate STAC Collections for tabular datasets.
 import copy
 import datetime
 import enum
+import warnings
 from typing import Any, TypeVar
 
 import dask
 import dask_geopandas
 import fsspec
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyproj
@@ -22,6 +24,8 @@ import shapely.geometry
 from pystac.asset import Asset
 from pystac.extensions.projection import ProjectionExtension
 from shapely.ops import transform
+
+from coastpy.io.utils import compute_bounds_from_bbox
 
 T = TypeVar("T", pystac.Collection, pystac.Item)
 SCHEMA_URI = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
@@ -58,6 +62,7 @@ def generate(
     asset_extra_fields: dict[str, Any] | None = None,
     storage_options: dict[str, Any] | None = None,
     validate: bool = True,
+    force_bbox: bool = False,
 ) -> pystac.Item:
     """
     Generate a STAC Item from a Parquet dataset.
@@ -89,6 +94,7 @@ def generate(
         asset_extra_fields (dict, optional): Additional metadata fields for the asset.
         storage_options (dict, optional): fsspec storage options for accessing the dataset.
         validate (bool, optional): Validate the generated STAC item (default: True).
+        force_bbox (bool, optional): If True, force the bbox to be extracted instead of taking the total bounds from the geometry.
 
     Returns:
         pystac.Item: A STAC item populated with metadata and assets.
@@ -119,7 +125,7 @@ def generate(
         data.calculate_spatial_partitions()
 
     columns = get_columns(ds.schema)
-    item.properties["table:columns"] = columns
+    item.extra_fields["table:columns"] = columns
 
     if proj is True:
         if data is not None:
@@ -140,14 +146,19 @@ def generate(
             setattr(proj_ext, key, value)
 
     if infer_bbox and data is not None:
-        bbox = data.spatial_partitions.unary_union.bounds
+        if force_bbox:
+            bbox = compute_bounds_from_bbox(data, column="bbox")
+            # Use the spatial partitions' bounds as the bbox
+        else:
+            bbox = data.spatial_partitions.unary_union.bounds
+
         proj_ext = ProjectionExtension.ext(item, add_if_missing=True)
         proj_ext.bbox = bbox
 
         # Transform bbox to EPSG:4326 for STAC compliance
         src_crs = data.spatial_partitions.crs.to_epsg()
         tf = pyproj.Transformer.from_crs(src_crs, 4326, always_xy=True)
-        bbox_transformed = transform(tf.transform, shapely.geometry.box(*bbox))
+        bbox_transformed = transform(tf.transform, shapely.geometry.box(*bbox))  # type: ignore
         item.bbox = list(bbox_transformed.bounds)
 
     if infer_geometry and data is not None:
@@ -211,14 +222,19 @@ def generate(
 
     if infer_datetime == InferDatetimeOptions.range:
         values = dask.compute(data[datetime_column].min(), data[datetime_column].max())  # type: ignore
-        values = pd.Series(values).dt.to_pydatetime().tolist()
+
+        # Safely convert to datetime.datetime while suppressing the warning
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            values = np.array(pd.Series(values).dt.to_pydatetime())
+
         item.common_metadata.start_datetime = values[0]
         item.common_metadata.end_datetime = values[1]
         # NOTE: consider if its good practice to set datetime to midpoint when range is set
         item.datetime = pd.Timestamp(pd.Series(values).mean()).to_pydatetime()
 
     if count_rows:
-        item.properties["table:row_count"] = sum(x.count_rows() for x in ds.fragments)
+        item.extra_fields["table:row_count"] = sum(x.count_rows() for x in ds.fragments)
 
     if asset_key:
         href = asset_href if asset_href is not None else uri

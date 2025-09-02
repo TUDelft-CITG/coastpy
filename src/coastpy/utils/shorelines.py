@@ -1,26 +1,71 @@
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
 
-def compute_ols_fit(x, y) -> pd.Series:
+def compute_ols_fit(x: np.ndarray, y: np.ndarray) -> pd.Series:
     """
-    Performs ordinary least squares (OLS) regression using scikit-learn.
+    Perform Ordinary Least Squares (OLS) linear regression using scikit-learn and compute
+    key statistical descriptors: intercept, slope, standard error of the slope, and R².
 
     Parameters:
-        x (np.ndarray): Array of years.
-        y (np.ndarray): Array of shoreline positions.
+        x (np.ndarray): 1D array of years (independent variable).
+        y (np.ndarray): 1D array of shoreline positions (dependent variable).
 
     Returns:
-        pd.Series: A pandas Series containing the intercept, slope, and R-squared.
+        pd.Series: {
+            "change_intercept": float,
+            "change_rate": float,
+            "change_rate_std_err": float,
+            "r_squared": float
+        }
     """
-    model = LinearRegression()
-    model.fit(x.reshape(-1, 1), y)
-    slope = model.coef_[0]
-    intercept = model.intercept_
-    r_squared = model.score(x.reshape(-1, 1), y)
+    x = np.asarray(x)
+    y = np.asarray(y)
 
-    return pd.Series({"intercept": intercept, "slope": slope, "r_squared": r_squared})
+    # Must have at least 3 points to compute standard error (dof > 0)
+    if x.ndim != 1 or y.ndim != 1 or len(x) != len(y) or len(x) < 3:
+        return pd.Series(
+            {
+                "change_intercept": np.nan,
+                "change_rate": np.nan,
+                "change_rate_std_err": np.nan,
+                "r_squared": np.nan,
+            }
+        )
+
+    # Reshape x for sklearn
+    x_reshaped = x.reshape(-1, 1)
+    model = LinearRegression().fit(x_reshaped, y)
+    y_pred = model.predict(x_reshaped)
+
+    residuals = y - y_pred
+    dof = len(y) - 2  # 2 parameters: slope and intercept
+
+    # Variance of residuals and denominator for std_err
+    x_centered = x - np.mean(x)
+    x_var_sum = np.sum(x_centered**2)
+
+    if dof > 0 and x_var_sum > 0:
+        residual_var = np.sum(residuals**2) / dof
+        std_err = np.sqrt(residual_var / x_var_sum)
+    else:
+        std_err = np.nan
+
+    # R² computation
+    ss_total = np.sum((y - np.mean(y)) ** 2)
+    ss_res = np.sum(residuals**2)
+    r_squared = 1 - ss_res / ss_total if ss_total > 0 else np.nan
+
+    return pd.Series(
+        {
+            "change_intercept": model.intercept_,
+            "change_rate": model.coef_[0],
+            "change_rate_std_err": std_err,
+            "r_squared": r_squared,
+        }
+    )
 
 
 def compute_ols_trend(df: pd.DataFrame, x: str, y: str) -> pd.DataFrame:

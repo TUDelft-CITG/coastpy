@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import dask.dataframe as dd
 import fsspec
 import geopandas as gpd
 import numpy as np
@@ -450,6 +451,62 @@ def transform_bounds_to_epsg4326(
     return bounds_geometry.bounds
 
 
+def compute_bounds_from_bbox(
+    data: pd.DataFrame | dd.DataFrame,
+    column: str = "bbox",
+) -> list[float]:
+    """Compute global [minx, miny, maxx, maxy] from a GeoParquet-style 'bbox' column.
+
+    Args:
+        data: Pandas or Dask DataFrame with a dict-like 'bbox' column.
+        column: Name of the column containing bbox dictionaries (default: 'bbox').
+
+    Returns:
+        A list of Python-native floats [minx, miny, maxx, maxy].
+
+    Raises:
+        ValueError: If the column is missing or contains invalid bbox structures.
+    """
+    if column not in data.columns:
+        raise ValueError(f"Column '{column}' not found in DataFrame.")
+
+    def extract_bounds(df: pd.DataFrame) -> pd.DataFrame:
+        try:
+            return pd.DataFrame(
+                [
+                    {
+                        "minx": float(df[column].map(lambda b: b["xmin"]).min()),
+                        "miny": float(df[column].map(lambda b: b["ymin"]).min()),
+                        "maxx": float(df[column].map(lambda b: b["xmax"]).max()),
+                        "maxy": float(df[column].map(lambda b: b["ymax"]).max()),
+                    }
+                ]
+            )
+        except Exception as e:
+            raise ValueError(f"Invalid bbox format in column '{column}'.") from e
+
+    if isinstance(data, pd.DataFrame):
+        bounds = extract_bounds(data).iloc[0]
+    elif isinstance(data, dd.DataFrame):
+        per_partition_bounds = data.map_partitions(
+            extract_bounds,
+            meta={"minx": "f8", "miny": "f8", "maxx": "f8", "maxy": "f8"},
+        )
+        bounds = per_partition_bounds.compute().agg(
+            {"minx": "min", "miny": "min", "maxx": "max", "maxy": "max"}
+        )
+    else:
+        raise TypeError("Input must be a Pandas or Dask DataFrame.")
+
+    # Ensure final return is native floats
+    return [
+        float(bounds["minx"]),
+        float(bounds["miny"]),
+        float(bounds["maxx"]),
+        float(bounds["maxy"]),
+    ]
+
+
 def format_bounds(
     minx: float, miny: float, maxx: float, maxy: float, precision: int = 6
 ) -> str:
@@ -534,6 +591,7 @@ def name_data(
     add_deterministic_hash: bool = True,
     postfix: str | None = None,
     include_time: str | bool | None = None,
+    force_bbox: bool = False,
 ) -> str:
     """
     Generate a unique filename for a dataset based on bounds, hash, and optional components.
@@ -549,6 +607,7 @@ def name_data(
             - None (default): No time added.
             - str: Custom time string (e.g., "2023-2024").
             - True: Infer time from the data.
+        force_bbox: If True, always extract bounds from the 'bbox' column, ignoring geometries.
 
     Returns:
         str: A unique filename based on the provided options.
@@ -556,32 +615,52 @@ def name_data(
     Raises:
         ValueError: If no valid parts were generated for the filename.
     """
-    # Synchronize include_bounds and add_deterministic_hash
     if not include_bounds:
         add_deterministic_hash = False
 
     parts = []
 
-    # Generate bounds or bounds with hash
     if include_bounds and isinstance(
         data, gpd.GeoDataFrame | xr.Dataset | xr.DataArray
     ):
         if isinstance(data, gpd.GeoDataFrame):
-            bounds = data.total_bounds
-            crs = data.crs.to_string()
-        else:
+            if force_bbox:
+                bounds = compute_bounds_from_bbox(data, column="bbox")
+                crs = "EPSG:4326"
+
+            else:
+                try:
+                    if (
+                        data.empty
+                        or all(data.geometry.is_empty)
+                        or set(data.geom_type) == {"GeometryCollection"}
+                    ):
+                        raise ValueError("Invalid or empty geometries.")
+                    bounds = data.total_bounds
+                    crs = data.crs.to_string()  # type: ignore
+                except Exception:
+                    if "bbox" in data.columns:
+                        try:
+                            bounds = compute_bounds_from_bbox(data, column="bbox")
+                            crs = "EPSG:4326"
+                        except Exception as e:
+                            raise ValueError(
+                                "Failed to extract bounds from bbox fallback."
+                            ) from e
+                    else:
+                        raise
+        else:  # xr.Dataset or xr.DataArray
             bounds = data.rio.bounds()
             crs = data.rio.crs.to_string()
 
-        if add_deterministic_hash:
-            bounds_part = name_bounds_with_hash(bounds, crs)  # type: ignore
-        else:
-            bounds_part = name_bounds(bounds, crs)  # type: ignore
-
+        bounds_part = (
+            name_bounds_with_hash(bounds, crs)  # type: ignore
+            if add_deterministic_hash
+            else name_bounds(bounds, crs)  # type: ignore
+        )
         if bounds_part:
             parts.append(bounds_part)
 
-    # Add optional postfix
     if postfix:
         if parts:
             parts[-1] = f"{parts[-1]}-{postfix}"
@@ -590,7 +669,6 @@ def name_data(
         else:
             parts.append(postfix)
 
-    # Add time component
     if include_time:
         if isinstance(include_time, str):
             time_part = include_time
@@ -605,8 +683,13 @@ def name_data(
                         datetime_info["end_datetime"], timespec="days"
                     )
                     time_part = f"{start}_{end}"
+                else:
+                    time_part = datetime_to_str(
+                        datetime_info["datetime"],  # type: ignore
+                        timespec="auto",  # type: ignore
+                    )
             else:
-                time_part = datetime_to_str(datetime_info["datetime"], timespec="auto")  # type: ignore
+                raise ValueError("No datetime found for time-based naming.")
         else:
             raise ValueError(
                 "Invalid value for `include_time`. Use None, str, or bool."
@@ -617,11 +700,8 @@ def name_data(
     if not parts:
         raise ValueError("No valid parts were generated for the filename.")
 
-    # Determine file suffix
     suffix = ".parquet" if isinstance(data, pd.DataFrame | gpd.GeoDataFrame) else ".tif"
     name_part = "_".join(parts) + suffix
-
-    # Construct filename components
     components = [comp for comp in [filename_prefix, name_part] if comp]
     filename = "_".join(components)
 

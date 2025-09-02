@@ -1,5 +1,6 @@
 import ast
 import json
+from typing import Literal
 
 import fsspec
 import geopandas as gpd
@@ -38,6 +39,29 @@ def read_coastal_grid(zoom: int, buffer_size: str) -> gpd.GeoDataFrame:
     return grid
 
 
+def read_coastal_zone(
+    buffer_size: Literal["500m", "1000m", "2000m", "5000m", "10000m", "15000m"],
+):
+    """
+    Load the coastal zone data layer for a specific buffer size.
+    """
+    coclico_catalog = pystac.Catalog.from_file(
+        "https://coclico.blob.core.windows.net/stac/v1/catalog.json"
+    )
+    coastal_zone_collection = coclico_catalog.get_child("coastal-zone")
+    if coastal_zone_collection is None:
+        msg = "Coastal zone collection not found"
+        raise ValueError(msg)
+    item = coastal_zone_collection.get_item(f"coastal_zone_{buffer_size}")
+    if item is None:
+        msg = f"Coastal zone item for {buffer_size} not found"
+        raise ValueError(msg)
+    href = item.assets["data"].href
+    with fsspec.open(href, mode="rb", account_name="coclico") as f:
+        coastal_zone = gpd.read_parquet(f)
+    return coastal_zone
+
+
 def filter_by_admins(
     grid: gpd.GeoDataFrame,
     include_countries=None,
@@ -45,7 +69,10 @@ def filter_by_admins(
     exclude_countries=None,
     exclude_continents=None,
 ) -> gpd.GeoDataFrame:
-    """Filter the coastal grid based on countries and continents."""
+    """Filter the coastal grid based on countries and continents.
+
+    Exclude logic: only exclude rows if ALL countries/continents in the row are in the exclude list.
+    """
     if include_continents:
         grid = grid[
             grid["admin:continents"].apply(
@@ -61,13 +88,13 @@ def filter_by_admins(
     if exclude_continents:
         grid = grid[
             ~grid["admin:continents"].apply(
-                lambda x: any(c in exclude_continents for c in x)
+                lambda x: set(x).issubset(set(exclude_continents))
             )
         ]
     if exclude_countries:
         grid = grid[
             ~grid["admin:countries"].apply(
-                lambda x: any(c in exclude_countries for c in x)
+                lambda x: set(x).issubset(set(exclude_countries))
             )
         ]
     return grid

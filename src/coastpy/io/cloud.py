@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Any
 
 import fsspec
@@ -126,52 +127,45 @@ def write_block(
     return fs.info(path)["size"]
 
 
-def write_table(
+def write_parquet(
     df: pd.DataFrame | gpd.GeoDataFrame,
-    blob_name: str,
-    storage_options: dict[str, Any] | None = None,
+    urlpath: str,
+    storage_options: dict | None = None,
     overwrite: bool = True,
-) -> int | None:
+) -> int:
     """
-    Write a pandas or geopandas DataFrame to a specified cloud storage location.
+    Write a DataFrame or GeoDataFrame to Parquet using fsspec-compatible storage.
 
     Args:
-        df (pd.DataFrame | gpd.GeoDataFrame): The DataFrame to be written to cloud storage.
-        blob_name (str): The target storage path, including the blob's name.
-        storage_options (Optional[Dict[str, Any]]): Configuration options for the specific
-            storage backend (e.g., authentication details). Defaults to an empty dictionary.
-        overwrite (bool): If True, overwrites the existing blob. Defaults to False.
+        df: The (Geo)DataFrame to write.
+        urlpath: Destination path (e.g., 'file:///tmp/file.parquet', 'abfs://container/file.parquet').
+        storage_options: Optional dictionary of storage backend options (e.g., credentials).
+        overwrite: If False and file exists, skips writing and returns size.
 
     Returns:
-        int: The number of bytes written, or the size of the existing blob if overwrite is False.
-
-    Raises:
-        ValueError: If more than one storage path is identified.
-
-    Example:
-        >>> df = pd.DataFrame(...)
-        >>> write_table(df, "s3://mybucket/data.parquet")
+        Size in bytes of the written file, or existing file if overwrite is False.
     """
     if df.empty:
         return 0
 
-    if storage_options is None:
-        storage_options = {}
+    storage_options = storage_options or {}
+    fs, _, paths = fsspec.get_fs_token_paths(urlpath, storage_options=storage_options)
 
-    fs, _, paths = fsspec.get_fs_token_paths(blob_name, storage_options=storage_options)
-
-    if len(paths) > 1:
-        msg = "Too many paths identified"
-        raise ValueError(msg, paths)
+    if len(paths) != 1:
+        raise ValueError("Expected exactly one destination path", paths)
 
     path = paths[0]
 
-    # Check if the blob exists and overwrite is False, then return its size.
     if not overwrite and fs.exists(path):
-        logging.info("Blob already exists and overwrite is set to False.")
         return fs.info(path)["size"]
 
-    # TODO: return size of table when written to storage
-    # Write DataFrame to a buffer
-    with fsspec.open(blob_name, "wb", **storage_options) as f:
+    if fs.protocol == "file":
+        local_path = fsspec.utils.strip_protocol(path)
+        parent_dir = os.path.dirname(local_path)
+        if not fs.exists(parent_dir):
+            fs.makedirs(parent_dir, exist_ok=True)
+
+    with fs.open(path, mode="wb") as f:
         df.to_parquet(f)
+
+    return fs.info(path)["size"]

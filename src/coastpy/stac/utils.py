@@ -193,3 +193,55 @@ def read_snapshot(
             extents = cast(gpd.GeoDataFrame, pd.concat([extents, hrefs_df], axis=1))
 
     return extents
+
+
+def get_matching_hrefs(
+    region_of_interest: gpd.GeoDataFrame,
+    collection_id: str,
+    catalog_url: str = "https://coclico.blob.core.windows.net/stac/v1/catalog.json",
+    use_alternate_href: bool = False,
+    patch_url: Callable[[str], str] | None = None,
+) -> list[str]:
+    """
+    Returns (optionally patched) HREFs from a STAC collection that intersect a region of interest.
+
+    Args:
+        region_of_interest (GeoDataFrame): Region to spatially filter STAC items.
+        collection_id (str): STAC Collection ID (e.g., 'gcts', 'overture-buildings').
+        catalog_url (str): STAC Catalog URL.
+        use_alternate_href (bool): Whether to use 'alternate_href' column if present.
+        patch_url (Callable): Optional function to patch URLs (used for snapshot + asset hrefs).
+
+    Returns:
+        list[str]: List of (optionally patched) HREFs intersecting the region.
+    """
+    # Load STAC collection
+    catalog = pystac.Catalog.from_file(catalog_url)
+    collection = catalog.get_child(collection_id)
+    if collection is None:
+        raise ValueError(f"Collection '{collection_id}' not found in catalog.")
+
+    # Read snapshot (patch_url used to optionally patch GeoParquet snapshot href)
+    snapshot = read_snapshot(
+        collection,
+        columns=(
+            ["geometry", "assets", "links"]
+            if use_alternate_href
+            else ["geometry", "assets"]
+        ),
+        add_href=True,
+    )
+
+    # Spatial filter
+    matched = gpd.sjoin(snapshot, region_of_interest.to_crs(4326), how="inner")
+
+    key = "alternate_href" if use_alternate_href else "href"
+    if key not in matched.columns:
+        raise ValueError(f"Column '{key}' not found in snapshot.")
+
+    raw_hrefs = matched[key].dropna().unique()
+
+    if patch_url:
+        return [patch_url(href) for href in raw_hrefs]
+
+    return raw_hrefs.tolist()
