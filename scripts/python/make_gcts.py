@@ -35,7 +35,7 @@ storage_options = {"account_name": "coclico", "credential": sas_token}
 # NOTE: The generalized coastline used here cannot be made publicly available contact
 # authors for access.
 osm_coastline_uri = "az://coastlines-osm/release/2023-02-09/coast_3857_gen9.parquet"
-utm_grid_uri = "az://grid/utm.parquet"
+utm_grid_uri = "az://public/utm.parquet"
 countries_uri = "az://public/countries.parquet"  # From overture maps 2024-07-22
 regions_uri = "az://public/regions.parquet"  # From overture maps 2024-07-22
 
